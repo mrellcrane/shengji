@@ -106,9 +106,8 @@ final class AchievementStore {
     init(defaults: UserDefaults = .standard, ephemeral: Bool = false) {
         self.defaults = defaults
         self.isEphemeral = ephemeral
-        if !ephemeral,
-           let data = defaults.data(forKey: AchievementStore.storageKey),
-           let saved = try? JSONDecoder().decode(AchievementProgress.self, from: data) {
+        if !ephemeral, let saved = SavedData.load(AchievementProgress.self, key: AchievementStore.storageKey,
+                                                  defaults: defaults) {
             progress = saved
         } else {
             progress = AchievementProgress()

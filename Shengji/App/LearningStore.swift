@@ -22,9 +22,7 @@ final class LearningStore {
     init(defaults: UserDefaults = .standard, ephemeral: Bool = false) {
         self.defaults = defaults
         self.isEphemeral = ephemeral
-        if !ephemeral,
-           let data = defaults.data(forKey: key),
-           let saved = try? JSONDecoder().decode(LearnerProgress.self, from: data) {
+        if !ephemeral, let saved = SavedData.load(LearnerProgress.self, key: key, defaults: defaults) {
             progress = saved
         } else {
             progress = LearnerProgress()

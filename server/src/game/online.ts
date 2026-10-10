@@ -196,7 +196,14 @@ function applySeatAction(
  * the seat) with the app's bot logic. The action in absolute terms, or null.
  */
 export function botChoice(state: OnlineGame, seat: number, level: BotLevel): SeatAction | null {
-  const action = chooseBotAction(viewOf(state, seat), level);
+  let action: SeatAction | null;
+  try {
+    action = chooseBotAction(viewOf(state, seat), level);
+  } catch (error) {
+    // Never seen, but a bug in the bot must not fail the request: no choice means a safe move instead.
+    console.error(`bot at seat ${seat} threw: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
   if (action?.type !== "bid") return action;
   return { type: "bid", declaration: { ...action.declaration, cards: action.declaration.cards.slice(), player: seat } };
 }
