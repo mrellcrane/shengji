@@ -111,7 +111,7 @@ public struct GameState: Codable, Sendable {
 
     // MARK: Explanation text
 
-    private static func explain(result: RoundResult, team: Int, nominal: Int, gained: Int, newLevel: Rank,
+    static func explain(result: RoundResult, team: Int, nominal: Int, gained: Int, newLevel: Rank,
                                 gameWinner: Int?, target: Rank, nextDealer: Int, nextLevel: Rank) -> String {
         let points = result.defenderPoints
         let kittyBonus = result.kittyPoints * result.kittyMultiplier
@@ -146,7 +146,7 @@ public struct GameState: Codable, Sendable {
         return sentences.joined(separator: " ")
     }
 
-    private static func teamSubject(_ team: Int) -> (name: String, plural: Bool) {
+    static func teamSubject(_ team: Int) -> (name: String, plural: Bool) {
         team == Seats.team(of: Seats.human) ? ("Your team", false) : ("East and West", true)
     }
 }

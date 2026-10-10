@@ -165,11 +165,35 @@ public struct Card: Hashable, Codable, Sendable, Identifiable, CustomStringConve
     /// Unique id 0...107.
     public var id: Int { face.index + copy * 54 }
 
+    /// The card with the given id (0...107), or nil if out of range.
+    public init?(id: Int) {
+        guard (0..<108).contains(id), let face = Face(index: id % 54) else { return nil }
+        self.init(face, copy: id / 54)
+    }
+
     public var suit: Suit? { face.suit }
     public var rank: Rank? { face.rank }
     public var isJoker: Bool { face.isJoker }
     public var points: Int { face.points }
     public var description: String { face.description }
+}
+
+/// Wire and storage format: a card is its id (a single integer 0...107). Compact, and the same in the
+/// Swift app, saved games and the online server's JSON.
+extension Card {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let id = try container.decode(Int.self)
+        guard let card = Card(id: id) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Card id \(id) is out of range 0...107")
+        }
+        self = card
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(id)
+    }
 }
 
 public extension Array where Element == Card {
