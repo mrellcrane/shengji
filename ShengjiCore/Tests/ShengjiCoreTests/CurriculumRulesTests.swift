@@ -41,8 +41,9 @@ final class CurriculumRulesTests: XCTestCase {
             let q = item.question
             guard case let .trick(plays) = q.visual, let trump = q.trump,
                   q.choices.allSatisfy({ seatNames.contains($0.label) }) else { continue }
-            let winner = plays[Rules.winningIndex(plays, trump: trump)].player
-            XCTAssertEqual(q.choices[q.correctChoice].label, Seats.name(winner), q.id)
+            let index = Rules.winningIndex(plays, trump: trump)
+            XCTAssertTrue(plays.indices.contains(index), q.id)
+            XCTAssertEqual(CurriculumScan.correctLabel(q), plays.indices.contains(index) ? Seats.name(plays[index].player) : nil, q.id)
             checked += 1
         }
         XCTAssertGreaterThanOrEqual(checked, 5)
@@ -89,7 +90,8 @@ final class CurriculumRulesTests: XCTestCase {
             XCTAssertNil(Rules.validateFollow(choice.cards, hand: hand, lead: lead, trump: trump), choice.label)
             let trick = plays + [Play(player: Seats.human, cards: choice.cards)]
             // Partner's ace wins whatever you play, which is why feeding points is right.
-            XCTAssertEqual(trick[Rules.winningIndex(trick, trump: trump)].player, Seats.partner(of: Seats.human))
+            let index = Rules.winningIndex(trick, trump: trump)
+            XCTAssertEqual(trick.indices.contains(index) ? trick[index].player : nil, Seats.partner(of: Seats.human))
         }
         XCTAssertGreaterThan(q.choices[q.correctChoice].cards.points, 0)
     }
@@ -157,6 +159,9 @@ final class CurriculumRulesTests: XCTestCase {
         XCTAssertEqual(multiplier, 4)
         XCTAssertEqual(t.plays.flatMap(\.cards).points, 10)
         XCTAssertEqual(kitty.points * multiplier, 100)
+        // The body states the defenders' total: the trick's points plus the multiplied kitty.
+        let total = t.plays.flatMap(\.cards).points + kitty.points * multiplier
+        XCTAssertTrue(t.body.contains("**\(total)**"), t.body)
         // West is a defender when your team declares.
         XCTAssertNotEqual(Seats.team(of: t.winner), Seats.team(of: Seats.human))
     }
@@ -327,6 +332,73 @@ final class CurriculumRulesTests: XCTestCase {
         XCTAssertTrue(factAnswer("fact.reinforceOnly")?.hasPrefix("Reinforce") == true)
     }
 
+    // MARK: The engine and the lessons' referee agree
+
+    /// The lessons are checked against `ReferenceRules` (CurriculumTests); here the engine is checked
+    /// against the same referee on random deals, so the in-game coach can't contradict what the
+    /// lessons teach about following and winning tricks with singles, pairs and tractors.
+    func testEngineAgreesWithTheLessonsRefereeOnRandomTricks() {
+        var rng = SeededGenerator(seed: 2024)
+        var tricks = 0
+        for _ in 0..<1500 {
+            let trump = Trump(rank: Rank(rawValue: Int.random(in: 2...14, using: &rng)) ?? .two,
+                              suit: Bool.random(using: &rng) ? nil : Suit(rawValue: Int.random(in: 0...3, using: &rng)))
+            let deck = Deck.shuffled(using: &rng)
+            let hands = (0..<4).map { Array(deck[($0 * 25)..<($0 * 25 + 25)]) }
+            let leader = Int.random(in: 0..<4, using: &rng)
+            guard let lead = randomLead(from: hands[leader], trump: trump, rng: &rng) else { continue }
+            var plays = [Play(player: leader, cards: lead)]
+            for k in 1..<4 {
+                let seat = (leader + k) % 4
+                var chosen: [Card]?
+                for candidate in candidateFollows(hand: hands[seat], lead: lead, trump: trump, rng: &rng) {
+                    let engine = Rules.validateFollow(candidate, hand: hands[seat], lead: lead, trump: trump) == nil
+                    let referee = ReferenceRules.isLegalFollow(candidate, hand: hands[seat], lead: lead, trump: trump)
+                    XCTAssertEqual(engine, referee, "follow \(candidate.shortText) to \(lead.shortText) from \(hands[seat].shortText), \(trump)")
+                    if engine, chosen == nil { chosen = candidate }
+                }
+                guard let play = chosen else { break }
+                plays.append(Play(player: seat, cards: play))
+                XCTAssertEqual(Rules.winningIndex(plays, trump: trump), ReferenceRules.winningIndex(plays, trump: trump),
+                               "\(plays.map { "\(Seats.name($0.player)): \($0.cards.shortText)" }), \(trump)")
+            }
+            tricks += 1
+        }
+        XCTAssertGreaterThan(tricks, 1000)
+    }
+
+    /// A single, a pair or a two-pair tractor from `hand`, whichever the dice pick and the hand allows.
+    private func randomLead(from hand: [Card], trump: Trump, rng: inout SeededGenerator) -> [Card]? {
+        let kind = Int.random(in: 0..<3, using: &rng)
+        if kind == 2, let tractor = Combos.tractors(in: hand, length: 2, trump: trump).randomElement(using: &rng) {
+            return tractor
+        }
+        if kind >= 1, let pair = Combos.pairs(in: hand, trump: trump).randomElement(using: &rng) { return pair }
+        return hand.randomElement(using: &rng).map { [$0] }
+    }
+
+    /// A spread of plays of the lead's size: structured ones from the led group (tractors and pairs
+    /// first), loose ones from the group, and random ones from the whole hand.
+    private func candidateFollows(hand: [Card], lead: [Card], trump: Trump, rng: inout SeededGenerator) -> [[Card]] {
+        guard let first = lead.first else { return [] }
+        let group = trump.group(first)
+        let inGroup = hand.filter { trump.group($0) == group }.shuffled(using: &rng)
+        let others = hand.filter { trump.group($0) != group }.shuffled(using: &rng)
+        func fill(_ base: [Card]) -> [Card] {
+            var play = Array(base.prefix(lead.count))
+            for card in inGroup + others where play.count < lead.count && !play.contains(card) { play.append(card) }
+            return play
+        }
+        var bases: [[Card]] = Combos.tractors(in: inGroup, length: 2, trump: trump).shuffled(using: &rng).prefix(2).map { $0 }
+        let pairs = Combos.pairs(in: inGroup, trump: trump).shuffled(using: &rng)
+        bases += pairs.prefix(3).map { $0 }
+        if pairs.count >= 2 { bases.append(pairs[0] + pairs[1]) }
+        bases.append([])
+        var candidates = bases.map(fill)
+        for _ in 0..<4 { candidates.append(Array(hand.shuffled(using: &rng).prefix(lead.count))) }
+        return candidates
+    }
+
     // MARK: Helpers
 
     /// Lead legal for a hand of exactly the led cards; each follow legal for a hand of exactly the
@@ -353,12 +425,11 @@ final class CurriculumRulesTests: XCTestCase {
     private func bigJoker(_ copy: Int) -> Card { Card.bigJoker(copy: copy) }
 
     private func correctLabel(_ questionID: String) -> String? {
-        guard let q = CurriculumScan.question(questionID) else { return nil }
-        return q.choices[q.correctChoice].label
+        CurriculumScan.question(questionID).flatMap(CurriculumScan.correctLabel)
     }
 
     private func factAnswer(_ factID: String) -> String? {
-        guard let fact = Curriculum.fact(id: factID) else { return nil }
+        guard let fact = Curriculum.fact(id: factID), fact.choices.indices.contains(fact.correctChoice) else { return nil }
         return fact.choices[fact.correctChoice]
     }
 }

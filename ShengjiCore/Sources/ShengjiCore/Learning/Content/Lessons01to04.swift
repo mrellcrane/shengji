@@ -100,7 +100,7 @@ extension Curriculum {
                 correct: 2,
                 explanation: "Two 5s make **10**, and the 10 and the King add **10 each**: 30 in all. The Queen is worth nothing."),
         predict(2, 3,
-                prompt: "You are a declarer and you win a trick holding 20 points. What happens to those points?",
+                prompt: "You are a declarer and you win a trick worth 20 points. What happens to those points?",
                 choices: [Choice("Your team scores 20"),
                           Choice("Nothing: only the defenders' points count"),
                           Choice("The defenders score 20")],
@@ -134,7 +134,7 @@ extension Curriculum {
     private static let lesson3Pages: [LessonPage] = [
         .text(
             title: "Trumps beat everything",
-            body: "A **trump** beats any card of a plain suit, even an ace. In Shengji about **a third of the deck** is trump, far more than in most card games. So the first skill every player needs is spotting exactly which cards are trumps."),
+            body: "A **trump** beats any card of a plain suit, even an ace. In Shengji about **a third of the deck** is trump, more than in most card games. So the first skill every player needs is spotting exactly which cards are trumps."),
         predict(3, 1,
                 prompt: "This round the trump rank is 7 and the trump suit is ♥. Which of these cards is a trump?",
                 trump: sevenHearts,

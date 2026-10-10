@@ -48,7 +48,7 @@ extension Curriculum {
             trump: heartsTwo, winner: 1),
         .trick(
             title: "Discarding",
-            body: "You have no spades and choose not to trump: you **discard** 垫牌 (diànpái) the 8♣. A discard can **never win**, however high. Partner's Q♠ is the best spade and wins. Ruffing is always allowed, never required.",
+            body: "You have no spades and choose not to trump: you **discard** 垫牌 (diànpái) the 8♣. A discard can **never win**, however high. Partner's Q♠ is the highest spade played, so it wins. Ruffing is always allowed, never required.",
             plays: [play(2, [c(.queen, .spades)]), play(3, [c(.jack, .spades)]),
                     play(0, [c(.eight, .clubs)]), play(1, [c(.ten, .spades)])],
             trump: heartsTwo, winner: 2),
@@ -61,7 +61,7 @@ extension Curriculum {
                 correct: 1,
                 explanation: "Identical cards **tie**, and a tie goes to the **earlier play**. West played the A♦ before you, so West wins. Partner's Q♦ was beaten by both aces."),
         predict(5, 3,
-                prompt: "Trump suit ♥, rank 2. West leads the K♠ and you have no spades. Which card would win the trick for you?",
+                prompt: "Trump suit ♥, rank 2. West leads the K♠ and you have no spades. Which of your cards would beat it?",
                 trump: heartsTwo,
                 visual: .trick([play(3, [c(.king, .spades)])]),
                 choices: [cardChoice([c(.ace, .clubs)]), cardChoice([c(.queen, .diamonds)]),
@@ -242,7 +242,7 @@ extension Curriculum {
             body: "To beat the play that is winning, yours must: 1. have the **same shape** as the lead (pair for pair, tractor for tractor), 2. be **all led suit or all trump**, 3. be **higher**. Any trump play beats a plain one. On a tie, the **earlier** play wins."),
         .trick(
             title: "Mixed plays can't win",
-            body: "Partner has no club pair. West holds one club and adds a joker, but **mixed plays never win**. You play two trumps, but they are **not a pair**, so they can't beat a pair. Nobody matches the shape: East wins.",
+            body: "Partner has no club pair. West holds one club and adds a joker, but **mixed plays never win**. With ♠ trump, your 3♠ 8♠ are trumps but **not a pair**, so they can't beat a pair. Nobody matches the shape: East wins.",
             plays: [play(1, pair(.jack, .clubs)), play(2, [c(.king, .clubs), c(.four, .clubs)]),
                     play(3, [c(.nine, .clubs), bigJoker0]), play(0, [c(.three, .spades), c(.eight, .spades)])],
             trump: Trump(rank: .seven, suit: .spades), winner: 1),

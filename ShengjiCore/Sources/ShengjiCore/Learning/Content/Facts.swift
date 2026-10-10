@@ -89,7 +89,7 @@ extension Curriculum {
 
     private static let lesson5to8Facts: [Fact] = [
         Fact(id: "fact.mustFollow", lessonID: "lesson.5",
-             prompt: "Spades are led and you hold a spade. What must you play?",
+             prompt: "Trump suit ♥. Spades are led and you hold a spade. What must you play?",
              choices: ["A spade", "Any card you like", "A trump if you have one", "Your highest card"],
              correctChoice: 0,
              explanation: "You must **follow suit**, 跟牌 (gēnpái), whenever you can. Only when you have no cards of the led suit may you ruff or discard."),
@@ -203,7 +203,7 @@ extension Curriculum {
              choices: ["When anyone can beat any one part of it", "Only when someone can beat all of it",
                        "When an opponent is void in the suit", "Never"],
              correctChoice: 0,
-             explanation: "A throw fails if **any** player can beat **any** part with a higher card of the same shape in that suit: a higher single, pair or tractor of the same length."),
+             explanation: "A throw fails if **any** player can beat **any** part with a higher part of the same shape in that suit: a higher single, pair or tractor of the same length."),
         Fact(id: "fact.failedThrowForced", lessonID: "lesson.11",
              prompt: "Your throw fails. What do you play?",
              choices: ["Only the lowest part that can be beaten", "Only your highest card",
@@ -224,7 +224,7 @@ extension Curriculum {
              prompt: "When should you lead a King or a 10?",
              choices: ["When it is a sure winner", "Whenever you can", "Never"],
              correctChoice: 0,
-             explanation: "Leading points invites the opponents to capture them. Lead them only when no higher card is left out, for example a King once both aces are gone."),
+             explanation: "Leading points invites the opponents to capture them. Lead them only when nobody else can hold a higher card, for example a King once both aces are gone."),
         Fact(id: "fact.partnerVoid", lessonID: "lesson.12",
              prompt: "Your partner is void in clubs, and the opponents are not. What should you lead?",
              choices: ["A club, so your partner can ruff", "A trump", "Your highest spade"],

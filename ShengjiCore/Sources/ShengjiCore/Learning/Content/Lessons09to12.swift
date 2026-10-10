@@ -28,7 +28,7 @@ extension Curriculum {
                           Choice("Nothing until the deal ends"),
                           Choice("Swap it into the kitty")],
                 correct: 0,
-                explanation: "Showing trump-rank cards is **declaring**, 亮主 (liàngzhǔ). Your single 2♠ makes ♠ trump, unless someone shows a stronger declaration before the deal ends."),
+                explanation: "Showing trump-rank cards is **declaring**, 亮主 (liàngzhǔ). Your single 2♠ makes ♠ trump, unless someone shows a stronger declaration before declaring closes, just after the last card."),
         .cards(
             title: "Declaring strength",
             body: "From weakest to strongest: **1.** one rank card, **2.** a pair of rank cards of one suit, **3.** two small jokers, **4.** two big jokers. Joker pairs mean **no trump suit**. To override, 反主 (fǎnzhǔ), you need a **strictly stronger** declaration.",
@@ -44,7 +44,7 @@ extension Curriculum {
                 explanation: "A **pair** of rank cards beats a single, so your 2♦ 2♦ makes ♦ trump. To take it back, East now needs a joker pair: another pair of 2s would only be equal, not stronger."),
         .text(
             title: "Reinforcing, and who deals",
-            body: "Already holding the declaration? You may only **reinforce** it: show the second card of your suit to make a pair. In the **first round**, the winning declarer becomes the **dealer** 庄家 (zhuāngjiā). Later rounds already have a dealer, so declaring only picks the trump suit."),
+            body: "Already holding the declaration? You may only **reinforce** it: show the matching rank card to make a pair, like a second 2♥ after your 2♥. In the **first round**, the winning declarer becomes the **dealer** 庄家 (zhuāngjiā). Later rounds already have a dealer, so declaring only picks the trump suit."),
         predict(9, 3,
                 prompt: "Trump rank 2. Nobody declared, so the kitty is flipped one card at a time: 6♣, Q♦, 2♠. What is trump?",
                 visual: .cards([c(.six, .clubs), c(.queen, .diamonds), c(.two, .spades)]),
@@ -53,7 +53,7 @@ extension Curriculum {
                 explanation: "When nobody declares, the **first rank card** flipped from the kitty sets the trump suit: the 2♠ makes ♠ trump. The higher Q♦ doesn't matter, because a rank card turned up."),
         .cards(
             title: "When nobody declares",
-            body: "The kitty is flipped one card at a time. The **first rank card** sets the suit; a **joker** first means no trump suit. No rank card at all? The **highest card** sets it (the first, if tied): here the A♣ makes ♣ trump. Some tables simply redeal instead.",
+            body: "The kitty is flipped one card at a time. The **first rank card** sets the suit; a **joker** first means no trump suit. No rank card at all, like this kitty at rank 2? The **highest card** sets it (the first, if tied): the A♣ makes ♣ trump. Some tables simply redeal instead.",
             cards: [c(.nine, .hearts), c(.ace, .clubs), c(.four, .spades), c(.king, .diamonds),
                     c(.seven, .clubs), c(.three, .hearts), c(.jack, .spades), c(.six, .diamonds)],
             trump: nil),
@@ -117,7 +117,7 @@ extension Curriculum {
             trump: nil),
         .trick(
             title: "Winning the last trick",
-            body: "You are declaring, and this is the last trick. West, a defender, wins it with A♣ A♣. The lead was a **pair**, so the kitty counts **×4**: the defenders score the trick's 10 points plus 25 × 4 = **100**. Had your team won this trick, the kitty would score nothing.",
+            body: "You are declaring, and this is the last trick. West, a defender, wins it with A♣ A♣. The lead was a **pair**, so the kitty counts **×4**: 25 × 4 = 100, plus the trick's 10 points, gives the defenders **110**. Had your team won this trick, the kitty would score nothing.",
             plays: [play(3, pair(.ace, .clubs)), play(0, [c(.four, .diamonds), c(.eight, .diamonds)]),
                     play(1, [c(.six, .clubs), c(.ten, .clubs)]), play(2, [c(.seven, .diamonds), c(.jack, .hearts)])],
             trump: Trump(rank: .nine, suit: .spades), winner: 3),
@@ -130,7 +130,7 @@ extension Curriculum {
             "Under 80, declarers keep the deal: +3 at 0, +2 at 5 to 35, +1 at 40 to 75.",
             "At 80 or more, defenders take over, and climb a level for each 40 above 80.",
             "Declarers hold: the dealer's partner deals. Defenders take over: the next player deals.",
-            "Defenders who win the last trick score the kitty: ×2 single, ×4 pair, ×8 tractor.",
+            "Defenders who win the last trick score the kitty: ×2 single, ×4 pair, ×8 two-pair tractor.",
             "Hold the deal as declarers at level A to win the game.",
         ]),
     ]
@@ -168,7 +168,7 @@ extension Curriculum {
                 explanation: "West's K♣ beats your Q♣, so the throw **fails**. You must play the part that can be beaten, the Q♣, and take the A♣ back. There is no point penalty."),
         .text(
             title: "When a throw fails",
-            body: "A throw fails if **anyone** can beat **any part** with a higher card of the same shape **in that suit**: a higher single, a higher pair or a higher tractor of the same length. You then play only the **lowest beatable part** (smallest shape first, then lowest card) and take the rest back."),
+            body: "A throw fails if **anyone** can beat **any part** with a higher part of the same shape **in that suit**: a higher single, a higher pair or a higher tractor of the same length. You then play only the **lowest beatable part** (smallest shape first, then lowest card) and take the rest back."),
         .cards(
             title: "Which part is forced?",
             body: "You throw K♦ K♦ J♦. East holds A♦ A♦, which beats your pair, and West holds the Q♦, which beats your J♦. Both parts can be beaten, so you play the **smaller shape**: the single J♦. Your Kings go back to your hand.",
@@ -191,10 +191,10 @@ extension Curriculum {
             trump: heartsTwoLate, winner: 0),
         .text(
             title: "Throw safely",
-            body: "Before you throw, **count**: has every higher card of that suit been played, or is it in your hand? Only then is the throw safe. A failed throw costs no points here, but it shows your cards and wastes your lead. Many tables do charge a penalty for a failed throw."),
+            body: "Before you throw, **count**: if every higher card of that suit has been played or is in your hand, the throw is safe. A failed throw costs no points here, but it shows your cards and wastes your lead. Many tables do charge a penalty for a failed throw."),
         .recap(points: [
             "A throw 甩牌 (shuǎipái) leads several singles, pairs or tractors of one suit at once.",
-            "It fails if anyone can beat any part with a higher card of the same shape.",
+            "It fails if anyone can beat any part with a higher single, pair or tractor in that suit.",
             "After a failed throw you play only the lowest beatable part, smallest shape first.",
             "No point penalty here, but the others see your cards.",
             "Throw only when every higher card is gone or in your hand.",
