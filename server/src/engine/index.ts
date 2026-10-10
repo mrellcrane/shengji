@@ -11,3 +11,4 @@ export * from "./round.ts";
 export * from "./game.ts";
 export * from "./view.ts";
 export * from "./shuffle.ts";
+export * from "./seatview.ts";

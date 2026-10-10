@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as E from "../src/engine/index.ts";
-import type { Card, Round, SeatView } from "../src/engine/index.ts";
+import type { Card, Round, RoundView } from "../src/engine/index.ts";
 import { randomBidding, randomBury, randomPlay } from "./play.ts";
 import { seededRandom } from "./support.ts";
 import type { Rng } from "./support.ts";
@@ -34,7 +34,7 @@ function hiddenCards(round: Round, seat: number): Card[] {
 }
 
 /** Every card id in the card-carrying fields of a view. */
-function cardsInView(view: SeatView): Card[] {
+function cardsInView(view: RoundView): Card[] {
   const cards: Card[] = [...view.hand, ...(view.kitty ?? [])];
   const add = (list: readonly Card[]): void => {
     cards.push(...list);
