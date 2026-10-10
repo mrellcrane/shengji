@@ -57,9 +57,10 @@ enum TimePhrase {
         "\(n) \(n == 1 ? singular : (plural ?? singular + "s"))"
     }
 
-    /// "4-day streak".
+    /// "4-day streak", or "No streak yet" for 0.
     static func streak(_ days: Int) -> String {
-        days == 1 ? "1-day streak" : "\(days)-day streak"
+        if days <= 0 { return "No streak yet" }
+        return days == 1 ? "1-day streak" : "\(days)-day streak"
     }
 }
 

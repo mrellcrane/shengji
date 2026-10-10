@@ -136,7 +136,8 @@ enum RulesContent {
                 .cards(caption: "A pair of 2♠ is stronger, so it takes over: spades become trump.",
                        cards: [card(.two, .spades), card(.two, .spades, 1)], trump: nil),
                 .text("A new declaration must be **stronger** than the current one. If the current one is yours, you may only reinforce it: turn your single into a pair of the same suit."),
-                .text("In the first round, whoever wins the declaring becomes the **dealer** (庄家 zhuāngjiā). If nobody declares, the kitty is turned over card by card: the first trump-rank card or joker decides (a joker means no trump suit). If neither turns up, the suit of the highest kitty card is trump."),
+                .text("In the first round, whoever wins the declaring becomes the **dealer** (庄家 zhuāngjiā). In later rounds the last round's result picks the dealer (see Scoring & levels)."),
+                .text("If nobody declares, the round goes ahead anyway (in the first round, you deal). The kitty is turned over card by card: the first trump-rank card or joker decides (a joker means no trump suit). If neither turns up, the suit of the highest kitty card is trump (the first one, if two tie)."),
             ]),
             RuleSection(id: "kitty", title: "The kitty", shortTitle: "Kitty", symbol: "tray.full.fill", blocks: [
                 .text("The **kitty** (底牌 dǐpái) is the 8 cards left after the deal. The dealer picks them up, then **buries** any 8 cards face down (扣底 kòu dǐ)."),

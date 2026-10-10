@@ -43,22 +43,32 @@ struct RootView: View {
         return scene
     }
 
-    @ViewBuilder private var learnTab: some View {
-        if scene == .lesson, let demo = LearnDemoData.lessonPage() {
-            LessonView(demo.lesson, startPage: demo.page)
-        } else if scene == .predict, let demo = LearnDemoData.predictPage() {
-            LessonView(demo.lesson, startPage: demo.page, demoAnswer: demo.answer)
-        } else {
-            LessonPathView()
-        }
+    // Demo scenes open their lesson or practice session full screen over the tab root, exactly as a
+    // tap would, so the screenshot matches real use and closing it lands back on the tab.
+
+    private var learnTab: some View {
+        LessonPathView(initialLesson: demoLesson)
     }
 
-    @ViewBuilder private var reviewTab: some View {
-        if scene == .quiz {
-            PracticeView(kind: .freePractice(skills: [.trickWinner]), seed: LearnDemoData.quizSeed,
-                         answerFirstQuestionWrongly: true)
-        } else {
-            ReviewView()
+    private var reviewTab: some View {
+        ReviewView(initialPractice: demoPractice)
+    }
+
+    /// `lesson`: lesson 4 at a page with cards. `predict`: a "your turn" page, already answered.
+    private var demoLesson: LessonLaunch? {
+        let demo: LearnDemoLessonPage?
+        switch scene {
+        case .lesson?: demo = LearnDemoData.lessonPage()
+        case .predict?: demo = LearnDemoData.predictPage()
+        default: demo = nil
         }
+        return demo.map { LessonLaunch(lesson: $0.lesson, startPage: $0.page, demoAnswer: $0.answer) }
+    }
+
+    /// `quiz`: a seeded "who wins the trick?" practice with the first question answered wrongly.
+    private var demoPractice: PracticeLaunch? {
+        guard scene == .quiz else { return nil }
+        return PracticeLaunch(kind: .freePractice(skills: [.trickWinner]), seed: LearnDemoData.quizSeed,
+                              answerFirstQuestionWrongly: true)
     }
 }

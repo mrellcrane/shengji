@@ -1,10 +1,14 @@
 import SwiftUI
 import ShengjiCore
 
-/// What a practice session should run, for presenting `PracticeView`.
-private struct PracticeLaunch: Identifiable {
+/// What a practice session should run, for presenting `PracticeView` full screen.
+struct PracticeLaunch: Identifiable {
     let id = UUID()
     let kind: PracticeSession.Kind
+    /// Fixes the questions (demo scenes); random when nil.
+    var seed: UInt64? = nil
+    /// Demo only: answers the first question wrongly so its feedback shows.
+    var answerFirstQuestionWrongly = false
 }
 
 /// The Review tab: streak and due count, the daily review (or extra practice when you're caught up),
@@ -14,6 +18,12 @@ struct ReviewView: View {
     @Environment(LearningStore.self) private var store
     @Environment(AppRouter.self) private var router
     @State private var launch: PracticeLaunch?
+
+    /// - Parameter initialPractice: a session to open straight away, the same way a tap opens it
+    ///   (used by the `quiz` demo scene, so closing it returns to the Review tab).
+    init(initialPractice: PracticeLaunch? = nil) {
+        _launch = State(initialValue: initialPractice)
+    }
 
     var body: some View {
         NavigationStack {
@@ -25,7 +35,8 @@ struct ReviewView: View {
             .navigationTitle("Review")
         }
         .fullScreenCover(item: $launch) { launch in
-            PracticeView(kind: launch.kind)
+            PracticeView(kind: launch.kind, seed: launch.seed,
+                         answerFirstQuestionWrongly: launch.answerFirstQuestionWrongly)
                 .environment(store)
                 .environment(router)
         }

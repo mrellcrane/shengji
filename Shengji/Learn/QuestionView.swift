@@ -81,10 +81,18 @@ struct QuestionView: View {
     }
 
     /// Scaffolding that fades: trumps get the gold edge only on the easiest questions.
-    /// On "is this a trump?" questions the edge would give the answer away, so it waits for the answer.
+    /// When spotting trumps is the point of the question, the edge would give the answer away,
+    /// so it waits for the answer.
     private var marksTrumps: Bool {
         guard question.difficulty <= 1, question.trump != nil else { return false }
-        return question.itemID != SkillID.isTrump.itemID || selected != nil
+        return selected != nil || !asksToSpotTrumps
+    }
+
+    /// "Is this a trump?" drills, and the "your turn" questions of the lesson that teaches spotting
+    /// trumps (their item id is the lesson's id), e.g. "Which of these cards is a trump?".
+    private var asksToSpotTrumps: Bool {
+        if question.itemID == SkillID.isTrump.itemID { return true }
+        return Curriculum.lesson(id: question.itemID)?.skills.contains(.isTrump) ?? false
     }
 
     private func verdict(correct: Bool) -> String {
@@ -201,9 +209,16 @@ private struct ChoiceList: View {
 
     private var showsCards: Bool { question.choices.contains { !$0.cards.isEmpty } }
 
+    /// Tiles side by side fit up to 5 overlapping cards on a 375-point-wide phone;
+    /// longer plays (a 3-pair tractor, a throw) get full-width tiles so nothing spills over.
+    private var tileMinimumWidth: CGFloat {
+        let most = question.choices.map(\.cards.count).max() ?? 0
+        return most > 5 ? 300 : 140
+    }
+
     var body: some View {
         if showsCards {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: tileMinimumWidth), spacing: 10)], spacing: 10) {
                 buttons
             }
         } else {

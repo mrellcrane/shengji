@@ -121,7 +121,7 @@ final class PracticeModel {
         var generator = rng
         session = PracticeSession(kind: kind, progress: recorder.progress, now: now, rng: &generator)
         rng = generator
-        advance(using: recorder, now: now)
+        showNextQuestion(using: recorder, now: now)
         if answersFirstQuestionWrongly, let question,
            let wrong = question.choices.indices.first(where: { $0 != question.correctChoice }) {
             answer(choice: wrong, seconds: 7, using: recorder)
@@ -145,9 +145,16 @@ final class PracticeModel {
                         updateSchedule: updated.updatesSchedule)
     }
 
-    /// Moves to the next question, or finishes the session.
+    /// Moves on from the answered question to the next one, or finishes the session.
+    /// Ignored while a question is still waiting for its answer (e.g. a second tap on Continue),
+    /// so a question can never be skipped or restarted without being answered.
     func advance(using recorder: LearningRecorder, now: Date = .now) {
-        guard var updated = session, phase != .finished else { return }
+        guard phase == .answered else { return }
+        showNextQuestion(using: recorder, now: now)
+    }
+
+    private func showNextQuestion(using recorder: LearningRecorder, now: Date) {
+        guard var updated = session else { return }
         var generator = rng
         let next = updated.next(progress: recorder.progress, rng: &generator)
         rng = generator

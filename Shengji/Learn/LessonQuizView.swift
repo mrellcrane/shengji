@@ -73,7 +73,7 @@ struct LessonPassedView: View {
         let titles = ItemNames.titles(for: flow.lesson.itemIDs)
         if !titles.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Label("New in your reviews", systemImage: "sparkles")
+                Label(flow.wasPassedBefore ? "In your reviews" : "New in your reviews", systemImage: "sparkles")
                     .font(.headline)
                 LearnBulletList(items: titles, symbol: "checkmark", symbolColor: Theme.correct, symbolSize: 12)
                     .font(.subheadline)
@@ -86,11 +86,18 @@ struct LessonPassedView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Coming back to you", systemImage: "calendar")
                 .font(.headline)
-            Text("These skills are ready for review in about a minute. Then they come back in 10 minutes, then tomorrow, with longer gaps each time you get them right. Spacing them out like this is what makes them stick.")
+            Text(spacingNote)
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .learnCard()
+    }
+
+    private var spacingNote: String {
+        if flow.wasPassedBefore {
+            return "You passed this lesson before, so its skills keep their place in your reviews. Each one comes back just as you're about to forget it, with longer gaps each time you get it right."
+        }
+        return "These skills are ready for review in about a minute. Then they come back in 10 minutes, then tomorrow, with longer gaps each time you get them right. Spacing them out like this is what makes them stick."
     }
 }
 

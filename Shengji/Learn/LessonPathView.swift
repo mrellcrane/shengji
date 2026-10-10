@@ -1,24 +1,42 @@
 import SwiftUI
 import ShengjiCore
 
+/// A lesson to open full screen, optionally at a given page (demo scenes open mid-lesson).
+struct LessonLaunch: Identifiable {
+    let lesson: Lesson
+    var startPage: Int = 0
+    /// Demo only: the answer shown as already picked on a predict start page.
+    var demoAnswer: Int? = nil
+
+    var id: String { lesson.id }
+}
+
 /// The Learn tab: streak, a "reviews due" banner, and the lessons as a path.
 /// Each lesson is locked until the previous lesson's quiz is passed (mastery gating).
 @MainActor
 struct LessonPathView: View {
     @Environment(LearningStore.self) private var store
     @Environment(AppRouter.self) private var router
-    @State private var activeLesson: Lesson?
+    @State private var activeLesson: LessonLaunch?
     @State private var lockedLesson: Lesson?
     @State private var showsLockedAlert = false
     @State private var showsPrinciples = false
     @State private var showsSettings = false
+
+    /// - Parameter initialLesson: a lesson to open straight away, the same way a tap opens it
+    ///   (used by the `lesson` and `predict` demo scenes, so closing it returns to the path).
+    init(initialLesson: LessonLaunch? = nil) {
+        _activeLesson = State(initialValue: initialLesson)
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     TimelineView(.everyMinute) { context in
-                        LearnHeader(now: context.date)
+                        LearnHeader(now: context.date) { lesson in
+                            activeLesson = LessonLaunch(lesson: lesson)
+                        }
                     }
                     LessonPath { lesson, state in
                         select(lesson, state: state)
@@ -33,8 +51,8 @@ struct LessonPathView: View {
                 toolbarContent
             }
         }
-        .fullScreenCover(item: $activeLesson) { lesson in
-            LessonView(lesson)
+        .fullScreenCover(item: $activeLesson) { launch in
+            LessonView(launch.lesson, startPage: launch.startPage, demoAnswer: launch.demoAnswer)
                 .environment(store)
                 .environment(router)
         }
@@ -75,17 +93,19 @@ struct LessonPathView: View {
             lockedLesson = lesson
             showsLockedAlert = true
         case .available, .completed:
-            activeLesson = lesson
+            activeLesson = LessonLaunch(lesson: lesson)
         }
     }
 }
 
-/// Streak, lessons passed, and the banner that leads to the Review tab.
+/// Streak, lessons passed, the banner that leads to the Review tab, and the next lesson
+/// (once the path is long enough that it may sit below the fold).
 @MainActor
 private struct LearnHeader: View {
     @Environment(LearningStore.self) private var store
     @Environment(AppRouter.self) private var router
     let now: Date
+    let onStart: (Lesson) -> Void
 
     var body: some View {
         let due = store.dueCount(now: now)
@@ -100,7 +120,49 @@ private struct LearnHeader: View {
             if due > 0 {
                 dueBanner(due)
             }
+            if let next = upNext {
+                upNextCard(next)
+            }
         }
+    }
+
+    /// The first lesson that is open but not passed yet, once two or more lessons are done.
+    private var upNext: Lesson? {
+        guard store.progress.completedLessons.count >= 2 else { return nil }
+        return Curriculum.lessons.first { store.isUnlocked($0) && !store.isCompleted($0) }
+    }
+
+    private func upNextCard(_ lesson: Lesson) -> some View {
+        Button {
+            onStart(lesson)
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Up next · Lesson \(lesson.number)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(lesson.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                }
+                Spacer(minLength: 8)
+                Label("Start", systemImage: "play.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Theme.felt, in: Capsule())
+            }
+            .padding(14)
+            .background(Theme.felt.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Theme.correct, lineWidth: 2)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Starts the lesson")
     }
 
     private func dueBanner(_ due: Int) -> some View {
@@ -281,7 +343,7 @@ private struct LessonCard: View {
         .opacity(state == .locked ? 0.6 : 1)
         .contentShape(shape)
         .accessibilityElement(children: .combine)
-        .accessibilityHint(accessibilityHint)
+        .accessibilityHint(hintText)
     }
 
     private var background: Color {
@@ -296,7 +358,7 @@ private struct LessonCard: View {
         }
     }
 
-    private var accessibilityHint: String {
+    private var hintText: String {
         switch state {
         case .locked: return "Locked. Pass lesson \(max(1, lesson.number - 1))'s quiz to unlock this."
         case .available: return "Starts the lesson."

@@ -92,6 +92,9 @@ struct PracticeRunner: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
             }
+            // A fresh scroll view per question, so the next question starts at the top
+            // instead of where the previous one was scrolled to (its feedback).
+            .id(model.questionNumber)
             .onChange(of: model.selectedChoice, initial: true) { _, newValue in
                 guard newValue != nil else { return }
                 withAnimation(.easeOut(duration: 0.3)) {

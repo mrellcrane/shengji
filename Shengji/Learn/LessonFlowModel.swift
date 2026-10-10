@@ -25,6 +25,9 @@ final class LessonFlowModel {
     private(set) var quiz: PracticeModel?
     /// Quiz attempts on this lesson; each retry asks fresh questions.
     private(set) var quizAttempts = 0
+    /// The lesson had already been passed before the latest passing quiz (a lesson taken again),
+    /// so its items keep their review schedule instead of joining reviews as new.
+    private(set) var wasPassedBefore = false
 
     private let quizSeed: UInt64?
 
@@ -114,11 +117,15 @@ final class LessonFlowModel {
 
     /// The learner's guess on a predict page. The first answer counts; it can't be changed.
     func recordPrediction(_ choice: Int) {
-        guard stage == .pages, isPredictPage, predictions[pageIndex] == nil else { return }
+        guard stage == .pages, case let .predict(question)? = page,
+              question.choices.indices.contains(choice), predictions[pageIndex] == nil else { return }
         predictions[pageIndex] = choice
     }
 
+    /// Starts a quiz attempt: from the last page, or after a failed attempt. Ignored otherwise
+    /// (e.g. a second tap while a quiz is already running).
     func startQuiz(using recorder: LearningRecorder) {
+        guard stage == .pages || stage == .failed else { return }
         quizAttempts += 1
         let seed = quizSeed.map { $0 &+ UInt64(quizAttempts) } ?? UInt64.random(in: UInt64.min...UInt64.max)
         let model = PracticeModel(kind: .lessonQuiz(lessonID: lesson.id), seed: seed)
@@ -141,25 +148,29 @@ final class LessonFlowModel {
 
     /// Back to the first page to read the lesson again (predictions can be made afresh).
     func reviewLesson() {
+        guard stage != .quiz else { return }
         predictions = [:]
         pageIndex = 0
         stage = .pages
     }
 
-    /// A new attempt with fresh questions.
+    /// A new attempt with fresh questions, after a failed one.
     func retryQuiz(using recorder: LearningRecorder) {
+        guard stage == .failed else { return }
         startQuiz(using: recorder)
     }
 
-    /// Switches to the next lesson, from its first page. Returns false if this was the last lesson.
+    /// Switches to the next lesson (after passing this one), from its first page.
+    /// Returns false if there is no next lesson or this one isn't passed yet.
     @discardableResult
     func openNextLesson() -> Bool {
-        guard let next = nextLesson else { return false }
+        guard stage == .passed, let next = nextLesson else { return false }
         lesson = next
         predictions = [:]
         pageIndex = 0
         quiz = nil
         quizAttempts = 0
+        wasPassedBefore = false
         stage = .pages
         return true
     }
@@ -167,6 +178,7 @@ final class LessonFlowModel {
     private func finishQuizIfDone(using recorder: LearningRecorder) {
         guard stage == .quiz, let quiz, quiz.phase == .finished else { return }
         if quiz.passed {
+            wasPassedBefore = recorder.progress.completedLessons.contains(lesson.id)
             recorder.completeLesson(lesson)
             stage = .passed
         } else {
