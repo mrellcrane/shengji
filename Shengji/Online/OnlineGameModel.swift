@@ -596,8 +596,7 @@ final class OnlineGameModel: Identifiable {
         } catch is CancellationError {
             return
         } catch {
-            pendingAction = action
-            banner = GameCoachMessage(OnlineError.moveNotSentMessage, kind: .warning)
+            await handleActionError(.offline, action: action, before: before)
         }
     }
 
@@ -627,8 +626,16 @@ final class OnlineGameModel: Identifiable {
             banner = GameCoachMessage(OnlineError.notYourTurnMessage)
             await refresh()
         case .offline:
-            pendingAction = action
-            banner = GameCoachMessage(OnlineError.moveNotSentMessage, kind: .warning)
+            if let view, OnlineGameModel.moveLanded(action, before: before, after: view) {
+                // The reply was lost, but the live update had already shown the move on the table (the
+                // server sends it to live connections before it answers): there is nothing to send again.
+                pendingAction = nil
+                noteMove(action, before: before)
+                banner = GameCoachMessage(OnlineGameModel.moveLandedMessage, kind: .success)
+            } else {
+                pendingAction = action
+                banner = GameCoachMessage(OnlineError.moveNotSentMessage, kind: .warning)
+            }
         case .signedOut:
             pendingAction = nil
             onSignedOut?()
@@ -646,9 +653,10 @@ final class OnlineGameModel: Identifiable {
     static let moveLandedMessage = "Your move went through."
 
     /// True if the server's table shows that `action`, chosen at `before`, was already played (its
-    /// reply was lost, then Retry was refused as stale), within the same round: a play's or burial's
-    /// cards left your hand; a bid or pass is the next entry in the bidding after your turn (or bidding
-    /// is over, which can't happen without your turn being taken).
+    /// reply was lost after a live update showed it, or Retry was refused as stale), within the same
+    /// round: a play's or burial's cards left your hand (a throw that failed plays only part of them,
+    /// and only your own move takes cards from your hand); a bid or pass is the next entry in the
+    /// bidding after your turn (or bidding is over, which can't happen without your turn being taken).
     static func moveLanded(_ action: OnlineAction, before: SeatView, after: SeatView) -> Bool {
         guard after.roundNumber == before.roundNumber else { return false }
         let cards: [Card]
@@ -663,7 +671,7 @@ final class OnlineGameModel: Identifiable {
         guard !cards.isEmpty else { return false }
         let beforeIDs = Set(before.hand.map(\.id))
         let afterIDs = Set(after.hand.map(\.id))
-        return cards.allSatisfy { beforeIDs.contains($0.id) && !afterIDs.contains($0.id) }
+        return cards.contains { beforeIDs.contains($0.id) && !afterIDs.contains($0.id) }
     }
 
     /// A message from outside the table, such as the server refusing to end the game.
