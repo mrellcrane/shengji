@@ -44,6 +44,7 @@ struct ReviewView: View {
 @MainActor
 private struct ReviewContent: View {
     @Environment(LearningStore.self) private var store
+    @Environment(AchievementStore.self) private var achievements
     @Environment(AppRouter.self) private var router
     let now: Date
     let onStart: (PracticeSession.Kind) -> Void
@@ -56,6 +57,7 @@ private struct ReviewContent: View {
                 } else {
                     statsRow
                     sessionCard
+                    journeyCard
                     ReviewItemList(itemIDs: store.progress.unlockedItemIDs) { skill in
                         onStart(.freePractice(skills: [skill]))
                     }
@@ -109,6 +111,29 @@ private struct ReviewContent: View {
             }
             .learnCard()
         }
+    }
+
+    /// Lessons, streaks, mastered skills and games as badges, leading to the Journey achievements.
+    private var journeyCard: some View {
+        let counts = achievements.tierCounts(in: .journey)
+        return NavigationLink {
+            AchievementsView(category: .journey)
+        } label: {
+            HStack(spacing: 12) {
+                AchievementSummaryCard(title: "Journey", systemImage: "map.fill",
+                                       fraction: achievements.fraction(in: .journey),
+                                       earned: counts.earned, possible: counts.possible,
+                                       recent: achievements.recentlyEarned(limit: 3, category: .journey),
+                                       emptyText: "Pass lessons, keep a streak and master skills to earn Journey badges.")
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .learnCard()
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens your Journey badges")
     }
 
     private var nextDueText: String {

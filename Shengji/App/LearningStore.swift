@@ -16,6 +16,9 @@ final class LearningStore {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let key = "learnerProgress.v1"
 
+    /// Called after every change to `progress` (the app keeps the achievements' journey counts in step).
+    @ObservationIgnored var onProgressChange: (@MainActor (LearnerProgress) -> Void)?
+
     init(defaults: UserDefaults = .standard, ephemeral: Bool = false) {
         self.defaults = defaults
         self.isEphemeral = ephemeral
@@ -99,6 +102,7 @@ final class LearningStore {
     }
 
     private func save() {
+        onProgressChange?(progress)
         guard !isEphemeral, let data = try? JSONEncoder().encode(progress) else { return }
         defaults.set(data, forKey: key)
     }

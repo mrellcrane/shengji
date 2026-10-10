@@ -7,6 +7,9 @@ import ShengjiCore
 struct LessonView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var flow: LessonFlowModel
+    /// The coach chat for this lesson (each question carries the page it was asked on).
+    @State private var coach = CoachConversation.live()
+    @State private var showsCoach = false
 
     /// - Parameters:
     ///   - startPage: page to open on.
@@ -27,6 +30,19 @@ struct LessonView: View {
             stageContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .sheet(isPresented: $showsCoach) {
+            CoachSheet(conversation: coach)
+        }
+    }
+
+    /// Opens the coach on the page on screen.
+    private func askCoach() {
+        let answer = flow.currentPrediction
+        coach.prepare(scope: .lesson,
+                      context: CoachContext.describe(lesson: flow.lesson, pageIndex: flow.pageIndex, chosenAnswer: answer),
+                      suggestions: SuggestedQuestions.forLesson(flow.lesson, pageIndex: flow.pageIndex,
+                                                                answered: answer != nil))
+        showsCoach = true
     }
 
     private var topDetail: String? {
@@ -44,7 +60,7 @@ struct LessonView: View {
     @ViewBuilder private var stageContent: some View {
         switch flow.stage {
         case .pages:
-            LessonPagesStage(flow: flow)
+            LessonPagesStage(flow: flow, onAskCoach: askCoach)
         case .quiz:
             LessonQuizView(flow: flow)
         case .passed:
@@ -62,6 +78,7 @@ struct LessonView: View {
 private struct LessonPagesStage: View {
     @Environment(LearningStore.self) private var store
     let flow: LessonFlowModel
+    let onAskCoach: () -> Void
 
     var body: some View {
         #if DEBUG
@@ -70,9 +87,13 @@ private struct LessonPagesStage: View {
         ScrollViewReader { proxy in
             ScrollView {
                 if let page = flow.page {
-                    LessonPageView(page: page, flow: flow)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
+                    VStack(alignment: .leading, spacing: 20) {
+                        LessonPageView(page: page, flow: flow)
+                        CoachAskButton(title: "Ask the coach", action: onAskCoach)
+                            .accessibilityHint("Opens a chat about this page.")
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
                 }
             }
             .id("\(flow.lesson.id)#\(flow.pageIndex)")

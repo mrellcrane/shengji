@@ -5,6 +5,7 @@ import ShengjiCore
 @MainActor
 struct SettingsSheet: View {
     @Environment(LearningStore.self) private var store
+    @Environment(AchievementStore.self) private var achievements
     @Environment(\.dismiss) private var dismiss
     @State private var confirmsReset = false
 
@@ -24,11 +25,12 @@ struct SettingsSheet: View {
             }
             .confirmationDialog("Reset all progress?", isPresented: $confirmsReset, titleVisibility: .visible) {
                 Button("Reset progress", role: .destructive) {
+                    achievements.resetAll()
                     store.resetAll()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This clears your lessons, review schedule, streak and stats. It can't be undone.")
+                Text("This clears your lessons, review schedule, streak, stats and badges. It can't be undone.")
             }
         }
     }

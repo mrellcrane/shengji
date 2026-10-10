@@ -1,13 +1,15 @@
 import SwiftUI
 import ShengjiCore
 
-/// Levels for Us and Them (declaring team flagged), defenders' points, trump, dealer and the table menu.
+/// Levels for Us and Them (declaring team flagged), defenders' points, trump, dealer, the coach
+/// and the table menu.
 @MainActor
 struct GameTopBar: View {
     let controller: GameController
     @Binding var coachLevel: CoachLevel
     var onShowRules: () -> Void
     var onShowLastTrick: () -> Void
+    var onAskCoach: () -> Void
     var onQuit: () -> Void
 
     var body: some View {
@@ -16,6 +18,7 @@ struct GameTopBar: View {
                 levels
                 Spacer(minLength: 4)
                 defenderPoints
+                coachButton
                 menu
             }
             HStack(spacing: 8) {
@@ -31,13 +34,13 @@ struct GameTopBar: View {
 
     private var levels: some View {
         HStack(spacing: 4) {
-            GameTeamLevelChip(title: "Us", team: 0, level: controller.level(of: 0),
+            GameTeamLevelChip(title: "Us", team: 0, level: controller.displayedLevel(of: 0),
                               isDeclaring: controller.round.declarerTeam == 0)
             Text("·")
                 .font(.headline)
                 .foregroundStyle(Color.white.opacity(0.6))
                 .accessibilityHidden(true)
-            GameTeamLevelChip(title: "Them", team: 1, level: controller.level(of: 1),
+            GameTeamLevelChip(title: "Them", team: 1, level: controller.displayedLevel(of: 1),
                               isDeclaring: controller.round.declarerTeam == 1)
         }
     }
@@ -94,6 +97,25 @@ struct GameTopBar: View {
             .foregroundStyle(Color.white.opacity(0.9))
             .lineLimit(1)
             .minimumScaleFactor(0.8)
+    }
+
+    // MARK: Coach
+
+    /// Opens the coach chat (not while you are guessing who won the trick).
+    private var coachButton: some View {
+        Button(action: onAskCoach) {
+            Image(systemName: "bubble.left.and.text.bubble.right.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.cardInk)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(Theme.gold))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!controller.canAskCoach)
+        .opacity(controller.canAskCoach ? 1 : 0.45)
+        .accessibilityLabel("Ask the coach")
+        .accessibilityHint("Opens a chat with the coach about this table.")
     }
 
     // MARK: Menu

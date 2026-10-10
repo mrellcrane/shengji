@@ -48,6 +48,12 @@ final class GameController: Identifiable {
     private(set) var lastPredictionTrick: Int?
     /// Set if the table cannot continue (an engine error); the driver stops.
     private(set) var stallMessage: String?
+    /// The hint ladder for the position it was asked in (see `activeHint`).
+    private(set) var hintLadder: HintLadder?
+    /// The banner message showing the current hint step (for the "Why?" chip).
+    private(set) var hintBannerID: UUID?
+    /// Your last rejected play or bury, for the coach (see `lastIllegal`).
+    private(set) var illegalAttempt: IllegalAttempt?
 
     // MARK: Learning hooks (wired to LearningStore by the views; nil in demos and tests)
 
@@ -55,6 +61,13 @@ final class GameController: Identifiable {
     @ObservationIgnored var onPrediction: (@MainActor (_ correct: Bool, _ seconds: Double) -> Void)?
     @ObservationIgnored var onRoundFinished: (@MainActor () -> Void)?
     @ObservationIgnored var onGameFinished: (@MainActor (_ won: Bool) -> Void)?
+
+    // MARK: Achievement hooks (wired to AchievementStore by the views; nil in demos and tests)
+
+    /// Moves you made: after each trick, after the deal closes, and when the round is scored.
+    @ObservationIgnored var onMoves: (@MainActor ([MoveEvent]) -> Void)?
+    /// After each scored round: your team's level and whether you just won the game.
+    @ObservationIgnored var onGameProgress: (@MainActor (_ teamLevel: Rank, _ wonGame: Bool) -> Void)?
 
     // MARK: Private bookkeeping
 
@@ -68,6 +81,9 @@ final class GameController: Identifiable {
     @ObservationIgnored private var hadDeclarationOption = false
     @ObservationIgnored private var buryPromptPrefix: String?
     private let buryPromptID = UUID()
+    /// Where the hint ladder and the illegal attempt were recorded; they lapse once the position moves on.
+    @ObservationIgnored private var hintPosition: TablePosition?
+    @ObservationIgnored private var illegalPosition: TablePosition?
     /// "Your throw failed…" text, added to the explanation when the trick ends (`isYours`: warning style).
     @ObservationIgnored private var throwNote: (text: String, isYours: Bool)?
 
@@ -181,6 +197,16 @@ final class GameController: Identifiable {
 
     func level(of team: Int) -> Rank {
         game.levels.indices.contains(team) ? game.levels[team] : game.settings.startRank
+    }
+
+    /// The level shown in the top bar. The round is scored as soon as its last trick lands, so while
+    /// you are asked who won that trick the levels from before the round are shown (the new ones
+    /// would give the answer away).
+    func displayedLevel(of team: Int) -> Rank {
+        if stage == .predicting, let summary = pendingSummary, summary.levelsBefore.indices.contains(team) {
+            return summary.levelsBefore[team]
+        }
+        return level(of: team)
     }
 
     var isGameOver: Bool { game.winner != nil }
@@ -578,6 +604,7 @@ final class GameController: Identifiable {
     private func finishDealingNow(prefix: String?) {
         guard round.phase == .dealing, round.isDealingComplete else { return }
         round.finishDealing()
+        reportMoves { MoveDetector.moves(inDeclarationsOf: $0) }
         stage = GameController.stage(for: round)
         selection = []
         if let dealer = round.dealer, !isBot(dealer) {
@@ -636,6 +663,7 @@ final class GameController: Identifiable {
         do {
             try round.bury(cards)
         } catch let error as RoundError {
+            noteIllegal(cards, error: error)
             banner = GameCoachMessage(error.explanation, concept: "The kitty", kind: .warning)
             return
         } catch {
@@ -723,18 +751,78 @@ final class GameController: Identifiable {
 
     // MARK: Hints
 
-    /// Guided and Coached: the bot's suggestion for your seat, with its reason.
+    /// The position at the table: when it moves on, the hint ladder and the last illegal attempt lapse.
+    struct TablePosition: Equatable {
+        var phase: RoundPhase
+        var tricks: Int
+        var cardsInTrick: Int
+        var handCount: Int
+    }
+
+    var tablePosition: TablePosition {
+        TablePosition(phase: round.phase, tricks: round.tricks.count, cardsInTrick: round.currentTrick.count,
+                      handCount: hand(of: Seats.human).count)
+    }
+
+    /// The hint ladder for the position on the table (nil before the first hint, or once play moved on).
+    var activeHint: HintLadder? {
+        guard let hintLadder, hintPosition == tablePosition, canHint else { return nil }
+        return hintLadder
+    }
+
+    /// The Hint button's title: Hint, then Another hint, then Show me. It names the step the next tap
+    /// really reveals (the ladder skips a step whose text is empty), and stays Show me once complete.
+    var hintButtonTitle: String {
+        guard var next = activeHint else { return HintStep.nudge.buttonTitle }
+        next.advance()
+        return (next.step ?? .show).buttonTitle
+    }
+
+    /// The coach banner is showing the current hint step (it offers "Why?").
+    var isShowingHint: Bool {
+        guard activeHint != nil, let id = hintBannerID else { return false }
+        return banner?.id == id
+    }
+
+    /// Guided and Coached: one more step of help for your play or bury, least help first:
+    /// what to notice, then the principle, then the cards (selected for you) and the reason.
+    /// At the last step another tap selects the suggested cards again.
     func showHint() {
         guard canHint else { return }
-        let decision: BotDecision
-        if isHumanBurying {
-            decision = Bot(seat: Seats.human).cardsToBury(in: round)
+        let position = tablePosition
+        var ladder: HintLadder
+        if let current = hintLadder, hintPosition == position {
+            ladder = current
         } else {
-            decision = Bot(seat: Seats.human).decide(in: round)
+            let decision = isHumanBurying ? Bot(seat: Seats.human).cardsToBury(in: round)
+                                          : Bot(seat: Seats.human).decide(in: round)
+            ladder = HintLadder(decision: decision)
         }
-        let mine = Set(hand(of: Seats.human).map(\.id))
-        selection = Set(decision.cards.map(\.id)).intersection(mine)
-        banner = GameCoachMessage(decision.reason, concept: decision.concept.isEmpty ? nil : decision.concept, kind: .hint)
+        if !ladder.isComplete { ladder.advance() }
+        hintLadder = ladder
+        hintPosition = position
+        if ladder.step == .show {
+            let mine = Set(hand(of: Seats.human).map(\.id))
+            selection = Set(ladder.highlightedCards.map(\.id)).intersection(mine)
+        }
+        let text = ladder.text.isEmpty ? ladder.decision.reason : ladder.text
+        let message = GameCoachMessage(text.isEmpty ? "Look at what was led, and what you hold in that suit." : text,
+                                       concept: ladder.concept, kind: .hint)
+        hintBannerID = message.id
+        banner = message
+    }
+
+    // MARK: Illegal attempts
+
+    /// Your last rejected play (or bury) in this position, with the rule it broke (for the coach).
+    var lastIllegal: IllegalAttempt? {
+        guard let illegalAttempt, illegalPosition == tablePosition else { return nil }
+        return illegalAttempt
+    }
+
+    private func noteIllegal(_ cards: [Card], error: RoundError) {
+        illegalAttempt = IllegalAttempt(cards: cards, error: error)
+        illegalPosition = tablePosition
     }
 
     // MARK: Playing
@@ -746,7 +834,7 @@ final class GameController: Identifiable {
         let cards = selectedCards
         let lead = round.currentLead
         if let error = round.legalityError(for: cards, by: Seats.human) {
-            reject(error, lead: lead)
+            reject(error, cards: cards, lead: lead)
             return
         }
         let before = round.tricks.count
@@ -762,7 +850,7 @@ final class GameController: Identifiable {
             }
             afterPlay(tricksBefore: before)
         } catch let error as RoundError {
-            reject(error, lead: lead)
+            reject(error, cards: cards, lead: lead)
             return
         } catch {
             banner = GameCoachMessage("That play didn't go through. Try again.", kind: .warning)
@@ -772,7 +860,8 @@ final class GameController: Identifiable {
     }
 
     /// Rules are enforced and explained at every coach level.
-    private func reject(_ error: RoundError, lead: [Card]) {
+    private func reject(_ error: RoundError, cards: [Card], lead: [Card]) {
+        noteIllegal(cards, error: error)
         banner = GameCoachMessage(error.explanation, concept: GameCoachText.concept(for: error), kind: .warning)
         if let skill = GameCoachText.mistakeSkill(for: error, lead: lead) {
             onMistake?(skill)
@@ -841,6 +930,8 @@ final class GameController: Identifiable {
     }
 
     private func trickCompleted(_ trick: TrickRecord) {
+        let trickIndex = round.tricks.count - 1
+        reportMoves { MoveDetector.moves(inTrick: trickIndex, of: $0) }
         if round.phase == .finished { recordRoundResult() }
         if shouldAskPrediction(for: trick) {
             prediction = GamePredictionPrompt(trickNumber: round.tricks.count, winner: trick.winner, askedAt: Date())
@@ -934,10 +1025,23 @@ final class GameController: Identifiable {
         let summary = game.record(result)
         pendingSummary = summary
         onRoundFinished?()
-        if let winner = summary.gameWinner ?? game.winner {
+        reportMoves { MoveDetector.moves(inFinishedRound: $0) }
+        let winner = summary.gameWinner ?? game.winner
+        if let onGameProgress, !isBot(Seats.human) {
+            let team = Seats.team(of: Seats.human)
+            onGameProgress(level(of: team), winner == team)
+        }
+        if let winner {
             onGameFinished?(winner == Seats.team(of: Seats.human))
             persistence?.delete()
         }
+    }
+
+    /// Hands the moves you made to `onMoves` (only asked for when someone is listening).
+    private func reportMoves(_ detect: (Round) -> [MoveEvent]) {
+        guard let onMoves, !isBot(Seats.human) else { return }
+        let events = detect(round)
+        if !events.isEmpty { onMoves(events) }
     }
 
     private func showRoundOver() {
@@ -986,6 +1090,11 @@ final class GameController: Identifiable {
         stallMessage = nil
         roundRecorded = false
         throwNote = nil
+        hintLadder = nil
+        hintPosition = nil
+        hintBannerID = nil
+        illegalAttempt = nil
+        illegalPosition = nil
         banner = GameCoachMessage(GameCoachText.dealingIntro(round: round, game: game, coach: coachLevel),
                                   concept: "Declaring")
     }

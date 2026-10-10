@@ -49,7 +49,7 @@ struct RootView: View {
         }
     }
 
-    /// Game scenes (`game`, `dealing`, `result`) are handled by the Play tab.
+    /// Play-tab scenes (`game`, `dealing`, `result`, `coach`, `achievements`) are handled by the Play tab.
     private var playScene: DemoScene? {
         guard let scene, scene.isGameScene else { return nil }
         return scene

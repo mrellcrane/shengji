@@ -1,9 +1,9 @@
 import SwiftUI
 import ShengjiCore
 
-/// The Play tab: start or continue a game against three bots, and choose how much help you get.
-/// For the `game`, `dealing` and `result` demo scenes it opens the table straight away from an
-/// in-memory game (seed 7) that never touches the saved game.
+/// The Play tab: start or continue a game against three bots, your moves (achievements), and how much
+/// help you get. For the `game`, `dealing`, `result` and `coach` demo scenes it opens the table straight
+/// away from an in-memory game (seed 7) that never touches the saved game; `achievements` opens the badges.
 @MainActor
 struct PlayHomeView: View {
     let demoScene: DemoScene?
@@ -13,14 +13,17 @@ struct PlayHomeView: View {
     }
 
     @Environment(LearningStore.self) private var learning
+    @Environment(AchievementStore.self) private var achievements
     @AppStorage("play.botSpeed") private var botSpeed: GameBotSpeed = .normal
     @AppStorage("play.predictWinner") private var predictionsOn: Bool = true
     @AppStorage("play.gameLength") private var gameLength: GameLengthOption = .toAce
+    @AppStorage("play.moveCelebrations") private var celebrationsOn: Bool = true
 
     @State private var activeGame: GameController? = nil
     @State private var savedGame: SavedGame? = nil
     @State private var confirmingNewGame = false
     @State private var demoOpened = false
+    @State private var showsAchievements = false
 
     /// Screenshot scenes never read or write the real saved game (games started there live in memory).
     private var isDemoMode: Bool { demoScene != nil }
@@ -32,16 +35,24 @@ struct PlayHomeView: View {
             Form {
                 PlayHomeHeader()
                 gameSection
+                movesSection
                 coachSection
                 tableSection
             }
             .navigationTitle("Play")
+            .navigationDestination(isPresented: $showsAchievements) {
+                AchievementsView(category: .moves)
+            }
         }
         .fullScreenCover(item: $activeGame, onDismiss: refreshSavedGame) { controller in
-            GameTableView(controller: controller) {
+            GameTableView(controller: controller, demoCoach: demoScene == .coach ? CoachConversation.demo() : nil) {
                 activeGame = nil
             }
             .environment(learning)
+            .environment(achievements)
+        }
+        .onChange(of: celebrationsOn) { _, isOn in
+            if !isOn { achievements.clearToasts() }
         }
         .confirmationDialog("Start a new game?", isPresented: $confirmingNewGame, titleVisibility: .visible) {
             Button("New game", role: .destructive) { startNewGame() }
@@ -78,6 +89,27 @@ struct PlayHomeView: View {
         }
     }
 
+    /// "Your moves": overall badge progress and the latest badges, leading to the achievements.
+    private var movesSection: some View {
+        Section {
+            NavigationLink {
+                AchievementsView(category: .moves)
+            } label: {
+                AchievementSummaryCard(title: "Your moves", systemImage: "star.circle.fill",
+                                       fraction: achievements.progress.overallFraction,
+                                       earned: overallCounts.earned, possible: overallCounts.possible,
+                                       recent: achievements.recentlyEarned(limit: 3),
+                                       emptyText: "Ruff, feed your partner points, hold the deal: the moves you make at the table earn badges here.")
+            }
+        }
+    }
+
+    private var overallCounts: (earned: Int, possible: Int) {
+        let moves = achievements.tierCounts(in: .moves)
+        let journey = achievements.tierCounts(in: .journey)
+        return (moves.earned + journey.earned, moves.possible + journey.possible)
+    }
+
     private var coachSection: some View {
         Section {
             Picker("Coach level", selection: coachBinding) {
@@ -105,6 +137,7 @@ struct PlayHomeView: View {
             }
             .pickerStyle(.segmented)
             Toggle("Predict the winner", isOn: $predictionsOn)
+            Toggle("Move celebrations", isOn: $celebrationsOn)
             Picker("Play to", selection: $gameLength) {
                 ForEach(GameLengthOption.allCases) { length in
                     Text(length.title).tag(length)
@@ -114,7 +147,7 @@ struct PlayHomeView: View {
         } header: {
             Text("Table")
         } footer: {
-            Text("Predict the winner: in Guided and Coached you'll sometimes guess who wins a trick before it's shown. Guessing first helps you remember. \(gameLength.detail) Game length applies to new games.")
+            Text("Predict the winner: in Guided and Coached you'll sometimes guess who wins a trick before it's shown. Guessing first helps you remember. Move celebrations: a quick cheer when you pull off a named move, like a ruff. \(gameLength.detail) Game length applies to new games.")
         }
     }
 
@@ -153,9 +186,13 @@ struct PlayHomeView: View {
     private func openDemoIfNeeded() async {
         guard let scene = demoScene, scene.isGameScene, !demoOpened else { return }
         demoOpened = true
-        // Let the tab finish appearing before presenting the table over it.
+        // Let the tab finish appearing before presenting the table (or the badges) over it.
         try? await Task.sleep(nanoseconds: 300_000_000)
-        activeGame = GameController.demo(scene)
+        if scene == .achievements {
+            showsAchievements = true
+        } else {
+            activeGame = GameController.demo(scene)
+        }
     }
 }
 
