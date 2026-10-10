@@ -218,3 +218,31 @@ Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `r
 - Suggested questions: tap-to-ask chips chosen from the phase and situation (your turn to lead/follow, after an
   illegal attempt, dealing, burying, after a trick, after a round, inside a lesson), plus follow-ups under each answer
   ("Why?", "Show an example", "Just tell me"). Typing is optional.
+
+## Online multiplayer (planned; decisions made with the user)
+
+Small private groups (6 to 10 friends), asynchronous turn-based play with push notifications, live updates when
+several players are in the app. Offline learning, practice and bot games stay as they are.
+
+- Server: a separate Cloudflare Worker in `server/` (free plan). TypeScript port of the engine (decision: no
+  container). Each game is a Durable Object (authoritative state, ordered actions, WebSocket live updates);
+  a single Hub Durable Object (SQLite) holds users, linked sign-in identities, sessions, devices, clubs and the
+  games index.
+- Rules parity: the Swift engine generates JSON test vectors (`ShengjiVectors` executable target, output in
+  `server/test/vectors/`); the TypeScript engine must reproduce every one exactly (validity, violations and their
+  explanation text, trick winners, throws, scoring, game progression). Bots get the same parity check once ported.
+  CI regenerates the vectors and fails if they drift from the Swift engine.
+- Card wire format: `Card.id` (0...107 = face index + copy × 54). Seats 0...3 as offline; each player sees the
+  table rotated so they are "You".
+- Declaring online is turn-based: all 25 cards are dealt at once, then from the first bidder (the dealer, or the
+  game creator's seat in round 1) each player in turn declares (same strength rules as offline) or passes.
+  Bidding ends when the three other players have passed since the last declaration, or when all four pass with no
+  declaration (then the kitty flip rule sets trump). Round 1: the winning declarer deals.
+- Privacy: a player's view never contains other hands, the undealt deck, or the kitty (unless they are the dealer
+  holding or having buried it, or the round is finished).
+- Accounts are provider-agnostic: internal user ids with linked identities. Sign in with Apple now (identity token
+  verified against Apple's JWKS, audience = bundle id); Google sign-in later for an Android app.
+- Push is pluggable: APNs now (token auth with an APNs .p8 key: `APNS_KEY_P8`, `APNS_KEY_ID`, team
+  `APPLE_TEAM_ID`; sandbox for debug builds, production for TestFlight/App Store), FCM later.
+- Client: the online table renders a per-seat view from the server. Bots, hints, the coach context and move
+  detection work from the same "seat view" model offline and online.
