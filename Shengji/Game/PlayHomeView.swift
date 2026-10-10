@@ -14,6 +14,7 @@ struct PlayHomeView: View {
 
     @Environment(LearningStore.self) private var learning
     @Environment(AchievementStore.self) private var achievements
+    @Environment(OnlineSession.self) private var session
     @AppStorage("play.botSpeed") private var botSpeed: GameBotSpeed = .normal
     @AppStorage("play.predictWinner") private var predictionsOn: Bool = true
     @AppStorage("play.gameLength") private var gameLength: GameLengthOption = .toAce
@@ -25,6 +26,8 @@ struct PlayHomeView: View {
     @State private var demoOpened = false
     @State private var showsAchievements = false
     @State private var showsOnline = false
+    /// An online game from a notification, waiting for the offline table to close.
+    @State private var heldOnlineGameID: String? = nil
 
     /// Screenshot scenes never read or write the real saved game (games started there live in memory).
     private var isDemoMode: Bool { demoScene != nil }
@@ -50,7 +53,16 @@ struct PlayHomeView: View {
             }
         }
         .modifier(OnlineOpensPendingGame(isOnlineOpen: $showsOnline))
-        .fullScreenCover(item: $activeGame, onDismiss: refreshSavedGame) { controller in
+        .onChange(of: session.push.pendingGameID) { _, id in
+            // A tapped notification for an online game: save and close the offline table first. The game
+            // is held until the table has gone (a presentation started mid-transition is dropped).
+            guard let id, session.isSignedIn, let game = activeGame else { return }
+            heldOnlineGameID = id
+            session.push.pendingGameID = nil
+            game.saveAndQuit()
+            activeGame = nil
+        }
+        .fullScreenCover(item: $activeGame, onDismiss: tableClosed) { controller in
             GameTableView(controller: controller, demoCoach: demoScene == .coach ? CoachConversation.demo() : nil) {
                 activeGame = nil
             }
@@ -165,6 +177,14 @@ struct PlayHomeView: View {
 
     private func refreshSavedGame() {
         savedGame = store?.load()
+    }
+
+    private func tableClosed() {
+        refreshSavedGame()
+        if let id = heldOnlineGameID {
+            heldOnlineGameID = nil
+            session.push.pendingGameID = id
+        }
     }
 
     private func configure(_ controller: GameController) {
