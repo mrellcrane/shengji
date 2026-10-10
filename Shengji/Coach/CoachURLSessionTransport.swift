@@ -1,6 +1,7 @@
 import Foundation
 
-/// Sends coach requests with URLSession and streams the reply line by line (`URLSession.bytes(for:)`).
+/// Sends coach requests with URLSession and streams the reply line by line (`URLSession.bytes(for:)`
+/// split by `CoachLineSplitter`).
 /// Network failures and timeouts become `CoachClientError.offline`; cancelling the task cancels the request.
 /// (Kept tiny and separate: `URLSession.bytes` doesn't exist on Linux, where the rest is checked.)
 struct URLSessionCoachTransport: CoachTransport {
@@ -28,8 +29,15 @@ struct URLSessionCoachTransport: CoachTransport {
         let lines = AsyncThrowingStream<String, Error> { continuation in
             let task = Task {
                 do {
-                    for try await line in bytes.lines {
-                        continuation.yield(line)
+                    // Byte by byte (AsyncBytes buffers internally) through the SSE line splitter.
+                    var splitter = CoachLineSplitter()
+                    for try await byte in bytes {
+                        if let line = splitter.append(byte) {
+                            continuation.yield(line)
+                        }
+                    }
+                    if let last = splitter.finish() {
+                        continuation.yield(last)
                     }
                     continuation.finish()
                 } catch {

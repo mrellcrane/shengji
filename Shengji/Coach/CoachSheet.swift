@@ -95,6 +95,9 @@ private struct CoachMessageList: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
+            // Opens on the latest message (a reopened chat, the demo scene) and stays pinned to it as
+            // a reply streams in; the scrollTo below follows new questions.
+            .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: conversation.revision, initial: true) { _, _ in
                 if reduceMotion || conversation.isStreaming {
@@ -258,7 +261,13 @@ private struct CoachErrorCard: View {
 /// Suggested questions, a text field and Send, pinned to the bottom of the sheet.
 @MainActor
 private struct CoachInputBar: View {
-    @Bindable var conversation: CoachConversation
+    let conversation: CoachConversation
+
+    /// A plain get/set binding (like the rest of the app) rather than `$conversation.draft`, which
+    /// would form a key path to a main-actor-isolated property.
+    private var draft: Binding<String> {
+        Binding(get: { conversation.draft }, set: { conversation.draft = $0 })
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -269,7 +278,7 @@ private struct CoachInputBar: View {
                 }
             }
             HStack(spacing: 8) {
-                TextField("Ask your own question", text: $conversation.draft)
+                TextField("Ask your own question", text: draft)
                     .submitLabel(.send)
                     .onSubmit(send)
                     .padding(.horizontal, 14)

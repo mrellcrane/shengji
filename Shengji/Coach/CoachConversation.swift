@@ -136,8 +136,14 @@ final class CoachConversation {
     func prepare(scope: CoachScope, context: String?, suggestions: [SuggestedQuestion]) {
         self.scope = scope
         self.context = context.map { CoachText.clamp($0, to: CoachLimits.maxContextChars) }
-        self.suggestions = suggestions
+        self.suggestions = CoachConversation.uniqueChips(suggestions)
         askedSuggestionIDs = []
+    }
+
+    /// Chips with distinct ids, first one kept (the chip rows are `ForEach`es keyed by id).
+    static func uniqueChips(_ chips: [SuggestedQuestion]) -> [SuggestedQuestion] {
+        var seen = Set<String>()
+        return chips.filter { seen.insert($0.id).inserted }
     }
 
     /// Asks a chip's question with the prepared context.
@@ -292,7 +298,7 @@ final class CoachConversation {
         replyID = nil
         task = nil
         isStreaming = false
-        followUps = next
+        followUps = CoachConversation.uniqueChips(next)
         revision += 1
     }
 

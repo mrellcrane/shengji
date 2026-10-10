@@ -208,7 +208,8 @@ Scene setup must never touch saved progress.
   UserDefaults, `achievements.v1`; ephemeral in demo scenes), injected next to `LearningStore` by `ShengjiApp`
   (`@Environment(AchievementStore.self)`). Journey counts follow `LearningStore.onProgressChange`; the table reports
   moves through `GameController.onMoves` / `onGameProgress` (`connectAchievements`) and shows the store's toasts
-  (setting `play.moveCelebrations`, held during "who wins?" prompts).
+  (setting `play.moveCelebrations`, held during "who wins?" prompts and while a sheet covers the table). While you
+  guess who won a round's last trick, the top bar keeps showing the levels from before the round.
 - Coach client (`Shengji/Coach/`): `CoachClient` (SSE over `URLSession.bytes`, device id in UserDefaults
   `coach.deviceID`), `CoachConversation` (SwiftUI-free; keeps requests within the proxy's limits) and `CoachSheet`.
   Entry points: the table's coach button and the hint banner's "Why?", "Ask the coach" on lesson pages, "Ask why"

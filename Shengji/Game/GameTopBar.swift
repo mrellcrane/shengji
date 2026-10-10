@@ -34,13 +34,13 @@ struct GameTopBar: View {
 
     private var levels: some View {
         HStack(spacing: 4) {
-            GameTeamLevelChip(title: "Us", team: 0, level: controller.level(of: 0),
+            GameTeamLevelChip(title: "Us", team: 0, level: controller.displayedLevel(of: 0),
                               isDeclaring: controller.round.declarerTeam == 0)
             Text("·")
                 .font(.headline)
                 .foregroundStyle(Color.white.opacity(0.6))
                 .accessibilityHidden(true)
-            GameTeamLevelChip(title: "Them", team: 1, level: controller.level(of: 1),
+            GameTeamLevelChip(title: "Them", team: 1, level: controller.displayedLevel(of: 1),
                               isDeclaring: controller.round.declarerTeam == 1)
         }
     }

@@ -199,6 +199,16 @@ final class GameController: Identifiable {
         game.levels.indices.contains(team) ? game.levels[team] : game.settings.startRank
     }
 
+    /// The level shown in the top bar. The round is scored as soon as its last trick lands, so while
+    /// you are asked who won that trick the levels from before the round are shown (the new ones
+    /// would give the answer away).
+    func displayedLevel(of team: Int) -> Rank {
+        if stage == .predicting, let summary = pendingSummary, summary.levelsBefore.indices.contains(team) {
+            return summary.levelsBefore[team]
+        }
+        return level(of: team)
+    }
+
     var isGameOver: Bool { game.winner != nil }
 
     var isFirstRound: Bool { game.history.isEmpty }
@@ -760,10 +770,12 @@ final class GameController: Identifiable {
         return hintLadder
     }
 
-    /// The Hint button's title: Hint, then Another hint, then Show me.
+    /// The Hint button's title: Hint, then Another hint, then Show me. It names the step the next tap
+    /// really reveals (the ladder skips a step whose text is empty), and stays Show me once complete.
     var hintButtonTitle: String {
-        guard let ladder = activeHint else { return HintStep.nudge.buttonTitle }
-        return (ladder.nextStep ?? .show).buttonTitle
+        guard var next = activeHint else { return HintStep.nudge.buttonTitle }
+        next.advance()
+        return (next.step ?? .show).buttonTitle
     }
 
     /// The coach banner is showing the current hint step (it offers "Why?").

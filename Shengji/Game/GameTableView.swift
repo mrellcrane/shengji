@@ -24,6 +24,8 @@ struct GameTableView: View {
     @State private var coach: CoachConversation
     /// Measured, so celebration toasts sit just under the top bar.
     @State private var topBarHeight: CGFloat = 76
+    /// The `coach` demo scene opens its sheet once, not again each time the table reappears.
+    @State private var demoCoachOpened = false
     /// The `coach` demo scene opens the sheet on this canned chat.
     private let demoCoach: CoachConversation?
 
@@ -90,14 +92,17 @@ struct GameTableView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: controller.isShowingResult)
     }
 
-    /// Celebrations just under the top bar: above the table and the result panel, never over your hand.
+    /// Celebrations just under the top bar: above the table and the result panel (whose zIndex is 1),
+    /// never over your hand. They wait while you guess who won the trick (they would give the answer
+    /// away) and while a sheet covers the table (so none time out unseen).
     private var toastLayer: some View {
         VStack(spacing: 0) {
-            AchievementToastLayer(store: achievements, canShow: controller.stage != .predicting)
+            AchievementToastLayer(store: achievements, canShow: controller.stage != .predicting && sheet == nil)
                 .padding(.top, topBarHeight + 4)
                 .padding(.horizontal, 16)
             Spacer(minLength: 0)
         }
+        .zIndex(2)
     }
 
     private var topBarReader: some View {
@@ -148,6 +153,9 @@ struct GameTableView: View {
     /// banner's "Why?", it asks why that hint applies straight away.
     private func openCoach(explainingHint: Bool) {
         guard controller.canAskCoach else { return }
+        // Hold the bots now, not only once the sheet's onChange runs: a bot acting in between would
+        // leave the coach looking at a table that has already moved on.
+        controller.pause()
         if demoCoach == nil {
             controller.prepareCoach(coach)
             if explainingHint, let question = controller.explainHintQuestion {
@@ -160,10 +168,14 @@ struct GameTableView: View {
         sheet = .coach
     }
 
-    /// The `coach` demo scene: the sheet opens over the table once it has appeared.
+    /// The `coach` demo scene: the sheet opens over the table once, after the full-screen table has
+    /// finished presenting (UIKit drops a sheet presented while another presentation is in flight).
     private func openDemoCoachIfNeeded() async {
-        guard demoCoach != nil, sheet == nil else { return }
-        try? await Task.sleep(nanoseconds: 700_000_000)
+        guard demoCoach != nil, !demoCoachOpened, sheet == nil else { return }
+        demoCoachOpened = true
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        guard !Task.isCancelled, sheet == nil else { return }
+        controller.pause()
         sheet = .coach
     }
 

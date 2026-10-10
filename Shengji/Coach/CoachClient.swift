@@ -118,6 +118,35 @@ enum CoachSSEParser {
     }
 }
 
+/// Splits a byte stream into SSE lines: ends at LF (an optional CR before it is dropped), UTF-8 decoded
+/// once the whole line is in, so a character split across network chunks stays whole. Unlike
+/// `AsyncLineSequence`, it does not also break at U+0085, U+2028 or U+2029, which JSON may carry
+/// unescaped inside a `data:` payload.
+struct CoachLineSplitter {
+    private var buffer: [UInt8] = []
+
+    /// Adds one byte; returns the line it completes, if any.
+    mutating func append(_ byte: UInt8) -> String? {
+        guard byte == 0x0A else {
+            buffer.append(byte)
+            return nil
+        }
+        return takeLine()
+    }
+
+    /// The last line if the stream ended without a final line break.
+    mutating func finish() -> String? {
+        buffer.isEmpty ? nil : takeLine()
+    }
+
+    private mutating func takeLine() -> String {
+        if buffer.last == 0x0D { buffer.removeLast() }
+        let line = String(decoding: buffer, as: UTF8.self)
+        buffer.removeAll(keepingCapacity: true)
+        return line
+    }
+}
+
 /// A request in plain values (the transport turns it into a `URLRequest`).
 struct CoachHTTPRequest: Equatable, Sendable {
     var url: URL
