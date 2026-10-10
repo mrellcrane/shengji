@@ -1,7 +1,8 @@
 // An in-process stand-in for the deployed Worker: the real router, HubHost and RoomHosts over
 // node:sqlite, wired like src/worker.ts and the Durable Object adapters. Calls between them go
 // through `rpc`, which clones arguments and results like Durable Object RPC does (so anything
-// that would not survive RPC fails here too). Time, randomness, Apple and APNs are fakes.
+// that would not survive RPC fails here too), and rooms reach the Hub through `hubBinding`, whose
+// stubs break when the Hub is reset, as workerd's do. Time, randomness, Apple and APNs are fakes.
 
 import { handleRequest } from "../src/api/router.ts";
 import type { Limiter, Services } from "../src/api/router.ts";
@@ -14,8 +15,8 @@ import { HubHost } from "../src/hub/host.ts";
 import type { HubApi } from "../src/hub/host.ts";
 import { HubService } from "../src/hub/service.ts";
 import type { ApnsClient, PushMessage, PushResult } from "../src/push/apns.ts";
-import { RoomHost } from "../src/room/host.ts";
-import type { RoomApi } from "../src/room/host.ts";
+import { RoomHost, roomHub } from "../src/room/host.ts";
+import type { HubBinding, RoomApi } from "../src/room/host.ts";
 import { RoomService } from "../src/room/service.ts";
 import { memorySql } from "./sqlite.ts";
 
@@ -29,6 +30,39 @@ export function rpc<T extends object>(target: T): T {
         structuredClone(await (value as (...a: unknown[]) => unknown).apply(object, structuredClone(args)));
     },
   });
+}
+
+/** The error workerd gives for a call on a stub made before the object behind it was reset. */
+export const HUB_RESET_ERROR = "Durable Object reset because its code was updated.";
+
+/**
+ * The HUB binding as workerd behaves: `get` makes a new stub (calls cloned like RPC). Once the
+ * Hub is reset (`reset()`), every stub made before fails each later call with HUB_RESET_ERROR;
+ * only a new stub reaches the Hub again.
+ */
+export function hubBinding(target: HubApi): HubBinding<string> & { reset(): void } {
+  let resets = 0;
+  return {
+    reset() {
+      resets++;
+    },
+    idFromName: (name) => name,
+    get(id) {
+      if (id !== "hub") throw new Error(`no Durable Object named ${id}`);
+      const born = resets;
+      const stub = rpc<HubApi>(target);
+      return new Proxy(stub, {
+        get(object, key) {
+          const value = Reflect.get(object, key) as unknown;
+          if (typeof value !== "function") return value;
+          return async (...args: unknown[]) => {
+            if (resets !== born) throw new Error(HUB_RESET_ERROR);
+            return (value as (...a: unknown[]) => Promise<unknown>)(...args);
+          };
+        },
+      });
+    },
+  };
 }
 
 /** A seeded RandomSource (mulberry32) for reproducible deals. */
@@ -93,6 +127,8 @@ export interface Cloud {
   broadcasts: Map<string, number>;
   closed: Set<string>;
   logs: string[];
+  /** Resets the Hub: stubs made before stop working (the Worker makes a new one per request). */
+  resetHub(): void;
   /** Background work handed to waitUntil (pushes, renames); `settle` awaits it. */
   settle(): Promise<void>;
   call(method: string, path: string, options?: { token?: string; body?: unknown; raw?: string; headers?: Record<string, string> }): Promise<Reply>;
@@ -112,6 +148,7 @@ export function makeCloud(options: CloudOptions = {}): Cloud {
     logs.push(m),
   );
   const hubApi = rpc<HubApi>(hub);
+  const binding = hubBinding(hub);
   const rooms = new Map<string, RoomHost>();
   const broadcasts = new Map<string, number>();
   const closed = new Set<string>();
@@ -119,9 +156,10 @@ export function makeCloud(options: CloudOptions = {}): Cloud {
     let host = rooms.get(gameId);
     if (host === undefined) {
       host = new RoomHost(new RoomService(memorySql(), { deck, now }), {
-        hub: hubApi,
+        hub: roomHub(binding),
         broadcast: () => broadcasts.set(gameId, (broadcasts.get(gameId) ?? 0) + 1),
         closeAll: () => closed.add(gameId),
+        log: (message) => logs.push(message),
       });
       rooms.set(gameId, host);
     }
@@ -160,6 +198,7 @@ export function makeCloud(options: CloudOptions = {}): Cloud {
     broadcasts,
     closed,
     logs,
+    resetHub: () => binding.reset(),
     async settle() {
       while (pending.length > 0) await pending.shift();
     },

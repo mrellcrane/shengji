@@ -15,6 +15,14 @@ preview_urls = false
 
 [observability]
 enabled = true
+# The live address carries the session token in its query (/v1/games/<id>/live?token=...): no
+# query string ever goes into logs or traces, whatever else is turned on later.
+redact_query_string = true
+
+# No per-request logs either (they would keep request URLs for days). console.error lines
+# (failed pushes, unexpected errors) are still kept.
+[observability.logs]
+invocation_logs = false
 
 [vars]
 # The deploy workflow passes the git sha with --var VERSION:<sha>.
@@ -52,7 +60,7 @@ namespace_id = "2002"
   limit = 300
   period = 60
 
-# Sign-in and invite-code attempts per IP (slows down guessing).
+# Sign-ins per IP and invite-code attempts per user (slows down guessing).
 [[ratelimits]]
 name = "AUTH_LIMITER"
 namespace_id = "2003"

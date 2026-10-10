@@ -32,15 +32,28 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Emoji pieces that are formatting characters: the joiner U+200D and the tags of flag emoji. */
+const EMOJI_FORMAT = /[\u200d\u{e0020}-\u{e007f}]/gu;
+
+/**
+ * Characters that draw nothing on their own: marks, spaces, joiners and tags, variation
+ * selectors (marks), and the letters and symbols that render blank (Hangul fillers, the blank
+ * Braille pattern). A name needs at least one other character.
+ */
+const INVISIBLE = /[\p{M}\p{Z}\s\u200d\u{e0020}-\u{e007f}\u115f\u1160\u3164\uffa0\u2800]/gu;
+
 /**
  * A display or club name: whitespace trimmed and collapsed, no control or invisible formatting
- * characters, 1 to `max` characters (code points). With `truncate`, a long name is cut to `max`
- * instead of rejected (names that come from Apple).
+ * characters, no lone UTF-16 surrogates (JSON would carry them as "\ud800", which the app's
+ * JSONDecoder rejects, breaking every list and table that shows the name), at least one visible
+ * character, and 1 to `max` characters (code points). With `truncate`, a long name is cut to
+ * `max` instead of rejected (names that come from Apple).
  */
 export function cleanName(value: unknown, max: number, truncate = false): string | null {
   if (typeof value !== "string" || value.length > 1000) return null;
-  // Control and invisible formatting characters are refused (the emoji joiner U+200D is fine).
-  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value.replace(/[\t\n\r\u200d]/g, " "))) return null;
+  if (/\p{Cs}/u.test(value)) return null;
+  // Control and formatting characters are refused (except the emoji joiner and flag tags).
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value.replace(/[\t\n\r]/g, " ").replace(EMOJI_FORMAT, ""))) return null;
   let name = value.replace(/\s+/gu, " ").trim();
   let chars = Array.from(name);
   if (chars.length > max) {
@@ -48,7 +61,8 @@ export function cleanName(value: unknown, max: number, truncate = false): string
     chars = chars.slice(0, max);
     name = chars.join("").trim();
   }
-  return name.length > 0 ? name : null;
+  if (name.replace(INVISIBLE, "").length === 0) return null;
+  return name;
 }
 
 function parseCards(value: unknown, max: number): Card[] | null {

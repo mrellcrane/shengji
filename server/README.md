@@ -54,7 +54,15 @@ game's room. After an accepted move the room runs bot turns until a person must 
 round is recorded and the next one dealt at once), saves state and log in one transaction, sends
 each connected socket its own seat's update, updates the Hub's index (awaited, so lists are
 current), and returns the pushes, which the Worker sends with `ctx.waitUntil` so the reply never
-waits for APNs.
+waits for APNs. The move is saved before the index is updated, so if the Hub cannot be reached
+(tried twice) the move is still answered and pushed, the failure is logged, and the next change
+brings the index up to date. Deleting goes the other way round (the Hub first), so a failure
+leaves the game whole instead of a ghost in every list. A room makes a new Hub stub for every
+call (`roomHub` in src/room/host.ts): workerd breaks a stub for good once the Hub behind it is
+reset, and a kept one would cut the room off from the Hub until the room was evicted (no index
+updates, every delete a 500). A rename is a new version too (clients
+keep only newer versions). Each person keeps at most 4 live sockets per game (src/room/sockets.ts):
+a fifth replaces their oldest (close code 4001), so sockets a phone left behind never fill a game.
 
 **Privacy.** Every view is built by `toSeatView` from what that seat may see (DESIGN.md); game
 summaries and their `lastEvent` lines come from public facts only. test/privacy.test.ts checks
@@ -194,8 +202,12 @@ differing paths of each mismatch. Field names match the TypeScript types.
   versions, illegal moves with the engine's explanation, failed throws, nudges, renames, deletion;
 - privacy.test.ts (see above), bots.test.ts (150 all-bot rounds: every move legal, deterministic),
   seatview.test.ts (bidding views, summaries, event lines), push.test.ts (ES256 provider tokens
-  signed with a generated P-256 key and verified, the 50-minute cache, APNs requests and replies with
-  fetch mocked, device clean-up, and that a hanging APNs never delays a reply).
+  signed with a generated P-256 key and verified, the 50-minute cache, one signing for a burst of
+  pushes, the token kept across Hub restarts, APNs requests and replies with fetch mocked, device
+  clean-up, and that a hanging APNs never delays a reply), live.test.ts (who may open a live socket,
+  overdue bot turns and their pushes on connect, which old sockets give way, how a client's close is
+  answered), config.test.ts (request logs off and query strings redacted, SQLite classes, rate
+  limit namespaces).
 
 `npm run e2e` starts `wrangler dev` (workerd with real SQLite Durable Objects, rate limiters and
 WebSockets) on a free port with fresh storage and a random `DEV_AUTH_SECRET`, then runs
@@ -203,9 +215,10 @@ scripts/smoke.ts against it: two dev users make a club and join it, start a game
 the live WebSocket for both, and play a whole round, each choosing moves from their own view only;
 it checks the error paths (401, 403 not_your_turn, 409 stale, 400 illegal, 426, nudges), the game
 and club lists, that both sockets get every update in order up to the final version, that no view
-(HTTP or WebSocket) shows a card of another hand or a hidden kitty, then deletes the game (sockets
-close with 4004) and leaves the club. It prints a JSON report. The same script runs against a
-deployed Worker:
+(HTTP or WebSocket) shows a card of another hand or a hidden kitty; that a rename is a new version
+that reaches the other socket; that a fifth socket for one person replaces their oldest (4001);
+that a close without a code is answered at once; then deletes the game (sockets close with 4004)
+and leaves the club. It prints a JSON report. The same script runs against a deployed Worker:
 
 ```
 node --experimental-strip-types scripts/smoke.ts https://shengji-online.<subdomain>.workers.dev <DEV_AUTH_SECRET>
@@ -237,14 +250,21 @@ environment is reported as `BadDeviceToken` and forgotten (the app registers it 
 `server/.dev.vars`, which is gitignored). State persists in `server/.wrangler/` between runs;
 delete that folder for a clean start. `npm run e2e` uses its own temporary storage.
 
-**Watching.** `npx wrangler tail shengji-online` streams live logs (Workers observability is on, so
-the dashboard keeps them too). The server logs failed pushes, unexpected errors and Apple key
-fetch failures with `console.error`. `GET /health` returns `{"ok", "version", "push"}`.
+**Watching.** `npx wrangler tail shengji-online` streams live logs. Workers observability is on for
+`console.error` lines, which the dashboard keeps: failed pushes, unexpected errors, Apple key fetch
+failures and games index updates that did not go through. Per-request (invocation) logs are off
+(`[observability.logs] invocation_logs = false`) and query strings are redacted from logs and traces
+(`redact_query_string = true`), because the live address carries the session token in its query;
+for the same reason, do not share `wrangler tail` output, which shows request URLs.
+`GET /health` returns `{"ok", "version", "push"}`.
 
 **Data.** Everything lives in the Durable Objects' SQLite storage: the Hub (tables `users`,
 `identities`, `sessions`, `devices`, `clubs`, `memberships`, `games`, `game_players`,
-`deleted_games`) and one GameRoom per game (`state`: the game as JSON with its version; `log`: every
-action, bot move and dealt deck, for settling disputes; never sent to players). Deleting a game
+`deleted_games`, and `settings`, which keeps the APNs provider token across restarts, since APNs
+refuses tokens renewed more often than every 20 minutes) and one GameRoom per game (`state`: the
+game as JSON with its version, about 1 KB per round played, so far below the 2 MB value limit;
+`log`: every action, bot move, rename and dealt deck, for settling disputes; never sent to
+players). Deleting a game
 drops its room's storage. Schema changes are additive `CREATE TABLE IF NOT EXISTS` statements run
 when an object starts; a new Durable Object class needs a new `[[migrations]]` tag in wrangler.toml.
 
@@ -252,7 +272,8 @@ when an object starts; a new Durable Object class needs a new `[[migrations]]` t
 (idle sockets cost nothing), and little work per request (a move plus at most about one round of
 bot turns). Rate limits (wrangler.toml): 120 requests a minute per user, 300 per IP, 20 sign-ins
 per IP and 20 invite-code tries per user. Product limits (src/hub/service.ts): 20 clubs per user,
-50 members per club, 30 active games per player, 10 devices per user, 20 sessions per user.
+50 members per club, 30 active games per player (checked for everyone at a new table), 10 devices
+per user, 20 sessions per user, 4 live sockets per person per game.
 
 **Known gaps.** Sessions cannot be revoked one by one yet (they expire after 180 days); there is no
 account deletion endpoint yet (needed before an App Store release); APNs has only been exercised

@@ -9,12 +9,16 @@
 // WebSocket, and then each plays from their own view only (moves chosen with the engine, like a
 // person would) through a whole round until the next round is dealt. On the way it checks the
 // error paths (403 not your turn, 409 stale, 400 illegal with the engine's explanation, nudges),
-// the game lists, and that no view, HTTP or WebSocket, ever shows a card of another hand. Then
-// it deletes the game and leaves the club. Exit code 0 on success; prints a JSON report.
+// the game lists, and that no view, HTTP or WebSocket, ever shows a card of another hand. Then a
+// rename (a new version that reaches the other socket, and back), more sockets for A than one
+// person keeps (the oldest is replaced with close code 4001), a close without a code (answered at
+// once), and finally it deletes the game (sockets close with 4004) and leaves the club. Exit code
+// 0 on success; prints a JSON report.
 
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chooseBid, chooseBury, chooseFollow, chooseLead } from "../src/game/bots.ts";
+import { CLOSE_REPLACED, MAX_SOCKETS_PER_USER } from "../src/room/sockets.ts";
 import type { Declaration } from "../src/engine/round.ts";
 import type { SeatView } from "../src/engine/seatview.ts";
 import type { GameSummary } from "../src/game/summary.ts";
@@ -124,8 +128,13 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
   const signIn = async (label: string, name: string): Promise<Session> => {
     const body = expectStatus(await call("POST", "/v1/auth/dev", null, { secret: options.secret, name }), 200, `sign in ${name}`);
     const user = body.user as { id: string; displayName: string };
-    assert(typeof body.token === "string" && user.displayName === name, "sign-in reply is incomplete");
-    return { label, name, token: body.token as string, userId: user.id };
+    assert(typeof body.token === "string" && typeof user.id === "string", "sign-in reply is incomplete");
+    const token = body.token as string;
+    if (user.displayName !== name) {
+      // A run that stopped half way through the rename check left the other name behind.
+      expectStatus(await call("PATCH", "/v1/me", token, { displayName: name }), 200, `rename ${name} back`);
+    }
+    return { label, name, token, userId: user.id };
   };
   const a = await signIn("A", "Smoke A");
   const b = await signIn("B", "Smoke B");
@@ -372,11 +381,68 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
     );
     checks.push(`${viewsChecked} views checked: no other hand, no hidden kitty, cards add up`);
 
+    // A rename is a new version that reaches the other player's socket (the app keeps only newer
+    // versions); then the name goes back.
+    const waitForUpdate = async (label: string, test: (u: Table) => boolean, what: string): Promise<Table> => {
+      for (let wait = 0; wait < 150; wait++) {
+        const found = updates[label].find(test);
+        if (found !== undefined) return found;
+        await sleep(100);
+      }
+      throw new SmokeFailure(`${label} never got ${what}`);
+    };
+    const renamed = "Smoke B renamed";
+    expectStatus(await call("PATCH", "/v1/me", b.token, { displayName: renamed }), 200, "rename B");
+    const seen = await waitForUpdate(
+      "A",
+      (u) => u.version > finalVersion && u.view.players.some((p) => p.name === renamed),
+      "an update with B's new name",
+    );
+    checkView(seen.view, "WebSocket update after a rename");
+    expectStatus(await call("PATCH", "/v1/me", b.token, { displayName: b.name }), 200, "rename B back");
+    await waitForUpdate("A", (u) => u.version > seen.version && u.view.players.some((p) => p.name === b.name), "B's name back");
+    checks.push(`renames are new versions (${finalVersion} -> ${seen.version}) and reach the other player's socket`);
+
+    // A person keeps their newest few sockets: one more replaces A's oldest (close code 4001).
+    for (let extra = 0; extra < MAX_SOCKETS_PER_USER; extra++) {
+      const ws = new WebSocket(`${wsBase}/v1/games/${gameId}/live?token=${encodeURIComponent(a.token)}`);
+      sockets.push(ws);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new SmokeFailure(`extra socket ${extra + 1} got no update`)), 15_000);
+        ws.addEventListener("message", (event) => {
+          if (typeof event.data === "string" && event.data.includes('"type":"update"')) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+        ws.addEventListener("error", () => {
+          clearTimeout(timer);
+          reject(new SmokeFailure(`extra socket ${extra + 1} failed to connect`));
+        });
+      });
+    }
+    // A close without a code (the server sees 1005, which may not be sent back) is still answered
+    // at once and cleanly.
+    const quitter = sockets[sockets.length - 1];
+    const quit = await new Promise<{ code: number; clean: boolean } | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), 5_000);
+      quitter.addEventListener("close", (event) => {
+        clearTimeout(timer);
+        resolve({ code: event.code, clean: event.wasClean });
+      });
+      quitter.close();
+    });
+    assert(quit !== null && quit.clean, `a close without a code was not answered (${JSON.stringify(quit)})`);
+    checks.push(`a close without a code is answered at once (${quit.code})`);
+
     // Clean up: the creator deletes the game; sockets close; both leave the club.
     expectStatus(await call("DELETE", `/v1/games/${gameId}`, b.token), 403, "deleting someone else's game");
     expectStatus(await call("DELETE", `/v1/games/${gameId}`, a.token), 204, "delete game");
     expectStatus(await call("GET", `/v1/games/${gameId}`, a.token), 404, "GET deleted game");
-    for (let wait = 0; wait < 150 && (closes.A === null || closes.B === null); wait++) await sleep(100);
+    // Clients can see a server's close some seconds after it was sent (wrangler dev: about 10).
+    for (let wait = 0; wait < 250 && (closes.A === null || closes.B === null); wait++) await sleep(100);
+    assert(closes.A === CLOSE_REPLACED, `A's oldest socket should close with ${CLOSE_REPLACED} (got ${closes.A})`);
+    checks.push(`${MAX_SOCKETS_PER_USER + 1} sockets for one person: the oldest is replaced (${CLOSE_REPLACED})`);
     assert(closes.B === 4004, `B's socket should close with 4004 when the game is deleted (got ${closes.B})`);
     gameId = "";
     checks.push("game deleted by its creator (not by the other player); sockets closed with 4004");

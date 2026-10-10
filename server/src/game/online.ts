@@ -41,7 +41,7 @@ export interface OnlineGame {
   creatorSeat: number;
   game: GameState;
   round: Round;
-  /** Increases with every change (each action, bot turn and deal). */
+  /** Increases with every change (each action, bot turn, deal and rename of a player). */
   version: number;
   lastEvent: GameEvent | null;
   /** Unix ms of the last nudge (one per 10 minutes per game). */
@@ -59,7 +59,7 @@ export type SeatAction =
 export interface LogEntry {
   version: number;
   seat: number | null;
-  kind: "create" | "deal" | "action" | "bot";
+  kind: "create" | "deal" | "action" | "bot" | "rename";
   data: unknown;
 }
 
@@ -391,10 +391,15 @@ export function nudgeNotification(state: OnlineGame, fromSeat: number): Notifica
   return { userId: due, gameId: state.id, title: "Your turn", body: `${from} is waiting for you in ${state.clubName}.` };
 }
 
-/** Puts a new display name on the user's seat. Returns true if something changed. */
-export function renameSeat(state: OnlineGame, userId: string, name: string): boolean {
+/**
+ * Puts a new display name on the user's seat. Every view shows it, so it is a change like a move:
+ * the version grows (clients keep only newer versions). Returns the log entry, or null if nothing
+ * changed.
+ */
+export function renameSeat(state: OnlineGame, userId: string, name: string): LogEntry | null {
   const seat = seatOf(state, userId);
-  if (seat === null || state.seats[seat].name === name) return false;
+  if (seat === null || state.seats[seat].name === name) return null;
   state.seats[seat].name = name;
-  return true;
+  state.version += 1;
+  return { version: state.version, seat, kind: "rename", data: { name } };
 }

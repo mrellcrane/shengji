@@ -227,8 +227,12 @@ export class RoomService {
     if (due === userId) return fail(400, "cannot_nudge", "It's your turn.");
     const now = this.deps.now().getTime();
     if (state.lastNudgeAt !== null && now - state.lastNudgeAt < NUDGE_INTERVAL_MS) {
-      const minutes = Math.max(1, Math.ceil((NUDGE_INTERVAL_MS - (now - state.lastNudgeAt)) / 60000));
-      return fail(429, "too_soon", `They were reminded recently. You can nudge again in ${minutes} minute${minutes === 1 ? "" : "s"}.`);
+      const waitMs = NUDGE_INTERVAL_MS - (now - state.lastNudgeAt);
+      const minutes = Math.max(1, Math.ceil(waitMs / 60000));
+      return {
+        ...fail(429, "too_soon", `They were reminded recently. You can nudge again in ${minutes} minute${minutes === 1 ? "" : "s"}.`),
+        retryAfter: Math.ceil(waitMs / 1000),
+      };
     }
     const working = structuredClone(state);
     working.lastNudgeAt = now;
@@ -237,12 +241,19 @@ export class RoomService {
     return ok({ notifications: notification === null ? [] : [notification] });
   }
 
-  /** Deletes the game (creator only). The caller also clears the Durable Object's storage. */
-  remove(userId: string): Result<null> {
+  /** The game's id if `userId` may delete it (the creator), else why not. */
+  removable(userId: string): Result<string> {
     const state = this.load();
     if (state === null) return NOT_FOUND_GAME();
     if (seatOf(state, userId) === null) return NOT_SEATED();
     if (state.createdBy !== userId) return fail(403, "forbidden", "Only the person who started the game can delete it.");
+    return ok(state.id);
+  }
+
+  /** Deletes the game (creator only). The caller also clears the Durable Object's storage. */
+  remove(userId: string): Result<null> {
+    const allowed = this.removable(userId);
+    if (!allowed.ok) return allowed;
     this.sql.transaction(() => {
       this.sql.exec("DROP TABLE IF EXISTS state");
       this.sql.exec("DROP TABLE IF EXISTS log");
@@ -251,13 +262,14 @@ export class RoomService {
     return ok(null);
   }
 
-  /** A player's new display name (no version change: the game itself is the same). */
+  /** A player's new display name (a new version, since every view shows it). */
   rename(userId: string, name: string): Change | null {
     const state = this.load();
     if (state === null) return null;
     const working = structuredClone(state);
-    if (!renameSeat(working, userId, name)) return null;
-    this.save(working, []);
+    const entry = renameSeat(working, userId, name);
+    if (entry === null) return null;
+    this.save(working, [entry]);
     return { snapshot: snapshotOf(working), notifications: [] };
   }
 

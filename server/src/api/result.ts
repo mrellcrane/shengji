@@ -9,6 +9,8 @@ export interface Failure {
   message: string;
   /** Extra fields for the error body (e.g. the fresh game, view and version for "stale"). */
   details?: Record<string, unknown>;
+  /** For 429: seconds until trying again makes sense (the retry-after header; default 60). */
+  retryAfter?: number;
 }
 
 export type Result<T> = { ok: true; value: T } | Failure;

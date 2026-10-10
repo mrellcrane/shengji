@@ -127,6 +127,50 @@ test("APNs replies: gone or bad tokens mark the device dead; a rejected provider
   assert.ok(!failed.ok && failed.status === 0 && !failed.unregistered);
 });
 
+test("one provider token at a time: concurrent pushes share it, and a restarted Hub reuses the stored one", async () => {
+  // APNs refuses provider tokens renewed more often than every 20 minutes
+  // (TooManyProviderTokenUpdates), so neither a burst of pushes nor the Hub waking up again may
+  // sign a new one while the current one is good.
+  const key = await p8();
+  const { sent, fetchFn } = fakeApns(() => new Response(null, { status: 200 }));
+  const sql = memorySql();
+  let now = Date.UTC(2026, 9, 1, 12);
+  const clock = () => now;
+  const credentials = { keyP8: key.pem, keyId: "KEY1234567", teamId: "TEAM123456" };
+  const hubStore = () => new HubService(sql, { now: () => new Date(now) }).providerTokenStore();
+  const first = createApnsClient(credentials, { fetch: fetchFn, now: clock, store: hubStore() });
+  await Promise.all(Array.from({ length: 6 }, () => first.send(message())));
+  const tokens = new Set(sent.map((s) => s.headers.authorization));
+  assert.equal(tokens.size, 1, "six pushes at once use one provider token");
+  const token = sent[0].headers.authorization;
+
+  // The Hub restarts (a new client over the same storage) 30 minutes later: same token.
+  now += 30 * 60 * 1000;
+  const second = createApnsClient(credentials, { fetch: fetchFn, now: clock, store: hubStore() });
+  await second.send(message());
+  assert.equal(sent.at(-1)!.headers.authorization, token);
+
+  // Another key never reuses it.
+  const otherKey = createApnsClient({ ...credentials, keyId: "OTHER12345" }, { fetch: fetchFn, now: clock, store: hubStore() });
+  await otherKey.send(message());
+  assert.notEqual(sent.at(-1)!.headers.authorization, token);
+
+  // Past 50 minutes a restarted Hub signs a new one; after ExpiredProviderToken too.
+  now += 21 * 60 * 1000;
+  const third = createApnsClient(credentials, { fetch: fetchFn, now: clock, store: hubStore() });
+  await third.send(message());
+  const renewed = sent.at(-1)!.headers.authorization;
+  assert.notEqual(renewed, token);
+  const { sent: rejectedSent, fetchFn: rejecting } = fakeApns(() => Response.json({ reason: "ExpiredProviderToken" }, { status: 403 }));
+  const fourth = createApnsClient(credentials, { fetch: rejecting, now: clock, store: hubStore() });
+  await fourth.send(message());
+  assert.equal(rejectedSent[0].headers.authorization, renewed);
+  now += 1000;
+  const fifth = createApnsClient(credentials, { fetch: fetchFn, now: clock, store: hubStore() });
+  await fifth.send(message());
+  assert.notEqual(sent.at(-1)!.headers.authorization, renewed, "a rejected token is not reused after a restart");
+});
+
 test("the .p8 key is read from PEM (also with literal \\n from a pasted secret); push is off without all three secrets", async () => {
   const key = await p8();
   const pasted = key.pem.replace(/\n/g, "\\n");
