@@ -58,10 +58,13 @@ public enum QuestionVisual: Hashable, Sendable {
     case none
     /// A row of cards.
     case cards([Card])
-    /// A trick laid out around the table (plays in order; plays[0] is the lead).
+    /// A trick laid out around the table (plays in order; plays[0] is the lead). May be partial (1 to 4 plays).
     case trick([Play])
     /// The learner's hand plus the cards that were led (for "what may/should you play" questions).
     case handAndLead(hand: [Card], lead: [Card], leader: Int)
+    /// A trick in progress (1 to 3 plays, the human to play next) plus the learner's hand
+    /// (for strategy questions: "what should you play here?").
+    case situation(plays: [Play], hand: [Card])
 }
 
 /// A single retrieval-practice question with elaborative feedback.
