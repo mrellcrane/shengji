@@ -255,8 +255,10 @@ several players are in the app. Offline learning, practice and bot games stay as
   games index.
 - Rules parity: the Swift engine generates JSON test vectors (`ShengjiVectors` executable target, output in
   `server/test/vectors/`); the TypeScript engine must reproduce every one exactly (validity, violations and their
-  explanation text, trick winners, throws, scoring, game progression). Bots get the same parity check once ported.
-  CI regenerates the vectors and fails if they drift from the Swift engine.
+  explanation text, trick winners, throws, scoring, game progression). The bots have the same check: the server's
+  TypeScript port of the bots (`server/src/bots`, both levels, choices without the texts) must choose exactly the
+  cards the Swift bots choose at every decision of the generated rounds (`bots.json`), bidding included.
+  CI regenerates the vectors and fails if they drift from the Swift engine or bots.
 - Card wire format: `Card.id` (0...107 = face index + copy × 54). Seats 0...3 as offline; each player sees the
   table rotated so they are "You".
 - Declaring online is turn-based: all 25 cards are dealt at once, then from the first bidder (the dealer, or the

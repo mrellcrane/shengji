@@ -12,7 +12,9 @@ src/auth/       apple.ts (Sign in with Apple JWT verification, JWKS cache), cryp
 src/hub/        service.ts (users, identities, sessions, devices, clubs, games index over SQL), host.ts (RPC surface, push delivery)
 src/room/       service.ts (one game's state and action log over SQL), host.ts (publishes changes)
 src/game/       online.ts (the online game: turns, bots between humans, rounds, notifications),
-                summary.ts (GameSummary, lastEvent lines), bots.ts (placeholder bots)
+                summary.ts (GameSummary, lastEvent lines), bots.ts (bot actions from a view, safe fallback moves)
+src/bots/       the app's bots ported from Swift (ShengjiCore/Sources/ShengjiCore/Bots): table, builder, lead,
+                follow, beginner, burying, declaring, bot (the entry points)
 src/push/       apns.ts (ES256 provider token, APNs requests)
 src/durable/    hub.ts, room.ts (thin Durable Object adapters: RPC, WebSockets), sql.ts
 src/storage/    sql.ts (the one storage interface: synchronous SQLite)
@@ -70,11 +72,20 @@ every state a client can receive in many random games, for all four seats and ev
 (replies, WebSocket updates, summaries), and that shuffling a seat's hidden cards never changes
 what it receives.
 
-**Bots** (`src/game/bots.ts`) are a deterministic placeholder behind one narrow function,
-`chooseBotAction(round, seat, level)`, that reads only the bot's own hand and public facts:
-bid only a pair of trump-rank cards in the longest suit; bury the lowest non-trumps; lead an ace or
-a low card; follow with a legal play found among candidates checked by the engine (cheapest, or the
-cheapest winner when points are at stake). A port of the Swift bots replaces it later.
+**Bots** play exactly like the app's bots. `src/bots/` is a port of the Swift bots
+(`ShengjiCore/Sources/ShengjiCore/Bots`, DESIGN.md §Bot strategy), both levels, choices only (the
+learner-facing texts stay in the app), and test/bots.parity.test.ts proves it chooses the same cards
+at every decision of hundreds of rounds. Like the Swift bots they decide from a `SeatView` alone, the
+same view the server sends that seat: `declaration(view, available, level)` while bidding (with
+`view.bidding.available`), `decide(view, level)` for burying (the dealer) and for every lead and
+follow. They are deterministic: there is no randomness, and ties are broken as in Swift (stable sorts
+over the same orders). `src/game/bots.ts` fits them to the online game: `chooseBotAction(view,
+level)` turns a decision into an action in the client protocol's terms, and `safeActions(round,
+seat)` are plain legal moves from the rules alone (pass; bury the 8 lowest cards; lead the lowest
+card; the rules-built follow). After each move `runAutomatic` (online.ts) asks each bot due to act
+for its choice from its own view; should the engine ever refuse it, `applyBotTurn` makes the first
+safe move the engine accepts instead and logs both with `console.error` (kept by Workers
+observability), so a bot can never stall a game silently.
 
 ## The engine
 
@@ -147,9 +158,10 @@ change when the hidden cards are shuffled among the hidden places.
 cd ShengjiCore && swift run ShengjiVectors ../server/test/vectors
 ```
 
-Regenerate them whenever the Swift engine changes (CI fails with "Vectors in sync" otherwise),
-then make `npm test` pass again. `test/vectors.test.ts` replays every vector and prints the first
-differing paths of each mismatch. Field names match the TypeScript types.
+Regenerate them whenever the Swift engine or the Swift bots change (CI fails with "Vectors in sync"
+otherwise), then make `npm test` pass again. `test/vectors.test.ts` replays every engine vector and
+prints the first differing paths of each mismatch; `test/bots.parity.test.ts` replays bots.json.
+Field names match the TypeScript types.
 
 - `combos.json`: suit, rank (including `advanced(by:cap:)`), face, group and shape tables; for
   every trump context (13 ranks x 5 suit choices) the trump membership, group, strength and sort
@@ -185,12 +197,25 @@ differing paths of each mismatch. Field names match the TypeScript types.
   and short hand lists. 200 follows to leads of two or three tractors, with plays that hold only
   some of the required tractors (which length `mustPlayTractor` names). 200 tricks where a
   plain-suit lead, often a throw, is ruffed and over-ruffed.
+- `bots.json`: what the Swift bots choose, standard and beginner, at every decision of 300 whole
+  rounds (240 with the server's turn-based bidding, 60 declaring while the cards are dealt, as the
+  app does) and 400 more deals that stop once the kitty is buried. Each round has its deal (trump
+  rank, dealer, deck order), how trump is decided, who moves for each seat (a bot level, or a random
+  stand-in whose legal moves include failed throws) and one step per decision: the deciding seat,
+  both levels' cards (a declaration by its cards, none for a pass) and a random seat's move. A fifth
+  of the deals are pair-rich (tractors) and about one in seven put all four jokers in one hand, so
+  the steps hold throws, tractors, ruffs and over-ruffs, no-trump rounds, overrides and every seat
+  as the viewer. Only choices are stored (about 2 MB): the test rebuilds each round with the
+  TypeScript engine and each view with `toSeatView`, requires the same cards in the same order from
+  both levels (a mismatch names the round, step, seat and level, both choices and the situation),
+  checks the round's `RoundResult`, and asserts how many of each kind of decision the file covers.
 
 ## Testing
 
 `npm test` runs, in Node, without workerd:
 
-- the engine suites and the parity vectors (above), including views.json;
+- the engine suites and the parity vectors (above), including views.json, and bots.parity.test.ts
+  (the bots against bots.json);
 - auth.test.ts: Sign in with Apple tokens signed with a locally generated RSA key against a fake
   JWKS (issuer, audience, expiry, clock skew, tampering, `alg` games, key rotation, the JWKS cache),
   session tokens, constant-time comparison, ids and invite codes;
@@ -200,7 +225,9 @@ differing paths of each mismatch. Field names match the TypeScript types.
   real router, Hub and GameRooms over node:sqlite, with RPC-style cloning): sign-in, rate limits,
   body limits, validation, a whole round with bots, a game played to the end with pushes, stale
   versions, illegal moves with the engine's explanation, failed throws, nudges, renames, deletion;
-- privacy.test.ts (see above), bots.test.ts (150 all-bot rounds: every move legal, deterministic),
+- privacy.test.ts (see above), bots.test.ts (150 all-bot rounds decided from each seat's view:
+  every move legal, deterministic, no failed throws; the safe moves are legal; a refused choice
+  falls back to a safe move and is reported),
   seatview.test.ts (bidding views, summaries, event lines), push.test.ts (ES256 provider tokens
   signed with a generated P-256 key and verified, the 50-minute cache, one signing for a burst of
   pushes, the token kept across Hub restarts, APNs requests and replies with fetch mocked, device
@@ -278,4 +305,4 @@ per user, 20 sessions per user, 4 live sockets per person per game.
 **Known gaps.** Sessions cannot be revoked one by one yet (they expire after 180 days); there is no
 account deletion endpoint yet (needed before an App Store release); APNs has only been exercised
 with a mocked fetch until a key exists (APNs requires HTTP/2 from Workers' fetch; failed pushes are
-logged with APNs' reason); the bots are a simple placeholder until the Swift bots are ported.
+logged with APNs' reason).

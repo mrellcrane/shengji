@@ -5,18 +5,18 @@
 // creator's seat. Each accepted human action is followed by bot turns until a human must act.
 // When a round ends it is recorded and the next one is dealt at once (fresh crypto shuffle,
 // bidding at the next dealer); when a team wins, the game is finished and the last round stays
-// on the table.
+// on the table. Bots decide from their own seat's view with the app's bot logic (src/bots).
 
 import type { Card, Rank } from "../engine/cards.ts";
 import { newGame, recordRound, startOnlineRound } from "../engine/game.ts";
 import type { GameState } from "../engine/game.ts";
-import { bid, biddingTurn, bury, play, turn as playTurn } from "../engine/round.ts";
+import { bid, biddingTurn, bury, play, roundErrorExplanation, turn as playTurn } from "../engine/round.ts";
 import type { Declaration, PlayOutcome, Round, RoundError } from "../engine/round.ts";
 import { roundNumber, toSeatView, viewPhase } from "../engine/seatview.ts";
 import type { SeatPlayer, SeatView } from "../engine/seatview.ts";
 import { sortCards } from "../engine/trump.ts";
-import { chooseBotAction, chooseBury, chooseLead, followCandidates } from "./bots.ts";
-import type { BotAction, BotLevel } from "./bots.ts";
+import { chooseBotAction, safeActions } from "./bots.ts";
+import type { BotLevel } from "./bots.ts";
 import { eventText, summarize, teamName } from "./summary.ts";
 import type { GameEvent, GameSnapshot, GameSummary, SummaryPhase } from "./summary.ts";
 
@@ -191,19 +191,60 @@ function applySeatAction(
   }
 }
 
-/** A bot's choice, or a safe fallback if the choice is refused (it never should be). */
-function botFallbacks(round: Round, seat: number, choice: BotAction | null): SeatAction[] {
-  const options: SeatAction[] = [];
-  if (choice !== null) options.push(choice);
-  if (biddingTurn(round) === seat) options.push({ type: "pass" });
-  else if (round.phase === "burying") options.push({ type: "bury", cards: chooseBury(round.hands[seat], round.trump) });
-  else if (round.currentTrick.length === 0) options.push({ type: "play", cards: chooseLead(round.hands[seat], round.trump) });
-  else {
-    for (const cards of followCandidates(round.hands[seat], round.currentTrick[0].cards, round.trump)) {
-      options.push({ type: "play", cards });
-    }
+/**
+ * What the bot at absolute `seat` chooses, deciding from that seat's view (the one the server sends
+ * the seat) with the app's bot logic. The action in absolute terms, or null.
+ */
+export function botChoice(state: OnlineGame, seat: number, level: BotLevel): SeatAction | null {
+  const action = chooseBotAction(viewOf(state, seat), level);
+  if (action?.type !== "bid") return action;
+  return { type: "bid", declaration: { ...action.declaration, cards: action.declaration.cards.slice(), player: seat } };
+}
+
+/** Where `applyBotTurn` reports a refused bot move (Workers observability keeps console.error lines). */
+export type BotReport = (message: string) => void;
+
+const reportError: BotReport = (message) => console.error(message);
+
+function describeAction(action: SeatAction): string {
+  switch (action.type) {
+    case "bid":
+      return `a bid of cards ${action.declaration.cards.join(",")}`;
+    case "pass":
+      return "a pass";
+    case "bury":
+    case "play":
+      return `${action.type} ${action.cards.join(",")}`;
   }
-  return options;
+}
+
+/**
+ * Applies a bot's `choice` at absolute `seat`. Should the engine refuse it (it never should), or the
+ * bot have no move, the first of the rules-built `safeActions` that the engine accepts is made
+ * instead, and each such step is reported with `context`. Null when nothing could be applied.
+ */
+export function applyBotTurn(
+  round: Round,
+  seat: number,
+  choice: SeatAction | null,
+  context: string,
+  report: BotReport = reportError,
+): { action: SeatAction; event: GameEvent } | null {
+  if (choice !== null) {
+    const result = applySeatAction(round, seat, choice);
+    if (result.ok) return { action: choice, event: result.event };
+    report(`${context}: the bot at seat ${seat} chose ${describeAction(choice)}, which was refused: ${roundErrorExplanation(result.error)}`);
+  } else {
+    report(`${context}: the bot at seat ${seat} had no move in phase ${round.phase}`);
+  }
+  for (const action of safeActions(round, seat)) {
+    const result = applySeatAction(round, seat, action);
+    if (!result.ok) continue;
+    report(`${context}: made the safe move ${describeAction(action)} for seat ${seat} instead`);
+    return { action, event: result.event };
+  }
+  report(`${context}: no safe move was accepted for seat ${seat}; the game waits`);
+  return null;
 }
 
 /**
@@ -239,17 +280,11 @@ function runAutomatic(state: OnlineGame, deps: GameDeps, events: GameEvent[], lo
     if (seat === null) break;
     const assignment = state.seats[seat];
     if (assignment.userId !== null) break;
-    let applied = false;
-    for (const action of botFallbacks(round, seat, chooseBotAction(round, seat, assignment.bot ?? "standard"))) {
-      const result = applySeatAction(round, seat, action);
-      if (!result.ok) continue;
-      state.version += 1;
-      log.push({ version: state.version, seat, kind: "bot", data: action });
-      events.push(result.event);
-      applied = true;
-      break;
-    }
-    if (!applied) break;
+    const applied = applyBotTurn(round, seat, botChoice(state, seat, assignment.bot ?? "standard"), `game ${state.id}`);
+    if (applied === null) break;
+    state.version += 1;
+    log.push({ version: state.version, seat, kind: "bot", data: applied.action });
+    events.push(applied.event);
   }
 }
 

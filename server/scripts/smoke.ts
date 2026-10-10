@@ -6,8 +6,8 @@
 //
 // Two dev-auth users ("Smoke A", "Smoke B") make a club (B joins with the invite code typed in
 // lower case without the dash), A starts a game with B and two bots, both open the live
-// WebSocket, and then each plays from their own view only (moves chosen with the engine, like a
-// person would) through a whole round until the next round is dealt. On the way it checks the
+// WebSocket, and then each plays from their own view only (moves chosen by the bot logic from the
+// view, like a person would) through a whole round until the next round is dealt. On the way it checks the
 // error paths (403 not your turn, 409 stale, 400 illegal with the engine's explanation, nudges),
 // the game lists, and that no view, HTTP or WebSocket, ever shows a card of another hand. Then a
 // rename (a new version that reaches the other socket, and back), more sockets for A than one
@@ -17,7 +17,7 @@
 
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chooseBid, chooseBury, chooseFollow, chooseLead } from "../src/game/bots.ts";
+import { chooseBotAction } from "../src/game/bots.ts";
 import { CLOSE_REPLACED, MAX_SOCKETS_PER_USER } from "../src/room/sockets.ts";
 import type { Declaration } from "../src/engine/round.ts";
 import type { SeatView } from "../src/engine/seatview.ts";
@@ -241,19 +241,19 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
     const max = options.maxActions ?? 400;
 
     const chooseAction = (view: SeatView): Record<string, unknown> => {
+      const action = chooseBotAction(view, "standard");
+      if (action === null) throw new SmokeFailure(`no move from a view in phase ${view.phase} on our turn`);
       if (view.bidding !== null && view.bidding !== undefined) {
+        // Bid at least once (the first offer if the bot would pass), so the bid path is exercised.
         const offered = view.bidding.available;
-        let choice: Declaration | null = chooseBid(offered, view.hand);
+        let choice: Declaration | null = action.type === "bid" ? action.declaration : null;
         if (choice === null && !bidOnce && offered.length > 0) choice = offered[0];
         if (choice !== null) {
           bidOnce = true;
           return { type: "bid", declaration: choice };
         }
-        return { type: "pass" };
       }
-      if (view.phase === "burying") return { type: "bury", cards: chooseBury(view.hand, view.trump) };
-      if (view.currentTrick.length === 0) return { type: "play", cards: chooseLead(view.hand, view.trump) };
-      return { type: "play", cards: chooseFollow({ hand: view.hand, trump: view.trump, currentTrick: view.currentTrick, seat: 0 }) };
+      return action;
     };
 
     let roundsCompleted = 0;

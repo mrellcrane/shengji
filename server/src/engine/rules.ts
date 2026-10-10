@@ -313,7 +313,7 @@ function throwCheck(cards: readonly Card[], opponents: readonly Opponent[], trum
 }
 
 /** True if `cards` hold a component of the same shape and group as `component` with a higher top. */
-function canBeat(component: Component, cards: readonly Card[], trump: Trump): boolean {
+export function canBeat(component: Component, cards: readonly Card[], trump: Trump): boolean {
   const own = cardsInGroup(cards, component.group, trump);
   switch (component.shape.type) {
     case "single":
@@ -498,7 +498,7 @@ export function containsDisjointTractors(cards: readonly Card[], lengths: readon
  * longest first) out of `cards`. `visit` receives the leftover cards and the chosen tractors;
  * returning true stops the search. Returns true if a visit stopped it.
  */
-function searchTractors(
+export function searchTractors(
   cards: readonly Card[],
   lengths: readonly number[],
   index: number,
@@ -525,7 +525,7 @@ function searchTractors(
 // MARK: Winning
 
 /** The shapes making up a lead, computed once per trick. */
-interface LeadFormat {
+export interface LeadFormat {
   cardCount: number;
   /** The lead's largest component (the key component). */
   largest: Component | null;
@@ -535,7 +535,7 @@ interface LeadFormat {
   pairs: number;
 }
 
-function leadFormat(lead: readonly Card[], trump: Trump): LeadFormat {
+export function leadFormat(lead: readonly Card[], trump: Trump): LeadFormat {
   const components = decompose(lead, trump);
   const lengths: number[] = [];
   let pairs = 0;
@@ -551,7 +551,7 @@ function leadFormat(lead: readonly Card[], trump: Trump): LeadFormat {
   };
 }
 
-function structureKeyForFormat(cards: readonly Card[], format: LeadFormat, trump: Trump): number | null {
+export function structureKeyForFormat(cards: readonly Card[], format: LeadFormat, trump: Trump): number | null {
   const largest = format.largest;
   if (cards.length === 0 || cards.length !== format.cardCount || largest === null) return null;
   if (groupOfCards(cards, trump) === null) return null;

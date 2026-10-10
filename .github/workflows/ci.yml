@@ -65,8 +65,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The TypeScript engine is only proven identical to the Swift engine if the committed
-      # vectors are exactly what the Swift engine generates today.
+      # The TypeScript engine and bots are only proven identical to the Swift ones if the
+      # committed vectors are exactly what the Swift engine and bots generate today.
       - name: Regenerate the vectors and compare
         run: |
           out="$(mktemp -d)"
@@ -74,7 +74,7 @@ jobs:
           if ! diff -r -q "$out" server/test/vectors; then
             echo "First differences:"
             diff -r "$out" server/test/vectors | cut -c 1-400 | head -n 40 || true
-            echo "::error::server/test/vectors is out of date with the Swift engine. Regenerate with: cd ShengjiCore && swift run ShengjiVectors ../server/test/vectors"
+            echo "::error::server/test/vectors is out of date with the Swift engine or bots. Regenerate with: cd ShengjiCore && swift run ShengjiVectors ../server/test/vectors"
             exit 1
           fi
           echo "server/test/vectors matches the Swift engine."
