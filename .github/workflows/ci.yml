@@ -170,6 +170,17 @@ jobs:
             xcrun simctl launch --terminate-running-process "$SIM_UDID" "$BUNDLE_ID" -ScreenshotScene "$scene" || true
             sleep 6
             xcrun simctl io "$SIM_UDID" screenshot "screenshots/$scene.png" || true
+            # Diagnostics: a stack sample of the running app (shows where it is stuck if the screen
+            # never rendered) and the app's recent log lines.
+            mkdir -p screenshots/diagnostics
+            pid=$(pgrep -f "Shengji.app/Shengji" | head -1 || true)
+            if [ -n "$pid" ]; then
+              sample "$pid" 1 -mayDie -file "screenshots/diagnostics/$scene-sample.txt" >/dev/null 2>&1 || true
+            else
+              echo "not running" > "screenshots/diagnostics/$scene-sample.txt"
+            fi
+            xcrun simctl spawn "$SIM_UDID" log show --last 20s --style compact \
+              --predicate 'process == "Shengji"' > "screenshots/diagnostics/$scene-log.txt" 2>&1 || true
           done
           ls -la screenshots
 
