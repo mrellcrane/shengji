@@ -3,12 +3,27 @@ import ShengjiCore
 
 /// Learner-facing names for scheduler items ("skill.*" and "fact.*").
 enum ItemNames {
-    /// A skill's title, or a fact's prompt shortened to fit one line.
+    /// A skill's title, or a fact's name: one from `factNames`, or else its prompt shortened to fit one line.
     static func title(for itemID: String) -> String {
         if let skill = SkillID(itemID: itemID) { return skill.title }
+        if let name = factNames[itemID] { return name }
         if let fact = Curriculum.fact(id: itemID) { return shortened(fact.prompt) }
         return itemID
     }
+
+    /// Names for facts whose shortened prompt would lose what the question is about
+    /// (several would just be "What must you play?" or "Who wins?").
+    private static let factNames: [String: String] = [
+        "fact.skipRank": "Trump rank 8: which spade ranks just below the 9♠?",
+        "fact.mustFollow": "Spades are led and you hold one. What must you play?",
+        "fact.firstTieWins": "Identical cards top the trick. Who wins?",
+        "fact.mustPlayPair": "A pair is led and you have a pair. What must you play?",
+        "fact.followTractor": "A tractor is led and you have a pair. What must you include?",
+        "fact.sameShapeToWin": "A pair is led. Can two unpaired trumps win?",
+        "fact.reinforceOnly": "You declared one 2♥, then got the other. What can you do?",
+        "fact.feedPartner": "Your partner is sure to win this trick. What should you play?",
+        "fact.partnerVoid": "Your partner is void in clubs. What should you lead?",
+    ]
 
     /// Shortens a long prompt to its last sentence (usually the question itself),
     /// or else to `maxLength` characters ending with an ellipsis.

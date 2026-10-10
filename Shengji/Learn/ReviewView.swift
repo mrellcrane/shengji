@@ -90,7 +90,9 @@ private struct ReviewContent: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                LearnPrimaryButton(title: "Start review (\(due))", systemImage: "play.fill") {
+                // One session asks at most `defaultMaxItems` of them; the rest wait for the next round.
+                LearnPrimaryButton(title: "Start review (\(min(due, PracticeSession.defaultMaxItems)))",
+                                   systemImage: "play.fill") {
                     onStart(.review)
                 }
             }
@@ -140,7 +142,9 @@ private struct ReviewContent: View {
         guard let next = store.progress.nextDueDate(after: now) else {
             return "Nothing is scheduled. Pass another lesson to add new skills."
         }
-        return "Your next review is due \(TimePhrase.until(next, from: now))."
+        // Nothing is due at `now` here, so never "due now" under "All caught up" (`now` ticks once a minute).
+        let soon = next.timeIntervalSince(now) <= 30
+        return "Your next review is due \(soon ? "in about a minute" : TimePhrase.until(next, from: now))."
     }
 
     private var emptyState: some View {
