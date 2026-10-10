@@ -27,8 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -46,8 +46,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -99,9 +99,14 @@ jobs:
             sleep 5
           done
           case "$health" in *'"keyConfigured":true'*) ;; *) echo "::error::Worker never reported the key as configured"; exit 1;; esac
-          reply=$(curl -sN --max-time 60 -X POST "$URL/coach" -H 'content-type: application/json' \
-            -d '{"deviceId":"github-smoke-test","turns":[{"role":"user","text":"In one short sentence: what is a tractor in Shengji?"}]}')
-          echo "$reply"
+          # A just-deployed version can take a few seconds to settle everywhere, so retry a few times.
+          for i in $(seq 1 5); do
+            reply=$(curl -sN --max-time 60 -X POST "$URL/coach" -H 'content-type: application/json' \
+              -d '{"deviceId":"github-smoke-test","turns":[{"role":"user","text":"In one short sentence: what is a tractor in Shengji?"}]}' || true)
+            echo "attempt $i: $reply"
+            if printf '%s' "$reply" | grep -q '"type":"done"'; then break; fi
+            sleep 10
+          done
           if ! printf '%s' "$reply" | grep -q '"type":"done"'; then
             echo "::error::The coach did not answer. See the reply above (an error event names the cause)."
             exit 1
