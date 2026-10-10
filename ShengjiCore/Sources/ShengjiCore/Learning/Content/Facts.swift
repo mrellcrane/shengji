@@ -51,7 +51,7 @@ extension Curriculum {
              choices: ["108: two decks with jokers", "54: one deck with jokers",
                        "104: two decks without jokers", "52: one deck"],
              correctChoice: 0,
-             explanation: "Four players use **two** full decks with all four jokers: 108 cards. Every card appears twice, which is what makes pairs possible. Bigger groups add decks, about half a deck per player: 6 players use 3."),
+             explanation: "Four players use **two** full decks with all four jokers: 108 cards. Every card appears twice, which is what makes pairs possible. Bigger groups add decks, at least half a deck per player: 6 players use 3 or more."),
         Fact(id: "fact.totalPoints", lessonID: "lesson.2",
              prompt: "In a 2-deck game, how many points are in all the cards together?",
              choices: ["200", "100", "120", "240"],
