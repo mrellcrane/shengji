@@ -11,7 +11,7 @@ import { chooseBid, chooseBury, chooseFollow, chooseLead } from "../src/game/bot
 import type { GameSummary } from "../src/game/summary.ts";
 import { checkSeatView } from "../scripts/viewcheck.ts";
 import { buildDeck } from "./support.ts";
-import { makeCloud } from "./cloud.ts";
+import { HUB_RESET_ERROR, makeCloud } from "./cloud.ts";
 import type { Cloud } from "./cloud.ts";
 
 type Player = { token: string; id: string; name: string };
@@ -467,6 +467,46 @@ test("an accepted move is answered and pushed even when the games index can't be
   const listed = (await cloud.call("GET", "/v1/games", { token: mei.token })).body.games as GameSummary[];
   const current = await read(cloud, mei, gameId);
   assert.deepEqual(listed, [current.game]);
+});
+
+test("a Hub that was reset is reached again at once: a room never keeps a broken Hub stub", async () => {
+  // workerd breaks a stub for good once the object behind it is reset (checked in wrangler dev):
+  // every later call on it fails the same way. A room that kept one Hub stub retried on it in
+  // vain, and until the room was evicted no move reached the game lists and every delete was 500.
+  const cloud = makeCloud({ seed: 16 });
+  const [mei, lin] = [await cloud.signIn("Mei"), await cloud.signIn("Lin")];
+  const clubId = await clubOf(cloud, mei, [lin]);
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, { userId: lin.id }, { bot: "standard" }, { bot: "standard" }]);
+  const listed = async (player: Player) => (await cloud.call("GET", "/v1/games", { token: player.token })).body.games as GameSummary[];
+
+  // The Hub is reset while it handles the index update of Mei's move: the retry gets through.
+  const original = cloud.hub.gameChanged.bind(cloud.hub);
+  let calls = 0;
+  cloud.hub.gameChanged = async (snapshot) => {
+    calls++;
+    if (calls === 1) {
+      cloud.resetHub();
+      throw new Error(HUB_RESET_ERROR);
+    }
+    return original(snapshot);
+  };
+  const t = await read(cloud, mei, gameId);
+  const moved = await cloud.call("POST", `/v1/games/${gameId}/actions`, { token: mei.token, body: { version: t.version, action: { type: "pass" } } });
+  assert.equal(moved.status, 200);
+  assert.equal(calls, 2);
+  assert.deepEqual(await listed(lin), [(await read(cloud, lin, gameId)).game], "Lin's list shows it is her turn");
+  assert.ok(!cloud.logs.some((line) => line.includes("games index")), cloud.logs.join("\n"));
+
+  // Reset again between requests: the next move and the delete reach the new Hub.
+  cloud.resetHub();
+  const linTable = await read(cloud, lin, gameId);
+  const next = await cloud.call("POST", `/v1/games/${gameId}/actions`, { token: lin.token, body: { version: linTable.version, action: { type: "pass" } } });
+  assert.equal(next.status, 200);
+  assert.deepEqual(await listed(mei), [(await read(cloud, mei, gameId)).game]);
+  cloud.resetHub();
+  assert.equal((await cloud.call("DELETE", `/v1/games/${gameId}`, { token: mei.token })).status, 204);
+  assert.deepEqual(await listed(lin), []);
+  assert.ok(!cloud.logs.some((line) => line.includes("games index")), cloud.logs.join("\n"));
 });
 
 test("deleting a game while the Hub can't be reached leaves no ghost in anyone's list", async () => {

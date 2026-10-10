@@ -57,7 +57,10 @@ current), and returns the pushes, which the Worker sends with `ctx.waitUntil` so
 waits for APNs. The move is saved before the index is updated, so if the Hub cannot be reached
 (tried twice) the move is still answered and pushed, the failure is logged, and the next change
 brings the index up to date. Deleting goes the other way round (the Hub first), so a failure
-leaves the game whole instead of a ghost in every list. A rename is a new version too (clients
+leaves the game whole instead of a ghost in every list. A room makes a new Hub stub for every
+call (`roomHub` in src/room/host.ts): workerd breaks a stub for good once the Hub behind it is
+reset, and a kept one would cut the room off from the Hub until the room was evicted (no index
+updates, every delete a 500). A rename is a new version too (clients
 keep only newer versions). Each person keeps at most 4 live sockets per game (src/room/sockets.ts):
 a fifth replaces their oldest (close code 4001), so sockets a phone left behind never fill a game.
 

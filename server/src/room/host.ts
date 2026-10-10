@@ -5,12 +5,14 @@
 //
 // A change is saved before it is published, so a Hub that cannot be reached must not turn an
 // accepted move into an error (the player would see a failure for a move that was made, and the
-// next player's push would be lost): the index update is tried twice and then logged, and the
-// next change brings the index up to date. Deleting is the other way round: the Hub first, so a
-// failure leaves the game whole (and trying again works) rather than a ghost in every list.
+// next player's push would be lost): the index update is tried twice (each time with a new Hub
+// stub, see roomHub) and then logged, and the next change brings the index up to date. Deleting
+// is the other way round: the Hub first, so a failure leaves the game whole (and trying again
+// works) rather than a ghost in every list.
 
 import { NOT_FOUND_GAME, NOT_SEATED, ok } from "../api/result.ts";
 import type { Result } from "../api/result.ts";
+import type { HubApi } from "../hub/host.ts";
 import type { Notification } from "../game/online.ts";
 import type { GameSnapshot, GameSummary } from "../game/summary.ts";
 import type { ActionRequest, ActResponse, Change, CreateRoomInput, GameResponse, RoomService } from "./service.ts";
@@ -38,6 +40,31 @@ export interface RoomSurroundings {
   /** Closes every connected socket (the game was deleted). */
   closeAll(): void;
   log(message: string): void;
+}
+
+/** What a GameRoom calls on the Hub. */
+export type RoomHub = Pick<HubApi, "gameChanged" | "gameDeleted" | "notify">;
+
+/** The parts of the HUB binding (a Durable Object namespace) a GameRoom uses. */
+export interface HubBinding<Id> {
+  idFromName(name: string): Id;
+  get(id: Id): unknown;
+}
+
+/**
+ * The Hub as a GameRoom calls it: a new stub for every call. workerd breaks a stub for good once
+ * the object behind it is reset (new code, a limit exceeded, an abort): every later call on that
+ * stub fails the same way, and only a new stub reaches the Hub again. A stub kept for the room's
+ * lifetime would fail every later index update (the retry too), every delete and every push from
+ * that room until the room itself was evicted.
+ */
+export function roomHub<Id>(binding: HubBinding<Id>): RoomHub {
+  const stub = () => binding.get(binding.idFromName("hub")) as RoomHub;
+  return {
+    gameChanged: (snapshot) => stub().gameChanged(snapshot),
+    gameDeleted: (gameId) => stub().gameDeleted(gameId),
+    notify: (notifications) => stub().notify(notifications),
+  };
 }
 
 const INDEX_ATTEMPTS = 2;

@@ -3,9 +3,8 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { shuffledDeck } from "../engine/shuffle.ts";
-import type { HubApi } from "../hub/host.ts";
-import { RoomHost } from "../room/host.ts";
-import type { RoomApi } from "../room/host.ts";
+import { RoomHost, roomHub } from "../room/host.ts";
+import type { RoomApi, RoomHub } from "../room/host.ts";
 import { RoomService } from "../room/service.ts";
 import type { ActionRequest, CreateRoomInput } from "../room/service.ts";
 import { CLOSE_REPLACED, closeReplyCode, socketsToReplace } from "../room/sockets.ts";
@@ -27,12 +26,13 @@ interface Attachment {
 export class GameRoom extends DurableObject<WorkerEnv> implements RoomApi {
   private readonly service: RoomService;
   private readonly host: RoomHost;
-  private readonly hub: HubApi;
+  private readonly hub: RoomHub;
 
   constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
     this.service = new RoomService(durableSql(ctx.storage), { deck: () => shuffledDeck(), now: () => new Date() });
-    this.hub = env.HUB.get(env.HUB.idFromName("hub")) as unknown as HubApi;
+    // A new Hub stub for every call: a Hub that was reset breaks the stubs made before (roomHub).
+    this.hub = roomHub(env.HUB);
     this.host = new RoomHost(this.service, {
       hub: this.hub,
       broadcast: () => this.broadcast(),
