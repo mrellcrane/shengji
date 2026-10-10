@@ -124,7 +124,7 @@ private struct AchievementCell: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .foregroundStyle(.primary)
-            ProgressView(value: min(max(progress.fractionToNextTier(for: definition), 0), 1))
+            ProgressView(value: progress.fractionOfNextThreshold(for: definition))
                 .tint(AchievementStyle.color(for: nextTier))
             Text(AchievementStyle.progressText(count: count, next: next))
                 .font(.caption.monospacedDigit())
@@ -235,7 +235,7 @@ private struct AchievementDetailHeader: View {
                 Text(tier == .none ? "Not earned yet" : "\(tier.title) badge")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(tier == .none ? Color.secondary : AchievementStyle.color(for: tier))
-                ProgressView(value: min(max(progress.fractionToNextTier(for: definition), 0), 1))
+                ProgressView(value: progress.fractionOfNextThreshold(for: definition))
                     .tint(Theme.gold)
                 Text(AchievementStyle.progressText(count: progress.count(for: definition),
                                                    next: progress.nextThreshold(for: definition)))

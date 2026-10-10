@@ -152,7 +152,13 @@ final class GameController: Identifiable {
             banner = GameCoachMessage(GameCoachText.dealingIntro(round: round, game: game, coach: coachLevel),
                                       concept: "Declaring")
         case .declareWindow:
-            openDeclareWindow(messages: [])
+            if let declaration = round.declaration, declaration.player == Seats.human, !isBot(Seats.human) {
+                // Saved just after you declared (the stage isn't saved): the bots still get their answer.
+                stage = .botsRespond
+                banner = GameCoachMessage(GameCoachText.declarationLine(declaration), concept: "Declaring", kind: .success)
+            } else {
+                openDeclareWindow(messages: [])
+            }
         case .burying:
             if let dealer = round.dealer, !isBot(dealer) {
                 newKittyCardIDs = Set(round.kitty.map(\.id))

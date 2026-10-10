@@ -177,6 +177,33 @@ final class AchievementsTests: XCTestCase {
         XCTAssertEqual(progress.count(for: ruff), 36)
     }
 
+    /// The bar beside "1 / 5" shows 1 of 5, not progress since the last tier (an empty bar at "1 / 5").
+    func testBarMatchesTheCountOverTheNextThreshold() throws {
+        var progress = AchievementProgress()
+        let ruff = try definition("move.ruff")
+        XCTAssertEqual(progress.fractionOfNextThreshold(for: ruff), 0)
+        _ = progress.record([event(.ruff)], now: now)
+        XCTAssertEqual(progress.count(for: ruff), 1)
+        XCTAssertEqual(progress.nextThreshold(for: ruff), 5)
+        XCTAssertEqual(progress.fractionOfNextThreshold(for: ruff), 0.2, accuracy: 1e-9, "1 / 5")
+        _ = progress.record(Array(repeating: event(.ruff), count: 5), now: now)
+        XCTAssertEqual(progress.nextThreshold(for: ruff), 25)
+        XCTAssertEqual(progress.fractionOfNextThreshold(for: ruff), 6.0 / 25.0, accuracy: 1e-9, "6 / 25")
+        _ = progress.record(Array(repeating: event(.ruff), count: 30), now: now)
+        XCTAssertNil(progress.nextThreshold(for: ruff))
+        XCTAssertEqual(progress.fractionOfNextThreshold(for: ruff), 1, "gold")
+    }
+
+    /// Short games (to 5 or 10) count as won games too, so the badge can't say only A wins.
+    func testGameWinnerTextFitsShortGames() throws {
+        let wins = try definition("journey.gamesWon")
+        for text in [wins.goal, wins.lesson] {
+            XCTAssertFalse(text.contains("at level A"), text)
+            XCTAssertFalse(text.hasPrefix("Reaching A is not enough"), text)
+        }
+        XCTAssertTrue(wins.lesson.contains("5 or 10"), wins.lesson)
+    }
+
     func testOneRecordCanReachSeveralTiersInOrder() throws {
         var progress = AchievementProgress()
         let events = Array(repeating: event(.bigTrick), count: 6) + [event(.ruff), event(.cleanThrow), event(.cleanThrow), event(.cleanThrow)]

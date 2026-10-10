@@ -181,6 +181,12 @@ public struct AchievementProgress: Codable, Hashable, Sendable {
         return min(1, max(0, fraction))
     }
 
+    /// 0...1 share of the next threshold (count / next, 1 when gold): the bar beside "count / next".
+    public func fractionOfNextThreshold(for definition: AchievementDefinition) -> Double {
+        guard let next = nextThreshold(for: definition), next > 0 else { return 1 }
+        return min(1, max(0, Double(count(for: definition)) / Double(next)))
+    }
+
     /// Earned tiers across all achievements / total possible tiers, 0...1 (for an overall progress bar).
     public var overallFraction: Double {
         var earned = 0
@@ -416,8 +422,8 @@ public enum Achievements {
         AchievementDefinition(
             id: gamesWonID, title: "Game winner", category: .journey, source: .gamesWon,
             thresholds: [1, 3, 10],
-            goal: "Win a whole game: hold the deal at level A.",
-            lesson: "Reaching A is not enough: you win the game by holding the deal as declarers while at A.",
+            goal: "Win a whole game: hold the deal at the game's top level (A in a full game).",
+            lesson: "Reaching the top level is not enough: you win the game by holding the deal as declarers while there. That's A in a full game, or 5 or 10 in a shorter one.",
             exampleCards: [Card(.ace, .spades), Card(.ace, .hearts), Card(.ace, .clubs), Card(.ace, .diamonds)],
             exampleTrump: nil, symbol: "trophy.fill"),
         AchievementDefinition(

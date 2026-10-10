@@ -289,19 +289,21 @@ enum GameCoachText {
                     && Combos.group(of: $0.cards, trump: trump) == .trump
             }
             if otherRuffs.isEmpty {
-                return ("\(subject(winnerSeat, "ruff", "ruffs")) with \(what), a trump.", "Ruff")
+                let trumpWord = win.cards.count == 1 ? "a trump" : win.cards.count == 2 ? "both trumps" : "all trumps"
+                return ("\(subject(winnerSeat, "ruff", "ruffs")) with \(what), \(trumpWord).", "Ruff")
             }
             return ("\(subject(winnerSeat, "ruff", "ruffs")) with \(what), the highest trump played.", "Overruff")
         }
 
-        // Tie: a later play of the same shape and strength loses to the earlier one.
-        let winTop = topStrength(win.cards, trump: trump)
+        // Tie: a later play of the same shape and strength loses to the earlier one. Plays are compared
+        // on their biggest part, as the engine does (a throw's pair decides it, not its top single).
+        let winKey = keyStrength(win.cards, trump: trump)
         let winShape = shapes(win.cards, trump: trump)
         if let tied = trick.plays.first(where: { p in
             p.player != win.player
                 && Combos.group(of: p.cards, trump: trump) == winGroup
                 && shapes(p.cards, trump: trump) == winShape
-                && topStrength(p.cards, trump: trump) == winTop
+                && keyStrength(p.cards, trump: trump) == winKey
         }) {
             let tiedName = tied.player == Seats.human ? "You" : name(tied.player)
             return ("\(subject(winnerSeat, "win", "wins")) with \(what). \(tiedName) played an equal card, "
@@ -345,6 +347,11 @@ enum GameCoachText {
 
     static func topStrength(_ cards: [Card], trump: Trump) -> Int {
         cards.map { trump.strength($0) }.max() ?? -1
+    }
+
+    /// Strength of the top card in the play's biggest part (its highest tractor, pair or single).
+    static func keyStrength(_ cards: [Card], trump: Trump) -> Int {
+        Combos.decompose(cards, trump: trump).first?.topStrength ?? -1
     }
 
     /// Multiset of component shapes, largest first, e.g. [pair, single].
