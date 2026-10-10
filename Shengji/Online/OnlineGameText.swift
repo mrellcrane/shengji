@@ -214,6 +214,42 @@ enum OnlineGameText {
         return "\(teamName(1 - declarers, players: players)) take over the deal"
     }
 
+    /// How the round's points turned into levels, with your friends' names. The server's
+    /// `summary.explanation` comes from the shared engine text, which calls the other team
+    /// "East and West" and the seats by direction. (Who deals next is `nextDealerLine`.)
+    static func roundExplanation(_ summary: RoundSummary, players: [SeatView.Player], target: Rank) -> String {
+        let result = summary.result
+        let points = result.defenderPoints
+        let kittyBonus = result.kittyPoints * result.kittyMultiplier
+        let scored = kittyBonus > 0
+            ? "The defenders scored \(points) points (including \(kittyBonus) from the kitty)"
+            : "The defenders scored \(points) points"
+        var sentences: [String] = []
+        if result.outcome.declarersHold {
+            sentences.append("\(scored), short of \(Scoring.takeoverThreshold), so the declarers keep the deal.")
+        } else {
+            sentences.append("\(scored), reaching \(Scoring.takeoverThreshold), so they take over the deal.")
+        }
+        if let winner = summary.gameWinner {
+            let ending = winner == 0 ? "so you win the game!" : "so they win the game."
+            sentences.append("\(teamName(winner, players: players)) held the deal at level \(target.label), \(ending)")
+            return sentences.joined(separator: " ")
+        }
+        let team = result.outcome.declarersHold ? result.declarerTeam : 1 - result.declarerTeam
+        let newLevel = summary.levelsAfter.indices.contains(team) ? summary.levelsAfter[team].label : target.label
+        let gained = summary.levelsGained
+        if result.outcome.levels == 0 {
+            sentences.append("Nobody goes up a level this time.")
+        } else if gained == 0 {
+            sentences.append("\(teamName(team, players: players)) stay at level \(newLevel), the top level.")
+        } else {
+            let phrase = gained == 1 ? "1 level" : "\(gained) levels"
+            let capNote = gained < result.outcome.levels ? " (levels stop at \(target.label))" : ""
+            sentences.append("\(teamName(team, players: players)) go up \(phrase), to \(newLevel)\(capNote).")
+        }
+        return sentences.joined(separator: " ")
+    }
+
     /// "Mei deals next."
     static func nextDealerLine(_ summary: RoundSummary, players: [SeatView.Player]) -> String {
         "\(subject(summary.nextDealer, players: players, "deal", "deals")) next."

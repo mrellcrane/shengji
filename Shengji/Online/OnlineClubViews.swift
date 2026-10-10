@@ -293,6 +293,8 @@ struct OnlineDisplayNameSheet: View {
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
                         .onSubmit(save)
+                } header: {
+                    if session.needsDisplayName { Text("What should friends call you?") }
                 } footer: {
                     Text("This is how your friends see you in clubs and at the table. You can change it any time.")
                 }
@@ -300,7 +302,8 @@ struct OnlineDisplayNameSheet: View {
                     Section { Text(message).foregroundStyle(Theme.wrong) }
                 }
             }
-            .navigationTitle(session.needsDisplayName ? "What should friends call you?" : "Your name")
+            // Short titles: an inline title longer than about 20 characters is cut off on a 375 pt phone.
+            .navigationTitle(session.needsDisplayName ? "Choose your name" : "Your name")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

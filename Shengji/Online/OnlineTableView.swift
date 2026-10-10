@@ -49,7 +49,13 @@ struct OnlineTableView: View {
         .onAppear(perform: appear)
         .onDisappear(perform: disappear)
         .onChange(of: scenePhase) { _, phase in
-            model.setActive(phase == .active)
+            // Only a real trip to the background drops the connection: `.inactive` also covers
+            // Control Center, a notification banner pulled down and system alerts.
+            switch phase {
+            case .active: model.setActive(true)
+            case .background: model.setActive(false)
+            default: break
+            }
         }
         .onChange(of: learning.coachLevel) { _, level in
             model.coachLevel = level
@@ -94,7 +100,8 @@ struct OnlineTableView: View {
             }
         case let .roundSummary(summary):
             OnlineRoundSummarySheet(summary: summary, players: model.players,
-                                    roundNumber: roundNumber(of: summary))
+                                    roundNumber: roundNumber(of: summary),
+                                    target: model.view?.targetRank ?? model.summary?.targetRank ?? .ace)
         }
     }
 
@@ -155,7 +162,12 @@ struct OnlineTableView: View {
 
     private func endGame() {
         Task {
-            if await session.deleteGame(id: model.gameID) { onClose() }
+            if await session.deleteGame(id: model.gameID) {
+                onClose()
+            } else if !model.isGone, let message = session.takeErrorMessage() {
+                // The games list (where the session shows problems) is hidden under the table.
+                model.showNotice(message)
+            }
         }
     }
 }

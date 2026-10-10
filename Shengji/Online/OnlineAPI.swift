@@ -301,10 +301,13 @@ struct OnlineAPI: Sendable {
         return response.body
     }
 
-    /// Ids go into paths as one escaped component.
+    /// Ids go into paths as one escaped component. Only ASCII letters and digits (plus `-_.~`) stay as
+    /// they are: `CharacterSet.alphanumerics` also holds non-ASCII letters, and setting such a string as
+    /// `percentEncodedPath` raises an exception on Apple platforms.
+    static let unreservedCharacters = CharacterSet(charactersIn:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")
+
     static func pathComponent(_ value: String) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-_.~")
-        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+        value.addingPercentEncoding(withAllowedCharacters: unreservedCharacters) ?? ""
     }
 }

@@ -30,7 +30,9 @@ struct RootView: View {
                 if phase == .active { router.now = .now }
             }
             // A tapped notification for an online game opens it in the Play tab.
-            .modifier(OnlineShowsPlayTab { router.show(.play) })
+            .modifier(OnlineShowsPlayTab {
+                if router.selectedTab != .play { router.show(.play) }
+            })
     }
 
     private func tabs(dueCount: Int) -> some View {

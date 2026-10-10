@@ -151,8 +151,9 @@ final class OnlineDemoServer: @unchecked Sendable {
             guard let club = clubs.first(where: { $0.id == path[0] }) else {
                 return failure(404, "not_found", "That club doesn't exist any more.")
             }
+            // Like the real server: someone who isn't a member can't tell the club exists.
             guard club.members.contains(where: { $0.id == me.id }) else {
-                return failure(403, "forbidden", "You're not in this club.")
+                return failure(404, "not_found", "That club doesn't exist, or you're not a member.")
             }
             let clubGames = gameList.filter { $0.clubId == club.id }
             return json(OnlineClubDetailResponse(club: club, games: clubGames))

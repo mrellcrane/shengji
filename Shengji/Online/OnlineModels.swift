@@ -431,13 +431,28 @@ enum OnlineInviteCode {
     }
 }
 
-/// Display names are 1 to 24 characters after trimming.
+/// Display names are 1 to 24 characters after trimming, counted the way the server counts them.
 enum OnlineDisplayName {
     static let maxLength = 24
+    static let clubNameMaxLength = 40
 
+    /// Spaces trimmed and runs of spaces collapsed (as the server does), then at most 24 characters.
     static func cleaned(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(trimmed.prefix(maxLength))
+        limited(text, to: maxLength)
+    }
+
+    /// `text` tidied like `cleaned`, cut to at most `max` Unicode scalars: the server counts code points,
+    /// so an emoji such as a family can count as several. A character is never cut in half.
+    static func limited(_ text: String, to max: Int) -> String {
+        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        var result = ""
+        var count = 0
+        for character in collapsed {
+            count += character.unicodeScalars.count
+            if count > max { break }
+            result.append(character)
+        }
+        return result.trimmingCharacters(in: .whitespaces)
     }
 
     static func isValid(_ text: String) -> Bool {
