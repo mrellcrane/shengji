@@ -66,7 +66,7 @@ struct OnlinePlaySection: View {
                     .frame(width: 36, height: 36)
                     .background(Circle().fill(Theme.felt))
                     .accessibilityHidden(true)
-                Text(OnlineCopy.pitch)
+                Text(OnlineCopy.pitch(notifies: session.serverSendsPush == true))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -79,7 +79,11 @@ struct OnlinePlaySection: View {
 
 /// Short texts shared by the online screens.
 enum OnlineCopy {
-    static let pitch = "Start a club with 6 to 10 friends, share its code, and play a game over a few days. You'll get a notification when it's your turn."
+    /// What online play is; it promises notifications only while the server sends them.
+    static func pitch(notifies: Bool) -> String {
+        let start = "Start a club with 6 to 10 friends, share its code, and play a game over a few days."
+        return start + (notifies ? " You'll get a notification when it's your turn." : " Open the app to see when it's your turn.")
+    }
     static let whySignIn = "Sign in so your friends can find you and games follow you to a new phone."
     static let pushOffer = "Get a notification when it's your turn. We'll only tell you about your games."
 }

@@ -267,7 +267,7 @@ struct TableChips {
 
     func buryingChips(selected: [Card]) -> [SuggestedQuestion] {
         guard view.dealer == Seats.human else {
-            let dealer = view.dealer.map { Seats.name($0) } ?? "The dealer"
+            let dealer = view.dealer.map { CoachText.seatName($0, in: view) } ?? "The dealer"
             return [
                 SuggestedQuestions.make("table.whileBurying", "What is the dealer doing?",
                                         "\(dealer) is burying cards now. What are they doing, and why does the kitty matter to my team?"),
@@ -312,7 +312,7 @@ struct TableChips {
             return chips
         }
         if myTurn, let lead = view.currentTrick.first {
-            let leader = lead.player == Seats.human ? "I" : Seats.name(lead.player)
+            let leader = lead.player == Seats.human ? "I" : CoachText.seatName(lead.player, in: view)
             let cards = CoachText.clip(trump.sorted(lead.cards).shortText, 80)
             let shape = CoachText.shapeText(lead.cards, trump: trump)
             chips.append(SuggestedQuestions.make("table.whatToPlay", "What should I play?",
@@ -347,7 +347,7 @@ struct TableChips {
         if let winner = view.gameWinnerTeam {
             // The game is over: there is no next round to ask about.
             let ours = winner == Seats.team(of: Seats.human)
-            let who = ours ? "My team" : "East and West"
+            let who = ours ? "My team" : "\(CoachText.seatName(1, in: view)) and \(CoachText.seatName(3, in: view))"
             chips.append(SuggestedQuestions.make("table.gameOver", ours ? "How did we win the game?" : "How did they win the game?",
                                                  "\(who) just won the whole game. How does a team win the game in Shengji, and what decided it this round?"))
         } else {
@@ -407,12 +407,15 @@ struct TableChips {
 
     func whyTrickWon() -> SuggestedQuestion {
         guard let last = view.tricks.last else { return whoIsWinning() }
-        let label = last.winner == Seats.human ? "Why did I win that?" : "Why did \(Seats.name(last.winner)) win that?"
-        let winner = last.winner == Seats.human ? "I" : Seats.name(last.winner)
+        // Online the winner goes by name; a long one would be cut off, so the label says "they" instead.
+        let named = "Why did \(CoachText.seatName(last.winner, in: view)) win that?"
+        let label = last.winner == Seats.human ? "Why did I win that?"
+            : named.count <= SuggestedQuestions.maxLabelLength ? named : "Why did they win that?"
+        let winner = last.winner == Seats.human ? "I" : CoachText.seatName(last.winner, in: view)
         let leadPlay = last.plays.first
         var prompt = "Why did \(winner) win the last trick?"
         if let leadPlay {
-            let leader = leadPlay.player == Seats.human ? "I" : Seats.name(leadPlay.player)
+            let leader = leadPlay.player == Seats.human ? "I" : CoachText.seatName(leadPlay.player, in: view)
             prompt = "Why did \(winner) win the last trick (\(leader) led \(CoachText.clip(trump.sorted(leadPlay.cards).shortText, 80)))?"
         }
         prompt += " Walk me through what beat what."

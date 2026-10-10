@@ -50,6 +50,8 @@ struct BotTable {
     /// The seat the texts are written from: other players get the compass names of a table where
     /// seat 0 is South, as seen from this seat (`Bot.seat`; 0 for hints, so the viewer is South).
     let compassSeat: Int
+    /// Opponents are named as `view.players` names them (online tables show names, not compass seats).
+    let usesPlayerNames: Bool
     let trump: Trump
     /// Display order for this round's trump.
     let order: CardOrder
@@ -69,8 +71,9 @@ struct BotTable {
     private let topUnseen: [SuitGroup: Int]
     private let topUnseenPair: [SuitGroup: Int]
 
-    init(view: SeatView, compassSeat: Int = 0, tuning: BotTuning = BotTuning()) {
+    init(view: SeatView, compassSeat: Int = 0, usesPlayerNames: Bool = false, tuning: BotTuning = BotTuning()) {
         self.tuning = tuning
+        self.usesPlayerNames = usesPlayerNames
         let trump = view.trump
         self.view = view
         self.seat = 0
@@ -133,14 +136,24 @@ struct BotTable {
 extension BotTable {
     var isLeading: Bool { view.currentTrick.isEmpty }
 
-    /// How the texts name `player` (viewer-relative): "you", "your partner", or a compass name.
+    /// How the texts name `player` (viewer-relative): "you", "your partner", or a compass name
+    /// (the player's name instead with `usesPlayerNames`).
     func name(_ player: Int) -> String {
-        BotText.name(absolute(player), from: compassSeat)
+        playerName(player) ?? BotText.name(absolute(player), from: compassSeat)
     }
 
-    /// "your", "your partner's", "East's".
+    /// "your", "your partner's", "East's" (or "Lin's").
     func possessive(_ player: Int) -> String {
-        BotText.possessive(absolute(player), from: compassSeat)
+        playerName(player).map { $0 + "'s" } ?? BotText.possessive(absolute(player), from: compassSeat)
+    }
+
+    /// An opponent's name from the view, with `usesPlayerNames` (you and your partner keep "you" and
+    /// "your partner"); nil for a compass name.
+    private func playerName(_ player: Int) -> String? {
+        let p = ((player % 4) + 4) % 4
+        guard usesPlayerNames, p != seat, p != partner, view.players.indices.contains(p) else { return nil }
+        let name = view.players[p].name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
     }
 
     /// The compass seat of viewer-relative `player`.

@@ -281,6 +281,44 @@ enum OnlineGameText {
         return "Round \(game.roundNumber) · Us \(us), Them \(them) · to \(game.targetRank.label)"
     }
 
+    // MARK: Club games you are not in
+
+    /// Whether you hold a seat. A club's page also lists games you are not in, seen from seat 0, where
+    /// nobody is you. Unknown while your profile loads (`userID` nil): treated as yours.
+    static func isSeated(_ game: OnlineGameSummary, userID: String?) -> Bool {
+        guard let userID else { return true }
+        return game.player(Seats.human)?.userID == userID
+    }
+
+    /// A player's name in a game you are not in (nobody there is "You").
+    static func playerName(_ seat: Int, players: [SeatView.Player]) -> String {
+        guard players.indices.contains(seat) else { return "Someone" }
+        let trimmed = players[seat].name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Someone" : trimmed
+    }
+
+    /// "Ben and Cai vs Tiger Bot and Dragon Bot" for a game you are not in.
+    static func everyoneLine(_ players: [SeatView.Player]) -> String {
+        let name = { (seat: Int) in playerName(seat, players: players) }
+        return "\(name(0)) and \(name(2)) vs \(name(1)) and \(name(3))"
+    }
+
+    /// "Waiting for Ben" or "Ben and Cai won" for a game you are not in.
+    static func othersGameStatus(_ game: OnlineGameSummary) -> String {
+        let name = { (seat: Int) in playerName(seat, players: game.players) }
+        if game.isFinished {
+            guard let winner = game.winnerTeam else { return "Finished" }
+            return winner == 0 ? "\(name(0)) and \(name(2)) won" : "\(name(1)) and \(name(3)) won"
+        }
+        if let turn = game.turn { return "Waiting for \(name(turn))" }
+        return "Waiting"
+    }
+
+    /// "Round 3 · to A" for a game you are not in (neither team is "Us").
+    static func othersGameDetail(_ game: OnlineGameSummary) -> String {
+        "Round \(game.roundNumber) · to \(game.targetRank.label)"
+    }
+
     /// "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago".
     static func relativeTime(_ date: Date, now: Date = Date()) -> String {
         let seconds = max(0, now.timeIntervalSince(date))

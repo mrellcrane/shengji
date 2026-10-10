@@ -56,7 +56,8 @@ Otherwise it answers `404` (whatever the method or body). The same name always s
   (a token registered again moves to the caller; at most 10 devices per user, the oldest are dropped)
 - `DELETE /v1/devices/<token>` → `204` (also when it was not registered)
 
-Push may be disabled on the server (no APNs key yet); devices are still stored.
+Push may be disabled on the server (no APNs key yet); devices are still stored. The app reads `push` from
+`GET /health` and, while it is `false`, neither promises nor offers notifications or nudges (a nudge would reach nobody).
 
 ## Clubs (your group of friends)
 
@@ -84,7 +85,8 @@ Invite codes use the letters and digits `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no I,
  "turn": seat | null,            // viewer-relative seat that must act (bid, bury or play)
  "yourTurn": true,
  "winnerTeam": 0 | 1 | null,     // viewer-relative
- "lastEvent": "West played K♠ K♠"}
+ "lastEvent": "West played K♠ K♠",
+ "startedByYou": false}          // you started this game (only you can end it)
 ```
 
 `lastEvent` is one line about the latest move, naming players by display name and the viewer as "You":
@@ -134,7 +136,7 @@ Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon 
 - `POST /v1/games/<id>/nudge` → `204` (reminds the player whose turn it is; at most once per 10 minutes per game).
   Too soon is `429 too_soon` with `retry-after` set to the seconds until the next nudge is allowed; when it is your
   own turn or the game is over, `400 cannot_nudge`.
-- `DELETE /v1/games/<id>` → `204` (creator only; ends the game for everyone).
+- `DELETE /v1/games/<id>` → `204` (creator only, `startedByYou`; ends the game for everyone).
   Others get `403 forbidden`. The game disappears from every list, and open WebSockets close with `4004`.
 
 ## Push notifications (when enabled)

@@ -72,6 +72,8 @@ export interface GameSummary {
   yourTurn: boolean;
   winnerTeam: number | null;
   lastEvent: string | null;
+  /** The viewer started this game (only they can end it). */
+  startedByYou: boolean;
 }
 
 /** The seat of `userId` in the snapshot, or null. */
@@ -165,6 +167,7 @@ export function summarize(snapshot: GameSnapshot, viewer: number | null): GameSu
     yourTurn: viewer !== null && snapshot.status === "active" && snapshot.turn === viewer,
     winnerTeam: snapshot.winner === null ? null : relativeTeam(snapshot.winner, v),
     lastEvent: snapshot.lastEvent === null ? null : eventText(snapshot.lastEvent, snapshot.players, viewer),
+    startedByYou: viewer !== null && !snapshot.players[viewer].isBot && snapshot.players[viewer].userID === snapshot.createdBy,
   };
 }
 

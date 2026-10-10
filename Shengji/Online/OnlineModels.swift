@@ -69,10 +69,13 @@ struct OnlineGameSummary: Codable, Hashable, Identifiable, Sendable {
     var winnerTeam: Int?
     /// e.g. "West played K♠ K♠".
     var lastEvent: String?
+    /// You started this game, so you can end it (true when a server doesn't say: it then decides).
+    var startedByYou: Bool
 
     init(id: String, clubId: String, createdAt: String, updatedAt: String, status: Status,
          players: [SeatView.Player], teamLevels: [Rank], targetRank: Rank, roundNumber: Int,
-         phase: SeatView.Phase?, turn: Int?, yourTurn: Bool, winnerTeam: Int?, lastEvent: String?) {
+         phase: SeatView.Phase?, turn: Int?, yourTurn: Bool, winnerTeam: Int?, lastEvent: String?,
+         startedByYou: Bool = true) {
         self.id = id
         self.clubId = clubId
         self.createdAt = createdAt
@@ -87,6 +90,7 @@ struct OnlineGameSummary: Codable, Hashable, Identifiable, Sendable {
         self.yourTurn = yourTurn
         self.winnerTeam = winnerTeam
         self.lastEvent = lastEvent
+        self.startedByYou = startedByYou
     }
 
     init(from decoder: Decoder) throws {
@@ -107,6 +111,7 @@ struct OnlineGameSummary: Codable, Hashable, Identifiable, Sendable {
         yourTurn = try c.decodeIfPresent(Bool.self, forKey: .yourTurn) ?? false
         winnerTeam = try c.decodeIfPresent(Int.self, forKey: .winnerTeam)
         lastEvent = try c.decodeIfPresent(String.self, forKey: .lastEvent)
+        startedByYou = try c.decodeIfPresent(Bool.self, forKey: .startedByYou) ?? true
     }
 
     var isFinished: Bool { status == .finished }
@@ -413,8 +418,18 @@ enum OnlineDates {
 
 /// Invite codes are case- and dash-insensitive: "abcd efgh", "ABCDEFGH" and "abcd-efgh" are the same code.
 enum OnlineInviteCode {
-    /// Letters and digits only, upper-cased.
+    /// Letters and digits only, upper-cased. A whole pasted invite ("Join my Shengji club with code
+    /// ABCD-EFGH", copied from Messages) gives just its code.
     static func compact(_ text: String) -> String {
+        let all = letters(text)
+        guard all.count > 8, let code = text.range(of: shared, options: .regularExpression) else { return all }
+        return letters(String(text[code]))
+    }
+
+    /// A code as `OnlineClub.shareText` writes it, on its own: four letters or digits, a dash, four more.
+    private static let shared = "(?<![A-Za-z0-9])[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(?![A-Za-z0-9])"
+
+    private static func letters(_ text: String) -> String {
         String(text.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
     }
 

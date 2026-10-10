@@ -39,7 +39,7 @@ struct OnlineHomeView: View {
                 Button("End game", role: .destructive) { endGame() }
                 Button("Keep playing", role: .cancel) {}
             } message: {
-                Text("Only the player who started a game can end it.")
+                Text("It ends for everyone at the table, and can't be undone.")
             }
             .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { Task { await session.signOut() } }
@@ -61,6 +61,11 @@ struct OnlineHomeView: View {
                     await session.refreshIfStale()
                     await session.push.refreshPermission()
                 }
+            }
+            // A friend's move shows up on its own while you look at the list (not while in the background).
+            .task(id: scenePhase == .active) {
+                guard scenePhase == .active else { return }
+                await session.keepRefreshing()
             }
             .onChange(of: session.needsDisplayName, initial: true) { _, needs in
                 // New accounts without a name from Apple pick one (also right after signing in elsewhere).
@@ -154,6 +159,8 @@ struct OnlineHomeView: View {
 /// Signed out: what online play is, and Sign in with Apple.
 @MainActor
 struct OnlineSignedOutView: View {
+    @Environment(OnlineSession.self) private var session
+
     var body: some View {
         List {
             Section {
@@ -162,7 +169,7 @@ struct OnlineSignedOutView: View {
                         .accessibilityHidden(true)
                     Text("Play with your friends")
                         .font(.title3.weight(.bold))
-                    Text(OnlineCopy.pitch)
+                    Text(OnlineCopy.pitch(notifies: session.serverSendsPush == true))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -232,7 +239,8 @@ struct OnlineGamesList: View {
                         OnlineGameRow(game: game, clubName: session.clubName(for: game))
                     }
                     .swipeActions(edge: .trailing) {
-                        if !game.isFinished {
+                        // Only the player who started a game can end it.
+                        if !game.isFinished && game.startedByYou {
                             Button(role: .destructive) {
                                 onEnd(game)
                             } label: {
@@ -286,17 +294,19 @@ struct OnlineGamesList: View {
 }
 
 /// One game in the list: who you play with, whose turn it is and what happened last.
+/// `isSeated` false: a club game you are not in (everyone by name, nobody is "You").
 @MainActor
 struct OnlineGameRow: View {
     let game: OnlineGameSummary
     let clubName: String?
+    var isSeated = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            OnlineGameIcon(game: game)
+            OnlineGameIcon(game: game, isSeated: isSeated)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(OnlineGameText.othersLine(game.players))
+                    Text(isSeated ? OnlineGameText.othersLine(game.players) : OnlineGameText.everyoneLine(game.players))
                         .font(.headline)
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)
@@ -305,7 +315,7 @@ struct OnlineGameRow: View {
                         OnlineYourTurnBadge()
                     }
                 }
-                Text(OnlineGameText.rowStatus(game))
+                Text(isSeated ? OnlineGameText.rowStatus(game) : OnlineGameText.othersGameStatus(game))
                     .font(.subheadline.weight(game.isYourTurn ? .semibold : .regular))
                     .foregroundStyle(game.isYourTurn ? Theme.felt : Color.secondary)
                 if let last = game.lastEvent, !last.isEmpty {
@@ -328,7 +338,7 @@ struct OnlineGameRow: View {
     private var detail: String {
         var parts: [String] = []
         if let clubName { parts.append(clubName) }
-        parts.append(OnlineGameText.rowDetail(game))
+        parts.append(isSeated ? OnlineGameText.rowDetail(game) : OnlineGameText.othersGameDetail(game))
         if let date = game.updatedDate { parts.append(OnlineGameText.relativeTime(date)) }
         return parts.joined(separator: " · ")
     }
@@ -351,6 +361,7 @@ struct OnlineYourTurnBadge: View {
 @MainActor
 struct OnlineGameIcon: View {
     let game: OnlineGameSummary
+    var isSeated = true
 
     var body: some View {
         Image(systemName: symbol)
@@ -362,7 +373,7 @@ struct OnlineGameIcon: View {
     }
 
     private var symbol: String {
-        if game.isFinished { return game.winnerTeam == 0 ? "trophy.fill" : "flag.checkered" }
+        if game.isFinished { return isSeated && game.winnerTeam == 0 ? "trophy.fill" : "flag.checkered" }
         return game.isYourTurn ? "suit.spade.fill" : "hourglass"
     }
 

@@ -22,6 +22,7 @@ struct OnlineClubView: View {
                 inviteSection(club)
                 membersSection(club)
                 gamesSection
+                othersGamesSection
                 leaveSection
             } else {
                 Section {
@@ -95,7 +96,7 @@ struct OnlineClubView: View {
                 Text("No games in this club yet.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(games) { game in
+            ForEach(yourGames) { game in
                 Button {
                     onOpenGame(game.id)
                 } label: {
@@ -108,6 +109,26 @@ struct OnlineClubView: View {
                 Label("New game", systemImage: "suit.spade.fill")
             }
         }
+    }
+
+    /// Games in the club you are not playing in: shown, but only their players can open them.
+    @ViewBuilder private var othersGamesSection: some View {
+        let others = games.filter { !OnlineGameText.isSeated($0, userID: session.user?.id) }
+        if !others.isEmpty {
+            Section {
+                ForEach(others) { game in
+                    OnlineGameRow(game: game, clubName: nil, isSeated: false)
+                }
+            } header: {
+                Text("Other games in this club")
+            } footer: {
+                Text("You're not playing in these, so only their players can open them.")
+            }
+        }
+    }
+
+    private var yourGames: [OnlineGameSummary] {
+        games.filter { OnlineGameText.isSeated($0, userID: session.user?.id) }
     }
 
     private var leaveSection: some View {
