@@ -53,6 +53,51 @@ jobs:
           printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_${ASC_KEY_ID}.p8"
           echo "KEY_PATH=$RUNNER_TEMP/keys/AuthKey_${ASC_KEY_ID}.p8" >> "$GITHUB_ENV"
 
+      - name: Enable app capabilities (Sign in with Apple, push)
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: com.mrellcrane.shengji
+        run: |
+          python3 -m pip install --quiet --break-system-packages "pyjwt[crypto]==2.9.0" || python3 -m pip install --quiet "pyjwt[crypto]==2.9.0"
+          python3 - <<'PY'
+          import json, os, time, urllib.parse, urllib.request, urllib.error
+          import jwt
+          now = int(time.time())
+          token = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 900, "aud": "appstoreconnect-v1"},
+                             os.environ["ASC_KEY_P8"], algorithm="ES256", headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"})
+          def call(method, path, body=None, params=None):
+              url = "https://api.appstoreconnect.apple.com" + path + ("?" + urllib.parse.urlencode(params) if params else "")
+              req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                           headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      raw = r.read(); return r.status, (json.loads(raw) if raw else {})
+              except urllib.error.HTTPError as e:
+                  raw = e.read()
+                  try: return e.code, json.loads(raw)
+                  except Exception: return e.code, {"raw": raw.decode(errors="replace")}
+          status, ids = call("GET", "/v1/bundleIds", params={"filter[identifier]": os.environ["BUNDLE_ID"]})
+          match = [b for b in ids.get("data", []) if b["attributes"].get("identifier") == os.environ["BUNDLE_ID"]]
+          if not match:
+              print("::warning::Bundle ID not found; automatic signing will register it"); raise SystemExit(0)
+          bundle_id = match[0]["id"]
+          status, caps = call("GET", f"/v1/bundleIds/{bundle_id}/bundleIdCapabilities", params={"limit": 50})
+          have = {c["attributes"].get("capabilityType") for c in caps.get("data", [])}
+          print("capabilities:", sorted(x for x in have if x))
+          wanted = {
+              "PUSH_NOTIFICATIONS": None,
+              "APPLE_ID_AUTH": [{"key": "APPLE_ID_AUTH_APP_CONSENT", "options": [{"key": "PRIMARY_APP_CONSENT"}]}],
+          }
+          for cap, settings in wanted.items():
+              if cap in have:
+                  continue
+              attrs = {"capabilityType": cap}
+              if settings: attrs["settings"] = settings
+              status, body = call("POST", "/v1/bundleIdCapabilities", {"data": {"type": "bundleIdCapabilities",
+                  "attributes": attrs, "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle_id}}}}})
+              print("enable", cap, status, "" if status < 300 else json.dumps(body)[:400])
+          PY
+
       - name: Archive
         run: |
           set -o pipefail
