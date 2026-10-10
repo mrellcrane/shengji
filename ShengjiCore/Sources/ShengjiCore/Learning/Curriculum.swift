@@ -1,6 +1,7 @@
 import Foundation
 
-// API CONTRACT (stub). Content filled in by the curriculum work.
+// Curriculum types and entry points. The lesson, fact and glossary content lives in
+// Learning/Content/ (lessons in groups of four, plus facts and glossary).
 
 /// A fixed fact checked by retrieval practice (multiple choice; choices are shuffled each time).
 public struct Fact: Identifiable, Hashable, Sendable {
@@ -23,7 +24,15 @@ public struct Fact: Identifiable, Hashable, Sendable {
     }
 
     /// A question with the choices shuffled (so position can't be memorised).
-    public func question<G: RandomNumberGenerator>(rng: inout G) -> Question { fatalError("TODO") }
+    public func question<G: RandomNumberGenerator>(rng: inout G) -> Question {
+        let order = Array(choices.indices).shuffled(using: &rng)
+        let shuffled = order.map { Choice(choices[$0]) }
+        // A valid fact always finds its answer here; fall back to 0 rather than crash on bad data.
+        let correct = order.firstIndex(of: correctChoice) ?? 0
+        let serial = UInt32.random(in: 0...UInt32.max, using: &rng)
+        return Question(id: "\(id).\(serial)", itemID: id, prompt: prompt, trump: nil, visual: .none,
+                        choices: shuffled, correctChoice: correct, explanation: explanation, difficulty: 1)
+    }
 }
 
 /// One screen of a lesson. Lessons are short (2–4 minutes) and alternate explanation with
@@ -47,7 +56,7 @@ public struct Lesson: Identifiable, Hashable, Sendable {
     public var number: Int
     public var title: String
     public var subtitle: String
-    /// Chinese term for the lesson's key idea, e.g. "主牌 (zhǔpái) — trumps".
+    /// Chinese term for the lesson's key idea, e.g. "主牌 (zhǔpái): trumps".
     public var chineseTerm: String?
     public var estimatedMinutes: Int
     public var pages: [LessonPage]
@@ -90,9 +99,16 @@ public struct GlossaryEntry: Hashable, Sendable, Identifiable {
 
 public enum Curriculum {
     /// Lessons in order. Each builds on the previous one.
-    public static var lessons: [Lesson] { fatalError("TODO") }
-    public static var facts: [Fact] { fatalError("TODO") }
-    public static var glossary: [GlossaryEntry] { fatalError("TODO") }
+    public static let lessons: [Lesson] = [
+        lesson1, lesson2, lesson3, lesson4, lesson5, lesson6,
+        lesson7, lesson8, lesson9, lesson10, lesson11, lesson12,
+    ]
+
+    /// Every fact, in lesson order (content in Content/Facts.swift).
+    public static let facts: [Fact] = allFacts
+
+    /// Chinese terms with pinyin and meaning (content in Content/Glossary.swift).
+    public static let glossary: [GlossaryEntry] = allGlossaryEntries
 
     public static func lesson(id: String) -> Lesson? { lessons.first { $0.id == id } }
     public static func fact(id: String) -> Fact? { facts.first { $0.id == id } }
