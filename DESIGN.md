@@ -202,3 +202,19 @@ Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `r
   `LearningStore(ephemeral: DemoScene.current != nil)`, inject it, TabView with Learn (`LessonPathView`),
   Review (`ReviewView`), Play (`PlayHomeView`), Rules (`RulesView`); initial tab `DemoScene.current?.tab ?? .learn`.
 - Saved game: game UI persists the in-progress game as JSON in Application Support (`savedGame.json`).
+
+## Coach (Claude-powered tutor)
+
+- Network: the app never holds an Anthropic key. It calls the Cloudflare Worker in `proxy/`
+  (`POST https://shengji-coach.ellcrane.workers.dev/coach`), which pins `claude-haiku-5-5`, restricts the topic,
+  rate-limits per device and IP, and streams SSE events: `{"type":"text","text":...}`,
+  `{"type":"done","stopReason":...}`, `{"type":"error","code":...,"message":...}`. Request:
+  `{"deviceId": "<random install id>", "turns": [{"role":"user","text":"...","context":"<table state>"}, {"role":"assistant","text":"..."}, ...]}`
+  (alternating, starting and ending with user; user turns carry the table state they were asked with; limits in `proxy/src/protocol.ts`).
+- Table state given to the coach: only what the learner can see (phase, trump, levels, dealer/declarers, own hand,
+  current and previous trick, points, cards played so far by suit, shown voids, the current hint, last illegal attempt).
+- Hint ladder (Guided/Coached): step 1 `BotDecision.nudge` (what to notice), step 2 `principle`, step 3 highlight
+  `cards` + `reason`; every step offers "Why?" which asks the coach with full context.
+- Suggested questions: tap-to-ask chips chosen from the phase and situation (your turn to lead/follow, after an
+  illegal attempt, dealing, burying, after a trick, after a round, inside a lesson), plus follow-ups under each answer
+  ("Why?", "Show an example", "Just tell me"). Typing is optional.
