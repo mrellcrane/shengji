@@ -25,6 +25,9 @@ struct QuestionView: View {
 
     @State private var selected: Int?
     @State private var shownAt: Date?
+    /// When the app left the foreground with the question unanswered (time away is not answer time).
+    @State private var awaySince: Date?
+    @Environment(\.scenePhase) private var scenePhase
 
     /// - Parameter preselected: show the question as already answered with this choice (no callback).
     init(_ question: Question, mode: Mode = .practice, preselected: Int? = nil,
@@ -58,6 +61,17 @@ struct QuestionView: View {
         .animation(.easeOut(duration: 0.25), value: selected)
         .onAppear {
             if shownAt == nil { shownAt = .now }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard selected == nil else { return }
+            if phase != .active {
+                if awaySince == nil { awaySince = .now }
+            } else if let awaySince, let start = shownAt {
+                // Start the clock again where it stopped, so a call or a trip to another app doesn't
+                // make a right answer look slow (and grade it hard).
+                shownAt = start.addingTimeInterval(Date.now.timeIntervalSince(awaySince))
+                self.awaySince = nil
+            }
         }
         .sensoryFeedback(trigger: selected) { _, newValue in
             guard let newValue else { return nil }
