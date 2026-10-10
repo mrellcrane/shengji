@@ -83,16 +83,24 @@ enum BotBurying {
             let mine = table.cards(in: .plain(suit))
             if !mine.isEmpty && cards.containsAll(mine) { emptied.append(suit.name.lowercased()) }
         }
+        // Only claim to keep what this burial really keeps.
+        let trump = table.trump
+        var kept: [String] = []
+        if !cards.contains(where: { trump.isTrump($0) }) { kept.append("trumps") }
+        if !cards.contains(where: { $0.rank == .ace && !trump.isTrump($0) }) { kept.append("aces") }
+        if !cards.contains(where: { table.pairFaces.contains($0.face) }) { kept.append("pairs") }
+        if cards.points == 0 { kept.append("points") }
         var reason: String
         let concept: String
         if !emptied.isEmpty {
             let suits = BotText.list(emptied)
             let them = emptied.count == 1 ? "that suit" : "those suits"
-            reason = "Bury \(names). This empties your \(suits), so you can trump \(them) later, "
-                + "and you keep your trumps, aces and pairs."
+            reason = "Bury \(names). This empties your \(suits), so you can trump \(them) later"
+            reason += kept.isEmpty ? "." : ", and you keep your \(BotText.list(kept))."
             concept = "Create a void"
         } else {
-            reason = "Bury \(names), your lowest cards outside trumps, and keep your trumps, aces, pairs and points."
+            reason = "Bury \(names), the cards you will miss least"
+            reason += kept.isEmpty ? "." : ", and keep your \(BotText.list(kept))."
             concept = "Bury low"
         }
         if cards.contains(where: { table.trump.isTrump($0) }) {

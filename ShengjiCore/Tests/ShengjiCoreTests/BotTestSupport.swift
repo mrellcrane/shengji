@@ -65,6 +65,9 @@ enum BotHarness {
         let hand = round.hands[dealer]
         let decision = stats.time { bots[dealer].cardsToBury(in: round) }
         check(decision, stats: &stats, context: "bury")
+        for problem in burialClaimProblems(decision, hand: hand, trump: round.trump) {
+            stats.problems.append("bury: \(problem)")
+        }
         if decision.cards.count != Round.kittySize || !hand.containsAll(decision.cards) {
             stats.problems.append("bad bury \(decision.cards.shortText)")
         }
@@ -86,6 +89,18 @@ enum BotHarness {
         if leading { stats.leads += 1 } else { stats.follows += 1 }
         stats.concepts[decision.concept, default: 0] += 1
         check(decision, stats: &stats, context: leading ? "lead" : "follow")
+        for problem in lowTrumpProblems(decision, trump: round.trump) { stats.problems.append(problem) }
+        if decision.reason.contains("isn't worth a trump") && decision.cards.contains(where: { round.trump.isTrump($0) }) {
+            stats.problems.append("says the trick isn't worth a trump but plays one: \(decision.reason)")
+        }
+        if let claimed = heldPoints(in: decision.reason) {
+            let onTable = round.currentTrick.reduce(0) { $0 + $1.cards.points }
+            if claimed != onTable { stats.problems.append("says the trick holds \(claimed), it holds \(onTable): \(decision.reason)") }
+        }
+        if leading && bots[seat].level == .standard,
+           let problem = pointLeadProblem(decision, round: round, seat: seat) {
+            stats.problems.append(problem)
+        }
         let isThrow = leading && Rules.isThrow(decision.cards, trump: round.trump)
         do {
             let outcome = try round.play(decision.cards, by: seat)
@@ -166,6 +181,57 @@ enum BotHarness {
             problems.append("reason names no chosen card")
         }
         return problems
+    }
+
+    /// The N in "This trick holds N points", if the reason says that.
+    static func heldPoints(in reason: String) -> Int? {
+        guard let range = reason.range(of: "This trick holds ") else { return nil }
+        let digits = reason[range.upperBound...].prefix { $0.isNumber }
+        return Int(digits)
+    }
+
+    /// "a low trump, X" must never describe a joker or a trump-rank card (they are high trumps).
+    static func lowTrumpProblems(_ decision: BotDecision, trump: Trump) -> [String] {
+        guard let range = decision.reason.range(of: "a low trump, ") else { return [] }
+        let named = decision.reason[range.upperBound...]
+        var problems: [String] = []
+        for card in decision.cards where named.hasPrefix(card.description) {
+            if card.isJoker || card.rank == trump.rank { problems.append("\(card) called a low trump: \(decision.reason)") }
+        }
+        return problems
+    }
+
+    /// Standard leads never give away a point card that something unseen can beat while a lead
+    /// without points is possible (DESIGN.md: never lead point cards unless they're sure winners).
+    /// Leading into the partner's void is the one exception: the partner is expected to trump it.
+    static func pointLeadProblem(_ decision: BotDecision, round: Round, seat: Int) -> String? {
+        guard decision.cards.points > 0, decision.concept != "Partner's void" else { return nil }
+        let table = BotTable(round: round, seat: seat)
+        let components = Combos.decompose(decision.cards, trump: round.trump)
+        guard components.contains(where: { $0.cards.points > 0 && table.unseenCanBeat($0) }) else { return nil }
+        guard round.hands[seat].contains(where: { $0.points == 0 }) else { return nil }
+        return "seat \(seat) led beatable points \(decision.cards.shortText) [\(decision.concept)] holding "
+            + "\(round.trump.sorted(round.hands[seat]).shortText)"
+    }
+
+    /// A burial reason may only say it keeps trumps, aces, pairs or points when none of them is buried.
+    static func burialClaimProblems(_ decision: BotDecision, hand: [Card], trump: Trump) -> [String] {
+        guard let range = decision.reason.range(of: "keep your ") else { return [] }
+        let claim = decision.reason[range.upperBound...].prefix { $0 != "." }
+        let buried = decision.cards
+        let counts = hand.faceCounts
+        var problems: [String] = []
+        if claim.contains("trumps") && buried.contains(where: { trump.isTrump($0) }) {
+            problems.append("claims to keep trumps")
+        }
+        if claim.contains("aces") && buried.contains(where: { $0.rank == .ace && !trump.isTrump($0) }) {
+            problems.append("claims to keep aces")
+        }
+        if claim.contains("pairs") && buried.contains(where: { (counts[$0.face] ?? 0) >= 2 }) {
+            problems.append("claims to keep pairs")
+        }
+        if claim.contains("points") && buried.points > 0 { problems.append("claims to keep points") }
+        return problems.map { "\($0) but buries \(buried.shortText): \(decision.reason)" }
     }
 }
 
