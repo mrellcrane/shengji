@@ -113,6 +113,13 @@ final class AchievementsTests: XCTestCase {
         XCTAssertEqual(Rules.checkThrow(throwExample.cards, against: rest, trump: throwExample.trump), .ok,
                        "the example throw can't be beaten by any cards elsewhere")
 
+        // The top-card example is a sure winner even when you have seen nothing else.
+        let top = try example(.topCard)
+        let topComponents = Combos.decompose(top.cards, trump: top.trump)
+        XCTAssertEqual(topComponents.count, 1)
+        XCTAssertFalse(top.trump.isTrump(top.cards[0]))
+        XCTAssertTrue(MoveDetector.isSureWinner(try XCTUnwrap(topComponents.first), seen: [], trump: top.trump))
+
         let feed = try example(.feedPartner)
         XCTAssertGreaterThan(feed.cards.points, 0)
         XCTAssertTrue(try example(.bigJoker).cards.contains { $0.face == .bigJoker })
@@ -200,6 +207,24 @@ final class AchievementsTests: XCTestCase {
         XCTAssertEqual(progress.count(for: wins), 1)
         _ = progress.recordGameProgress(teamLevel: .ace, wonGame: true, now: now)
         XCTAssertEqual(progress.count(for: wins), 2)
+    }
+
+    /// The app reports a won game to achievements first, then the learning store counts it and syncs:
+    /// the win must count once, and older wins from the learning store still count.
+    func testAWinReportedThenSyncedCountsOnce() throws {
+        let wins = try definition("journey.gamesWon")
+        var learner = LearnerProgress()
+        learner.gamesWon = 2
+        var progress = AchievementProgress()
+        _ = progress.syncLearning(learner, now: now)
+        XCTAssertEqual(progress.count(for: wins), 2, "wins from before achievements existed")
+        for game in 1...3 {
+            _ = progress.recordGameProgress(teamLevel: .ace, wonGame: true, now: now)
+            learner.gamesWon += 1
+            _ = progress.syncLearning(learner, now: now)
+            XCTAssertEqual(progress.count(for: wins), 2 + game)
+        }
+        XCTAssertEqual(progress.tier(for: wins), .silver)
     }
 
     func testSyncingLearningProgress() throws {
@@ -305,6 +330,38 @@ final class AchievementsTests: XCTestCase {
         // Progress keeps counting from decoded values.
         var resumed = countsOnly
         XCTAssertEqual(resumed.record([event(.ruff), event(.ruff)], now: now).map(\.tier), [.silver])
+    }
+
+    /// Dates must survive whatever date format the app's coder uses (ISO 8601 text, seconds, a property list),
+    /// not only the default one.
+    func testEarnedDatesSurviveOtherDateFormats() throws {
+        var progress = AchievementProgress()
+        _ = progress.record([event(.ruff)], now: now)
+        _ = progress.recordGameProgress(teamLevel: .six, wonGame: true, now: now.addingTimeInterval(86_400))
+        XCTAssertEqual(progress.earnedAt.count, 3)
+
+        let strategies: [(JSONEncoder.DateEncodingStrategy, JSONDecoder.DateDecodingStrategy, String)] = [
+            (.iso8601, .iso8601, "ISO 8601"),
+            (.secondsSince1970, .secondsSince1970, "seconds since 1970"),
+            (.millisecondsSince1970, .millisecondsSince1970, "milliseconds since 1970"),
+        ]
+        for (encoding, decoding, label) in strategies {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = encoding
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = decoding
+            let decoded = try decoder.decode(AchievementProgress.self, from: try encoder.encode(progress))
+            XCTAssertEqual(decoded, progress, label)
+        }
+        let plist = try PropertyListEncoder().encode(progress)
+        XCTAssertEqual(try PropertyListDecoder().decode(AchievementProgress.self, from: plist), progress, "property list")
+
+        // A bad date among good ones is still dropped on its own, in any format.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let mixed = #"{"counts": {"move.ruff": 1}, "earnedAt": {"move.ruff#1": "2027-01-15T08:00:00Z", "move.ruff#2": "later"}}"#
+        let lenient = try decoder.decode(AchievementProgress.self, from: Data(mixed.utf8))
+        XCTAssertEqual(lenient.earnedAt, ["move.ruff#1": Date(timeIntervalSince1970: 1_800_000_000)])
     }
 
     func testMoveEventCodable() throws {

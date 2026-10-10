@@ -130,6 +130,9 @@ public struct AchievementProgress: Codable, Hashable, Sendable {
     /// Syncs journey counts from learning progress (lessons, longest streak, mastered skills, answers).
     /// Counts never go down. Returns tiers newly reached.
     /// Games won are also raised to `progress.gamesWon`, so wins from before achievements existed count.
+    /// That is a "raise to", not an "add": report a win with `recordGameProgress(wonGame: true)` before the
+    /// learning progress counts it, and the sync that follows adds nothing. (Syncing a win first and then
+    /// recording it would count it twice.)
     public mutating func syncLearning(_ progress: LearnerProgress, now: Date) -> [TierUp] {
         let lessons = progress.completedLessons.count
         let streak = Achievements.longestStreak(progress.studyDays)
@@ -272,7 +275,10 @@ private struct LossyEntry<Value: Decodable>: Decodable {
     let value: Value?
 
     init(from decoder: Decoder) throws {
-        value = try? Value(from: decoder)
+        // Through a single-value container, so the decoder's own handling of the type applies (a JSON
+        // decoder's date strategy, a property list's native dates). `Value(from:)` would skip it and lose
+        // every date that isn't in the default format.
+        value = try? decoder.singleValueContainer().decode(Value.self)
     }
 }
 
@@ -335,7 +341,7 @@ public enum Achievements {
         case .feedPartner: return "Add 5 or more points to a trick your partner wins."
         case .tractor: return "Lead a tractor, or win a trick with one."
         case .cleanThrow: return "Lead several cards of one suit at once that nobody can beat."
-        case .topCard: return "Lead a card or combination in a plain suit that nobody beats."
+        case .topCard: return "Lead a sure winner in a plain suit, a card or combination nobody can beat, and win the trick."
         case .bigJoker: return "Win a trick with the big joker."
         case .kittyRaid: return "As a defender, win the last trick of a round."
         case .declareTrump: return "Make the declaration that sets trump for the round."

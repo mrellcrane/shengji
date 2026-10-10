@@ -114,7 +114,7 @@ final class MoveDetectorTests: XCTestCase {
                          p(1, [c(.three, .spades), c(.four, .spades), c(.five, .spades), c(.six, .spades)]),
                          p(2, [c(.three, .clubs), c(.four, .clubs), c(.six, .clubs), c(.jack, .clubs)]),
                          p(3, [c(.three, .diamonds), c(.four, .diamonds), c(.six, .diamonds), c(.jack, .diamonds)])])
-        XCTAssertEqual(kinds(won), [.tractor, .topCard])
+        XCTAssertEqual(kinds(won), [.tractor], "a higher spade tractor could have been out, so it is not a top card")
         XCTAssertEqual(won.first?.detail, "Tractor! You led 9♠ 9♠ 10♠ 10♠ and won 25 points.")
     }
 
@@ -158,9 +158,89 @@ final class MoveDetectorTests: XCTestCase {
         // A trump lead is not a top card; a ruffed ace is not either.
         XCTAssertEqual(kinds(moves([p(0, [c(.ace, .hearts)]), p(1, [c(.three, .hearts)]), p(2, [c(.five, .hearts)]), p(3, [c(.four, .hearts)])])), [])
         XCTAssertEqual(kinds(moves([p(0, [c(.ace, .diamonds)]), p(1, [c(.three, .diamonds)]), p(2, [c(.six, .diamonds)]), p(3, [c(.three, .hearts)])])), [])
-        // Pair leads count too.
-        XCTAssertEqual(kinds(moves([p(0, pair(.queen, .clubs)), p(1, [c(.three, .clubs), c(.four, .clubs)]),
+        // Pair leads count too, when no higher pair can be out.
+        XCTAssertEqual(kinds(moves([p(0, pair(.ace, .clubs)), p(1, [c(.three, .clubs), c(.four, .clubs)]),
                                     p(2, [c(.six, .clubs), c(.seven, .clubs)]), p(3, [c(.eight, .clubs), c(.nine, .clubs)])])), [.topCard])
+    }
+
+    /// A top card is a sure winner: from what you could see when you led, nobody could beat it.
+    /// A lead that only won because nobody happened to beat it is not one.
+    func testTopCardMustBeASureWinner() {
+        let kingLead = [p(0, [c(.king, .diamonds)]), p(1, [c(.three, .diamonds)]), p(2, [c(.five, .diamonds)]), p(3, [c(.four, .diamonds)])]
+        let trick = Kit.trick(kingLead, trump: trump)
+        XCTAssertEqual(trick.winner, 0)
+        // Both A♦ were unseen: someone could have beaten your K♦.
+        XCTAssertEqual(kinds(moves(kingLead)), [])
+        XCTAssertEqual(kinds(MoveDetector.trickMoves(trick, trump: trump, player: 0, seen: [c(.ace, .diamonds)])), [],
+                       "one A♦ is still out")
+        // You hold one A♦ and the other has been played: the K♦ is the top diamond.
+        let seen = [c(.ace, .diamonds), c(.ace, .diamonds, 1)]
+        let sure = MoveDetector.trickMoves(trick, trump: trump, player: 0, seen: seen)
+        XCTAssertEqual(kinds(sure), [.topCard])
+        XCTAssertEqual(sure.first?.detail, "Top card! Nobody could beat your K♦, and it won 15 points.")
+
+        // A pair: one copy of each higher face out of play is enough, since nobody can hold a pair of it.
+        let queens = [p(0, pair(.queen, .clubs)), p(1, [c(.three, .clubs), c(.four, .clubs)]),
+                      p(2, [c(.six, .clubs), c(.seven, .clubs)]), p(3, [c(.eight, .clubs), c(.nine, .clubs)])]
+        let queenTrick = Kit.trick(queens, trump: trump)
+        XCTAssertEqual(kinds(moves(queens)), [], "K♣ K♣ or A♣ A♣ could be out")
+        XCTAssertEqual(kinds(MoveDetector.trickMoves(queenTrick, trump: trump, player: 0, seen: [c(.ace, .clubs)])), [],
+                       "K♣ K♣ could still be out")
+        XCTAssertEqual(kinds(MoveDetector.trickMoves(queenTrick, trump: trump, player: 0, seen: [c(.ace, .clubs), c(.king, .clubs, 1)])),
+                       [.topCard])
+
+        // A tractor: no higher tractor of the same length can be out.
+        let tractor = [p(0, pair(.jack, .spades) + pair(.queen, .spades)),
+                       p(1, [c(.three, .spades), c(.four, .spades), c(.five, .spades), c(.six, .spades)]),
+                       p(2, [c(.seven, .spades), c(.eight, .spades), c(.nine, .spades), c(.ten, .spades)]),
+                       p(3, [c(.three, .clubs), c(.four, .clubs), c(.six, .clubs), c(.seven, .clubs)])]
+        let tractorTrick = Kit.trick(tractor, trump: trump)
+        XCTAssertEqual(kinds(moves(tractor)), [.tractor], "Q♠ Q♠ K♠ K♠ or K♠ K♠ A♠ A♠ could be out")
+        XCTAssertEqual(kinds(MoveDetector.trickMoves(tractorTrick, trump: trump, player: 0, seen: [c(.king, .spades)])),
+                       [.tractor, .topCard], "without a pair of kings no higher spade tractor exists")
+    }
+
+    /// When a throw fails, only its forced part is played. That part could be beaten (that is why the throw
+    /// failed), so even if it wins the trick it is not a top card.
+    func testForcedPartOfAFailedThrowIsNotATopCard() throws {
+        // Rank 5, you declare 5♥. You hold every plain spade except East's K♠ and 2♠ and Partner's 2♠.
+        let east: [Card] = [c(.king, .spades), c(.two, .spades)]
+        let partner: [Card] = [c(.two, .spades, 1)]
+        let others: Set<Int> = Set(east.map(\.id)).union(partner.map(\.id))
+        var mine: [Card] = [c(.five, .hearts)]
+        for rank in Rank.allCases where rank != .five {
+            for copy in 0..<2 where !others.contains(c(rank, .spades, copy).id) { mine.append(c(rank, .spades, copy)) }
+        }
+        let deck = EngineTestSupport.deck(hands: [mine, east, partner, []], firstSeat: 0, seed: 61)
+        var round = Round(trumpRank: .five, dealer: 0, deck: deck)
+        round.dealAll()
+        try round.declare(Declaration(player: 0, cards: [c(.five, .hearts)], suit: .hearts, strength: 1))
+        round.finishDealing()
+        let nonSpades: [Card] = round.hands[0].filter { round.trump.group($0) != .plain(.spades) && $0 != c(.five, .hearts) }
+        try round.bury(Array(nonSpades.prefix(Round.kittySize)))
+
+        // You throw A♠ + 3♠. East's K♠ could beat the 3♠, so only the 3♠ is played.
+        let outcome = try round.play([c(.ace, .spades), c(.three, .spades)], by: 0)
+        XCTAssertEqual(outcome, .throwFailed(forced: [c(.three, .spades)], blocker: 1))
+        // East keeps the K♠ back, Partner plays the other 2♠, West (no spades) discards: your 3♠ wins anyway.
+        try round.play([c(.two, .spades)], by: 1)
+        try round.play([c(.two, .spades, 1)], by: 2)
+        let discard = try XCTUnwrap(round.hands[3].first { !round.trump.isTrump($0) && $0.points == 0 })
+        try round.play([discard], by: 3)
+        let trick = try XCTUnwrap(round.tricks.first)
+        XCTAssertEqual(trick.winner, 0)
+        XCTAssertEqual(kinds(MoveDetector.moves(inTrick: 0, of: round)), [], "the 3♠ could have been beaten by East's K♠")
+        XCTAssertEqual(MoveDetector.moves(inTrick: 0, of: round), MoveDetector.moves(inTrick: 0, of: round.seatView(for: 0)))
+
+        // Next you lead the A♠: nobody can hold a higher spade, so that is a top card if it wins.
+        try round.play([c(.ace, .spades)], by: 0)
+        try round.play([c(.king, .spades)], by: 1)
+        for seat in [2, 3] {
+            let card = try XCTUnwrap(round.hands[seat].first { !round.trump.isTrump($0) && $0.points == 0 })
+            try round.play([card], by: seat)
+        }
+        XCTAssertEqual(round.tricks.last?.winner, 0)
+        XCTAssertEqual(kinds(MoveDetector.moves(inTrick: 1, of: round)), [.topCard])
     }
 
     // MARK: Big joker and big tricks
@@ -242,7 +322,8 @@ final class MoveDetectorTests: XCTestCase {
 
         let raidOnly = roundEnd(result(dealer: 3, defenders: 60, kittyPoints: 0, lastWinner: 0))
         XCTAssertEqual(kinds(raidOnly), [.kittyRaid])
-        XCTAssertTrue(raidOnly[0].detail.contains("held no points"))
+        XCTAssertEqual(raidOnly[0].detail, "Kitty raid! Your team won the last trick and took the kitty, though it held no points this time.")
+        XCTAssertEqual(raidOnly[0].points, 0)
 
         let bigTakeOver = roundEnd(result(dealer: 1, defenders: 165, lastWinner: 1))
         XCTAssertEqual(kinds(bigTakeOver), [.takeOver])
@@ -317,7 +398,33 @@ final class MoveDetectorTests: XCTestCase {
 
     /// Moves for `player` in `trick`, decided straight from the documented rules with the reference
     /// structure matcher from the engine tests.
-    private func oracle(_ trick: TrickRecord, trump: Trump, player: Int) -> [MoveKind] {
+    /// True if cards `player` had not seen could form a same-shape component that beats `lead` (one single,
+    /// pair or tractor in a plain suit). Plain loops over the suit's ranks, nothing shared with the detector.
+    private func couldBeBeaten(_ lead: [Card], seen: [Card], trump: Trump) -> Bool {
+        guard let suit = lead.first?.suit else { return true }
+        let seenIDs = Set(seen.map(\.id) + lead.map(\.id))
+        // Unseen copies at each strength level of the suit (in a plain suit each level is one rank).
+        var unseenAt: [Int: Int] = [:]
+        for rank in Rank.allCases where rank != trump.rank {
+            for copy in 0..<2 where !seenIDs.contains(Card(rank, suit, copy: copy).id) {
+                unseenAt[trump.strength(Card(rank, suit, copy: copy)), default: 0] += 1
+            }
+        }
+        let top = lead.map { trump.strength($0) }.max() ?? 0
+        if lead.count == 1 {
+            return unseenAt.contains { level in level.key > top && level.value > 0 }
+        }
+        // A pair is a run of 1 level, a tractor of n levels; every level needs both copies unseen.
+        let length = lead.count / 2
+        for high in stride(from: top + 1, through: Trump.topPlainStrength, by: 1) {
+            var whole = true
+            for level in stride(from: high - length + 1, through: high, by: 1) where unseenAt[level] != 2 { whole = false }
+            if whole { return true }
+        }
+        return false
+    }
+
+    private func oracle(_ trick: TrickRecord, trump: Trump, player: Int, seen: [Card]) -> [MoveKind] {
         guard let leadPlay = trick.plays.first, let me = trick.plays.firstIndex(where: { $0.player == player }) else { return [] }
         let lead = leadPlay.cards
         let ledIsTrump = lead.allSatisfy { trump.isTrump($0) }
@@ -337,7 +444,9 @@ final class MoveDetectorTests: XCTestCase {
         let components = Combos.decompose(lead, trump: trump)
         if components.contains(where: { $0.shape.isTractor }) && (me == 0 || iWon) { found.append(.tractor) }
         if me == 0 && components.count > 1 { found.append(.cleanThrow) }
-        if me == 0 && iWon && !ledIsTrump && components.count == 1 { found.append(.topCard) }
+        if me == 0 && iWon && !ledIsTrump && components.count == 1 && !couldBeBeaten(lead, seen: seen, trump: trump) {
+            found.append(.topCard)
+        }
         if iWon && mine.contains(where: { $0.face == .bigJoker }) { found.append(.bigJoker) }
         if Seats.team(of: trick.winner) == team && trick.points >= 30 { found.append(.bigTrick) }
         return MoveKind.allCases.filter { found.contains($0) }
@@ -349,6 +458,25 @@ final class MoveDetectorTests: XCTestCase {
         .declareTrump: "Trump declared! ", .overrideDeclaration: "Override! ", .holdDeal: "Deal held! ",
         .shutout: "Shutout! ", .takeOver: "Take over! ", .bigTrick: "Big trick! ",
     ]
+
+    /// Compares one player's moves in the trick just finished with the oracle, and checks the toasts.
+    private func checkTrick(_ index: Int, of round: Round, trick: TrickRecord, player: Int, seed: UInt64,
+                            counts: inout [MoveKind: Int]) {
+        // What `player` had seen when the trick began: their hand then, earlier tricks, and a kitty they buried.
+        let earlier: [Card] = round.tricks.dropLast().flatMap { $0.plays.flatMap(\.cards) }
+        let playedNow: [Card] = trick.plays.filter { $0.player == player }.flatMap(\.cards)
+        let buried: [Card] = round.dealer == player ? round.kitty : []
+        let seen: [Card] = round.hands[player] + playedNow + earlier + buried
+        let events = MoveDetector.moves(inTrick: index, of: round, player: player)
+        let expected = oracle(trick, trump: round.trump, player: player, seen: seen)
+        XCTAssertEqual(kinds(events), expected, "seed \(seed) trick \(index) player \(player)")
+        for event in events {
+            counts[event.kind, default: 0] += 1
+            XCTAssertTrue(event.detail.hasPrefix(prefixes[event.kind] ?? "?"), event.detail)
+            XCTAssertFalse(event.detail.contains(Kit.emDash))
+            XCTAssertGreaterThanOrEqual(event.points, 0)
+        }
+    }
 
     func testRealRoundsMatchTheOracle() throws {
         var counts: [MoveKind: Int] = [:]
@@ -381,14 +509,7 @@ final class MoveDetectorTests: XCTestCase {
                 guard round.tricks.count > before, let trick = round.tricks.last else { continue }
                 let index = round.tricks.count - 1
                 for player in Seats.all {
-                    let events = MoveDetector.moves(inTrick: index, of: round, player: player)
-                    XCTAssertEqual(kinds(events), oracle(trick, trump: round.trump, player: player), "seed \(seed) trick \(index) player \(player)")
-                    for event in events {
-                        counts[event.kind, default: 0] += 1
-                        XCTAssertTrue(event.detail.hasPrefix(prefixes[event.kind] ?? "?"), event.detail)
-                        XCTAssertFalse(event.detail.contains(Kit.emDash))
-                        XCTAssertGreaterThanOrEqual(event.points, 0)
-                    }
+                    checkTrick(index, of: round, trick: trick, player: player, seed: seed, counts: &counts)
                 }
                 XCTAssertEqual(MoveDetector.moves(inTrick: index, of: round), MoveDetector.moves(inTrick: index, of: round.seatView(for: 0)))
             }

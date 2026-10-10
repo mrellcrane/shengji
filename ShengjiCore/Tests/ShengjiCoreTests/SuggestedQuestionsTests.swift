@@ -100,6 +100,51 @@ final class SuggestedQuestionsTests: XCTestCase {
         assertWellFormed(chips, count: 3...5, "illegal")
     }
 
+    /// A rejected bury (the app reports those too) asks about burying, not playing.
+    func testRejectedBuryAsksAboutBurying() throws {
+        let deck = EngineTestSupport.deck(firstSeat: 0, seed: 41)
+        var round = Round(trumpRank: .two, dealer: 0, deck: deck)
+        round.dealAll()
+        round.finishDealing()
+        let seven = Array(round.trump.sorted(round.hands[0]).prefix(7))
+        let attempt = IllegalAttempt(cards: seven, error: .invalidBury("Choose exactly 8 cards to bury (you chose 7)."))
+        let chips = SuggestedQuestions.forTable(round: round, game: nil, hint: nil, selection: seven, lastIllegal: attempt)
+        XCTAssertEqual(chips.first?.id, "table.whyIllegal")
+        XCTAssertEqual(chips.first?.label, "Why can't I bury those?")
+        XCTAssertEqual(chips.first?.prompt,
+                       "I tried to bury \(round.trump.sorted(seven).shortText) but it wasn't allowed. Why not, and what should I bury instead?")
+        assertWellFormed(chips, count: 3...5, "bury attempt", visible: Set(Kit.visibleCards(round).map(\.face)))
+
+        let declaring = Kit.view(phase: .dealing, dealer: nil, hand: [Kit.c(.two, .spades)], turn: nil)
+        let declared = SuggestedQuestions.forTable(view: declaring, hint: nil, selection: [],
+                                                   lastIllegal: IllegalAttempt(cards: [Kit.c(.two, .spades)], error: .invalidDeclaration))
+        XCTAssertEqual(declared.first?.label, "Why can't I declare that?")
+        XCTAssertEqual(declared.first?.prompt, "I tried to declare with 2♠ but it wasn't allowed. Why not, and what could I declare instead?")
+    }
+
+    /// Once the game is over there is no next round to ask about.
+    func testGameOverAsksHowTheGameWasWon() {
+        let result = RoundResult(dealer: 0, declarerTeam: 0, trump: Kit.heartsTwo, trickPoints: 30, kittyPoints: 0, kittyMultiplier: 0,
+                                 defenderPoints: 30, outcome: Scoring.outcome(defenderPoints: 30), kitty: [], lastTrickWinner: 0)
+        var won = Kit.view(phase: .finished, dealer: 0, turn: nil, result: result, levels: [.ace, .nine])
+        won.gameWinnerTeam = 0
+        let chips = SuggestedQuestions.forTable(view: won, hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertFalse(ids(chips).contains("table.whatNext"), "\(ids(chips))")
+        let over = chips.first { $0.id == "table.gameOver" }
+        XCTAssertEqual(over?.label, "How did we win the game?")
+        XCTAssertEqual(over?.prompt, "My team just won the whole game. How does a team win the game in Shengji, and what decided it this round?")
+        assertWellFormed(chips, count: 3...5, "game over")
+
+        var lost = won
+        lost.gameWinnerTeam = 1
+        let lostChips = SuggestedQuestions.forTable(view: lost, hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertEqual(lostChips.first { $0.id == "table.gameOver" }?.label, "How did they win the game?")
+
+        // While the game goes on, the next round is the question.
+        let ongoing = Kit.view(phase: .finished, dealer: 0, turn: nil, result: result)
+        XCTAssertTrue(ids(SuggestedQuestions.forTable(view: ongoing, hint: nil, selection: [], lastIllegal: nil)).contains("table.whatNext"))
+    }
+
     func testHintShowingComesFirst() {
         let hand = [Kit.c(.king, .spades), Kit.c(.three, .spades)]
         let view = Kit.view(hand: hand, currentTrick: [Play(player: 1, cards: [Kit.c(.four, .spades)])], turn: 0)
@@ -156,6 +201,11 @@ final class SuggestedQuestionsTests: XCTestCase {
         let picked = Array(round.hands[0].prefix(2))
         let withSelection = SuggestedQuestions.forTable(round: round, game: nil, hint: nil, selection: picked, lastIllegal: nil)
         XCTAssertEqual(withSelection.first?.label, "Are these good to bury?")
+        // Its "Just tell me" follow-up is about burying, not playing.
+        let followUps = SuggestedQuestions.followUps(after: withSelection.first)
+        XCTAssertEqual(followUps.first?.label, "Just tell me")
+        XCTAssertTrue(followUps.first?.prompt.contains("bury") ?? false, followUps.first?.prompt ?? "")
+        XCTAssertFalse(followUps.first?.prompt.contains("play") ?? true, followUps.first?.prompt ?? "")
 
         var other = Round(trumpRank: .two, dealer: 3, deck: EngineTestSupport.deck(firstSeat: 3, seed: 6))
         other.dealAll()
@@ -300,7 +350,7 @@ final class SuggestedQuestionsTests: XCTestCase {
     func testFollowUps() {
         let play = SuggestedQuestion(id: "table.whatToPlay", label: "What should I play?", prompt: "What should I play?")
         XCTAssertEqual(SuggestedQuestions.followUps(after: play).map(\.label), ["Just tell me", "Why?", "Show an example"])
-        for id in ["table.whatToLead", "table.whatToBury", "table.shouldDeclare", "table.isSelectionGood"] {
+        for id in ["table.whatToLead", "table.whatToBury", "table.shouldDeclare", "table.isSelectionGood", "table.isBurySelectionGood"] {
             let question = SuggestedQuestion(id: id, label: "x", prompt: "x")
             XCTAssertEqual(SuggestedQuestions.followUps(after: question).count, 3, id)
         }
@@ -319,11 +369,16 @@ final class SuggestedQuestionsTests: XCTestCase {
         let nudge = SuggestedQuestions.explainHint(Kit.ladder(cards: [king], steps: 1))
         XCTAssertEqual(nudge.id, "hint.why")
         XCTAssertEqual(nudge.label, "Why is that the hint?")
-        XCTAssertEqual(nudge.prompt, "My hint (step 1 of 3, what to notice) says: \"Look at who is winning this trick.\" Why does that matter here? Don't tell me the play yet.")
+        XCTAssertEqual(nudge.prompt, "My hint (step 1 of 3, what to notice) says: \"Look at who is winning this trick.\" Why does that matter here? Don't tell me the answer yet.")
         let principle = SuggestedQuestions.explainHint(Kit.ladder(cards: [king], steps: 2))
         XCTAssertEqual(principle.prompt, "My hint (step 2 of 3, the principle) says: \"When your partner is sure to win, give them points.\" Why does that principle apply here?")
         let show = SuggestedQuestions.explainHint(Kit.ladder(cards: [king], steps: 3))
-        XCTAssertEqual(show.prompt, "My hint (step 3 of 3) suggests to play K♠: \"Partner's ace is winning, so give them your king.\" Why is that the best play here?")
+        XCTAssertEqual(show.prompt, "My hint (step 3 of 3) points to K♠: \"Partner's ace is winning, so give them your king.\" Why is that the best choice here?")
+        // The same chip sits under a bury hint, so it must not talk about playing the cards.
+        let buryCards = Array(Deck.double().prefix(8))
+        let bury = SuggestedQuestions.explainHint(Kit.ladder(cards: buryCards, steps: 3, reason: "Bury your short clubs to make a void."))
+        XCTAssertFalse(bury.prompt.contains("play"), bury.prompt)
+        XCTAssertTrue(bury.prompt.contains(buryCards.shortText), bury.prompt)
         let before = SuggestedQuestions.explainHint(Kit.ladder(cards: [king], steps: 0))
         XCTAssertEqual(before.label, "What should I notice?")
         // Very long hint text is cut to keep the prompt short; text without an end mark gets one.

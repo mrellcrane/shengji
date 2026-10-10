@@ -267,6 +267,64 @@ final class CoachContextTests: XCTestCase {
         XCTAssertGreaterThan(checks, 100)
     }
 
+    /// Non-interference: two deals that differ only in cards you can't see (the other hands, the undealt deck and
+    /// the kitty) must give exactly the same coach text and chips, card for card, at every step of the deal and
+    /// while another player buries. Unlike the face check, this also catches a leak of the second copy of a
+    /// card you hold.
+    func testHiddenCardsNeverChangeWhatTheCoachIsTold() throws {
+        var compared = 0
+        for seed in UInt64(0)..<UInt64(30) {
+            var rng = SeededGenerator(seed: seed &+ 4_242)
+            let dealer = Int(seed % 3) + 1
+            let deck = Deck.shuffled(using: &rng)
+            // Positions you never see: the other players' cards and the kitty.
+            var hidden: [Int] = []
+            for position in 0..<deck.count {
+                let seat: Int = (dealer + position) % 4
+                if position >= 100 || seat != Seats.human { hidden.append(position) }
+            }
+            var other = deck
+            let shuffledHidden = hidden.shuffled(using: &rng)
+            for (from, to) in zip(hidden, shuffledHidden) { other[to] = deck[from] }
+            XCTAssertNotEqual(other, deck)
+
+            let rank = Rank.allCases[Int(seed % 13)]
+            var first = Round(trumpRank: rank, dealer: dealer, deck: deck)
+            var second = Round(trumpRank: rank, dealer: dealer, deck: other)
+            let game = seed % 2 == 0 ? Kit.game(rounds: 2, seed: seed) : nil
+
+            func compare(_ label: String) {
+                let selection = Array(first.hands[0].suffix(2))
+                let a = CoachContext.describe(round: first, game: game, hint: nil, selection: selection, lastIllegal: nil)
+                let b = CoachContext.describe(round: second, game: game, hint: nil, selection: selection, lastIllegal: nil)
+                XCTAssertEqual(a, b, "seed \(seed), \(label)")
+                let chipsA = SuggestedQuestions.forTable(round: first, game: game, hint: nil, selection: selection, lastIllegal: nil)
+                let chipsB = SuggestedQuestions.forTable(round: second, game: game, hint: nil, selection: selection, lastIllegal: nil)
+                XCTAssertEqual(chipsA, chipsB, "seed \(seed), \(label)")
+                compared += 1
+            }
+
+            while true {
+                XCTAssertEqual(first.hands[0], second.hands[0])
+                // Only you declare (others' declarations would show their cards); the same choice in both deals.
+                let options = first.availableDeclarations(for: Seats.human)
+                if !options.isEmpty, Int.random(in: 0..<10, using: &rng) == 0, let choice = options.randomElement(using: &rng) {
+                    try first.declare(choice)
+                    try second.declare(choice)
+                }
+                compare("dealt \(first.hands[0].count)")
+                if first.dealNext() == nil { break }
+                second.dealNext()
+            }
+            // Burying by another player. Without a declaration the kitty flip would show a (different) kitty card.
+            guard first.declaration != nil else { continue }
+            first.finishDealing()
+            second.finishDealing()
+            compare("burying")
+        }
+        XCTAssertGreaterThan(compared, 2_000)
+    }
+
     func testDealerSeesTheKittyTheyHoldAndBuried() throws {
         let kitty = [Kit.c(.king, .clubs), Kit.c(.ten, .diamonds), Kit.c(.five, .spades)]
         let deck = EngineTestSupport.deck(hands: [[], [], [], []], kitty: kitty, firstSeat: 0, seed: 4)
@@ -463,7 +521,7 @@ final class CoachContextTests: XCTestCase {
         let after = CoachContext.describe(round: round, game: nil, hint: nil, selection: [], lastIllegal: nil)
         XCTAssertTrue(after.contains("Current declaration: You declare ♠ (pair of 5♠), so ♠ would be the trump suit."), after)
         XCTAssertNotNil(line("Trump order", in: after))
-        XCTAssertTrue(after.contains("You can't declare right now"), after)
+        XCTAssertTrue(after.contains("Your declaration is the current one, and it can't be strengthened any further."), after)
     }
 
     func testTeamsLevelsAndPoints() {
@@ -472,6 +530,8 @@ final class CoachContextTests: XCTestCase {
         XCTAssertTrue(text.contains("Round 3 of this game. Levels: your team 4, East and West 7"), text)
         XCTAssertTrue(text.contains("Dealer: Partner. Your team are the declarers; East and West are the defenders."), text)
         XCTAssertTrue(text.contains("Points: the defenders (East and West) have 35 so far; 80 takes over the deal (45 more needed)."), text)
+        // The played total is points, not a number of cards.
+        XCTAssertTrue(text.contains("Points in the cards played so far: 0 of 200."), text)
 
         let defending = Kit.view(dealer: 3, defenderPoints: 90)
         let defendingText = CoachContext.describe(view: defending, hint: nil, selection: [], lastIllegal: nil)
@@ -551,6 +611,103 @@ final class CoachContextTests: XCTestCase {
         let text = CoachContext.describe(view: view, hint: nil, selection: [], lastIllegal: IllegalAttempt(cards: [hand[0]], error: error))
         XCTAssertEqual(line("You just tried", in: text),
                        "You just tried to play 9♣ and it was not allowed. Reason: " + error.explanation)
+    }
+
+    /// The app reports a rejected bury as an illegal attempt too: it must not be described as a play.
+    func testRejectedBuryIsDescribedAsABury() throws {
+        let deck = EngineTestSupport.deck(firstSeat: 0, seed: 41)
+        var round = Round(trumpRank: .two, dealer: 0, deck: deck)
+        round.dealAll()
+        round.finishDealing()
+        let seven = Array(round.trump.sorted(round.hands[0]).prefix(7))
+        let error: RoundError
+        do {
+            try round.bury(seven)
+            return XCTFail("burying 7 cards must fail")
+        } catch let rejected as RoundError {
+            error = rejected
+        }
+        let attempt = IllegalAttempt(cards: seven, error: error)
+        let text = CoachContext.describe(round: round, game: nil, hint: nil, selection: seven, lastIllegal: attempt)
+        let attemptLine = try XCTUnwrap(line("You just tried", in: text), text)
+        XCTAssertEqual(attemptLine, "You just tried to bury \(round.trump.sorted(seven).shortText) and it was not allowed. Reason: "
+                       + error.explanation)
+        XCTAssertEqual(line("Cards you have selected", in: text),
+                       "Cards you have selected (not buried yet): \(round.trump.sorted(seven).shortText).")
+        // A bury hint is about cards to bury, not a play.
+        let buryHint = Kit.ladder(cards: seven, steps: 3, reason: "Bury your short clubs to make a void.")
+        let hinted = CoachContext.describe(round: round, game: nil, hint: buryHint, selection: [], lastIllegal: nil)
+        XCTAssertEqual(line("Hint shown", in: hinted),
+                       "Hint shown to you (step 3 of 3, the cards to bury): Bury your short clubs to make a void. Concept: Feed points. "
+                       + "Suggested cards: \(round.trump.sorted(seven).shortText).")
+
+        // A rejected declaration is a declaration, a rejected follow is a play.
+        let declaring = Kit.view(phase: .dealing, dealer: nil, hand: [Kit.c(.two, .spades)], turn: nil)
+        let declared = CoachContext.describe(view: declaring, hint: nil, selection: [],
+                                             lastIllegal: IllegalAttempt(cards: [Kit.c(.two, .spades)], error: .invalidDeclaration))
+        XCTAssertTrue(declared.contains("You just tried to declare with 2♠ and it was not allowed."), declared)
+        let playing = Kit.view(hand: [Kit.c(.two, .spades)], leader: 0, turn: 0)
+        let played = CoachContext.describe(view: playing, hint: nil, selection: [Kit.c(.two, .spades)],
+                                           lastIllegal: IllegalAttempt(cards: [Kit.c(.two, .spades)], error: .notYourTurn))
+        XCTAssertTrue(played.contains("You just tried to play 2♠ and it was not allowed."), played)
+        XCTAssertEqual(line("Cards you have selected", in: played), "Cards you have selected (not played yet): 2♠.")
+    }
+
+    /// Online bidding: while another player is choosing, you can't declare because it isn't your turn,
+    /// not because your cards are too weak.
+    func testOnlineBiddingExplainsWhyYouCantDeclareNow() {
+        let hand = Kit.pair(.two, .spades) + [Kit.c(.five, .clubs)]
+        let waiting = Kit.view(phase: .bidding, trump: Trump(rank: .two, suit: nil), dealer: nil, hand: hand, turn: nil,
+                               bidding: SeatView.Bidding(turn: 3, history: [], available: []))
+        let text = CoachContext.describe(view: waiting, hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertFalse(text.contains("no rank cards or jokers"), text)
+        XCTAssertTrue(text.contains("It is West's turn to declare or pass; you can declare when your turn comes."), text)
+
+        let mine = Kit.view(phase: .bidding, trump: Trump(rank: .two, suit: nil), dealer: nil, hand: hand, turn: nil,
+                            bidding: SeatView.Bidding(turn: 0, history: [], available: [
+                                Declaration(player: 0, cards: [hand[0]], suit: .spades, strength: 1),
+                                Declaration(player: 0, cards: Array(hand.prefix(2)), suit: .spades, strength: 2),
+                            ]))
+        // Your turn, nothing to declare with: pass.
+        let pass = Kit.view(phase: .bidding, trump: Trump(rank: .two, suit: nil), dealer: nil, hand: [Kit.c(.five, .clubs)], turn: nil,
+                            bidding: SeatView.Bidding(turn: 0, history: [], available: []))
+        XCTAssertTrue(CoachContext.describe(view: pass, hint: nil, selection: [], lastIllegal: nil)
+            .contains("You can't declare yet: you need a 2 (any suit) or a pair of matching jokers. So pass this turn."))
+
+        let mineText = CoachContext.describe(view: mine, hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertTrue(mineText.contains("You could declare: ♠ as trump by showing one 2♠; ♠ as trump by showing a pair of 2♠."), mineText)
+
+        // Offline, holding the current declaration: you may only strengthen it.
+        let held = Declaration(player: 0, cards: [hand[0]], suit: .spades, strength: 1)
+        let holding = TableDescription(view: Kit.view(phase: .dealing, trump: Trump(rank: .two, suit: .spades), dealer: nil,
+                                                      hand: [hand[0], hand[2]], turn: nil, history: [held]),
+                                       levelsKnown: false, available: [], dealingComplete: false)
+        let holdingText = holding.text(hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertTrue(holdingText.contains("Your declaration is the current one. You can only strengthen it with a pair of the same card."),
+                      holdingText)
+
+        // Nobody has declared and you hold no 7 and no joker pair: there is no "current declaration" to beat.
+        let deck = EngineTestSupport.deck(hands: [[Kit.c(.three, .spades), Kit.c(.four, .hearts)], [], [], []], firstSeat: 0, seed: 7)
+        var round = Round(trumpRank: .seven, dealer: nil, deck: deck)
+        round.dealNext()
+        let early = CoachContext.describe(round: round, game: nil, hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertTrue(early.contains("You can't declare yet: you need a 7 (any suit) or a pair of matching jokers."), early)
+        XCTAssertFalse(early.contains("current declaration"), early)
+    }
+
+    /// A seat view comes from the server online: odd data must never crash the coach.
+    func testMalformedSeatViewsDoNotCrash() {
+        let card = Kit.c(.three, .spades)
+        let plays = (0..<6).map { Play(player: $0 % 4, cards: [card]) }
+        var odd = Kit.view(hand: [card], currentTrick: plays, leader: 9, turn: -3, levels: [.two])
+        odd.handCounts = []
+        odd.tricks = [TrickRecord(plays: [], winner: 7, points: -5), TrickRecord(plays: plays, winner: -2, points: 0)]
+        let text = CoachContext.describe(view: odd, hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertNotNil(line("Phase:", in: text))
+        XCTAssertLessThanOrEqual(text.utf16.count, CoachContext.maxTableCharacters)
+        let chips = SuggestedQuestions.forTable(view: odd, hint: nil, selection: [card], lastIllegal: nil)
+        XCTAssertTrue((3...5).contains(chips.count))
+        for index in odd.tricks.indices { _ = MoveDetector.moves(inTrick: index, of: odd) }
     }
 
     func testFinishedRoundShowsResultKittyAndNextStep() throws {
