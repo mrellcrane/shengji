@@ -117,6 +117,10 @@ public enum BotLevel: String, Codable, CaseIterable, Sendable {
 /// the opponent on the right East and the one on the left West, as the coach context names them.
 ///
 /// The `Round` methods build `round.seatView(for: seat)` and decide from it.
+///
+/// The online server plays bots with a TypeScript port of these choices (server/src/bots), held to
+/// them by the `bots.json` vectors: after changing a choice, regenerate the vectors (ShengjiVectors)
+/// and bring the port in line (server/test/bots.parity.test.ts).
 public struct Bot: Sendable {
     public var seat: Int
     public var level: BotLevel

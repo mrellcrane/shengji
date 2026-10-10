@@ -114,8 +114,9 @@ Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon 
   `Action` = `{"type": "bid", "declaration": Declaration}` | `{"type": "pass"}` | `{"type": "bury", "cards": [ids]}` |
   `{"type": "play", "cards": [ids]}`.
   `Outcome` = `{"type": "throwFailed", "forced": [ids], "blocker": seat}` (viewer-relative) when a throw failed.
-  After every human action the server runs bot turns until a human must act. When a round ends the server records
-  it and immediately deals the next round (the finished round's summary is in `view.lastRoundSummary`).
+  After every human action the server runs bot turns until a human must act. Bots play exactly like the app's bots of
+  their level, each deciding from its own seat's view (bids from `view.bidding.available`). When a round ends the
+  server records it and immediately deals the next round (the finished round's summary is in `view.lastRoundSummary`).
   Details: send a bid's declaration back as it appears in `view.bidding.available` (its `player` is 0, you; it may be
   left out; `suit` is left out or `null` for a joker pair). Cards are matched by id. The checks run in this order:
   `403 not_seated`, `409 stale`, `403 not_your_turn` (also when the game is over: "The game is over."), then the

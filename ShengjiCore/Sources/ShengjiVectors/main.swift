@@ -1,5 +1,5 @@
-// ShengjiVectors: writes JSON test vectors from the Swift engine so the TypeScript engine in
-// server/ can prove it behaves identically (DESIGN.md, Online multiplayer).
+// ShengjiVectors: writes JSON test vectors from the Swift engine and bots so the TypeScript engine
+// and bots in server/ can prove they behave identically (DESIGN.md, Online multiplayer).
 //
 //   cd ShengjiCore && swift run ShengjiVectors ../server/test/vectors
 //
@@ -30,6 +30,7 @@ let outputs: [(name: String, make: () -> [(String, JSON)])] = [
     ("games.json", { GameVectors.make() }),
     ("edges.json", { EdgeVectors.make(count: 200) }),
     ("views.json", { ViewVectors.make(games: 20) }),
+    ("bots.json", { BotVectors.make(online: 240, offline: 60, deals: 400, ruffRounds: 80) }),
 ]
 
 var total = 0

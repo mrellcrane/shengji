@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as E from "../src/engine/index.ts";
 import type { Card, SeatView } from "../src/engine/index.ts";
-import { chooseBid, chooseBury, chooseFollow, chooseLead } from "../src/game/bots.ts";
+import { chooseBotAction } from "../src/game/bots.ts";
 import type { GameSummary } from "../src/game/summary.ts";
 import { checkSeatView } from "../scripts/viewcheck.ts";
 import { buildDeck } from "./support.ts";
@@ -42,15 +42,11 @@ async function read(cloud: Cloud, player: Player, gameId: string): Promise<Table
 
 const isMyTurn = (view: SeatView) => view.bidding?.turn === 0 || view.turn === 0;
 
-/** What a sensible person would do from this view (the bots' choices, made from the view only). */
+/** What a sensible person would do from this view (the standard bot's choice, made from the view only). */
 function moveFrom(view: SeatView): Record<string, unknown> {
-  if (view.bidding !== null) {
-    const choice = chooseBid(view.bidding.available, view.hand);
-    return choice === null ? { type: "pass" } : { type: "bid", declaration: choice };
-  }
-  if (view.phase === "burying") return { type: "bury", cards: chooseBury(view.hand, view.trump) };
-  if (view.currentTrick.length === 0) return { type: "play", cards: chooseLead(view.hand, view.trump) };
-  return { type: "play", cards: chooseFollow({ hand: view.hand, trump: view.trump, currentTrick: view.currentTrick, seat: 0 }) };
+  const action = chooseBotAction(view, "standard");
+  assert.ok(action !== null, `no move from a view in phase ${view.phase} on my turn`);
+  return action;
 }
 
 /** Plays for every person until `stop` says so; returns the number of human moves. */
@@ -132,7 +128,7 @@ test("creating a game: seats, membership and target are checked; bidding opens a
   assert.equal(forMei.version, 1);
 });
 
-test("a whole round with bots: bidding, burying, 25 tricks, then the next round is dealt at once", async () => {
+test("a whole round with bots: bidding, burying, every trick, then the next round is dealt at once", async () => {
   const cloud = makeCloud({ seed: 42 });
   const mei = await cloud.signIn("Mei");
   const clubId = await clubOf(cloud, mei, []);
@@ -142,7 +138,7 @@ test("a whole round with bots: bidding, burying, 25 tricks, then the next round 
     phases.add(t.view.phase);
     return t.view.roundNumber === 2;
   });
-  assert.ok(moves >= 25 && moves < 40, `${moves} moves`);
+  assert.ok(moves >= 10 && moves < 40, `${moves} moves`);
   assert.deepEqual([...phases].sort(), ["bidding", "burying", "playing"].filter((p) => phases.has(p)).sort());
   assert.ok(phases.has("playing"));
   const summary = last.view.lastRoundSummary;
@@ -162,7 +158,13 @@ test("a whole round with bots: bidding, burying, 25 tricks, then the next round 
   assert.deepEqual(log.map((e) => e.version), Array.from({ length: last.version }, (_, i) => i + 1));
   assert.equal(log.filter((e) => e.kind === "deal").length, 1);
   assert.equal(log.filter((e) => e.kind === "action").length, moves);
-  assert.ok(log.filter((e) => e.kind === "bot").length > 60);
+  assert.ok(log.filter((e) => e.kind === "bot").length > 30);
+  // Every trick of round 1: one play per seat, Mei's among them (fewer than 25 tricks when pairs,
+  // tractors or throws are led).
+  const plays = log.filter((e) => (e.data as { type?: string }).type === "play");
+  const meiPlays = plays.filter((e) => e.kind === "action").length;
+  assert.equal(plays.length, 4 * meiPlays);
+  assert.ok(meiPlays >= 10 && meiPlays <= 25, `${meiPlays} tricks`);
   assert.ok((cloud.broadcasts.get(gameId) ?? 0) >= moves, "live updates after every change");
 
   const listed = await cloud.call("GET", "/v1/games", { token: mei.token });
@@ -245,8 +247,10 @@ test("a failed throw is played as its forced part and reported with a viewer-rel
   const c = (rank: E.Rank, suit: E.Suit, copy = 0): Card => E.makeCard(rank, suit, copy);
   const kitty = [c(14, 1), c(3, 2), c(4, 2), c(6, 3), c(7, 3), c(8, 3), c(9, 2), c(3, 3)];
   const meiCards = [c(14, 0), c(12, 0), ...[3, 4, 6, 7, 8, 9].map((r) => c(r as E.Rank, 2, 1))];
-  const deck = buildDeck([meiCards, [c(13, 0), c(13, 0, 1)], [], []], kitty, 0, 5);
-  // Keep every 2 and joker out of Mei's hand so that she cannot declare: move them to seat 3.
+  // One copy of every 2 and joker for East, the other for North: Mei has nothing to declare with,
+  // and the beginner bots, who only declare with a pair, have no pair.
+  const ranks = (copy: number): Card[] => [c(2, 0, copy), c(2, 1, copy), c(2, 2, copy), c(2, 3, copy), E.smallJoker(copy), E.bigJoker(copy)];
+  const deck = buildDeck([meiCards, [c(13, 0), c(13, 0, 1), ...ranks(0)], ranks(1), []], kitty, 0, 5);
   const cloud = makeCloud({ decks: [deck] });
   const mei = await cloud.signIn("Mei");
   const clubId = await clubOf(cloud, mei, []);

@@ -9,7 +9,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "ShengjiCore"),
-        // Writes the JSON parity vectors for the TypeScript engine in server/:
+        // Writes the JSON parity vectors for the TypeScript engine and bots in server/:
         //   swift run ShengjiVectors ../server/test/vectors
         // Not part of the library product, so the iOS app is unaffected.
         .executableTarget(name: "ShengjiVectors", dependencies: ["ShengjiCore"]),
