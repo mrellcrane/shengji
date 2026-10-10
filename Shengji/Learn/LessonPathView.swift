@@ -16,6 +16,7 @@ struct LessonLaunch: Identifiable {
 @MainActor
 struct LessonPathView: View {
     @Environment(LearningStore.self) private var store
+    @Environment(AchievementStore.self) private var achievements
     @Environment(AppRouter.self) private var router
     @State private var activeLesson: LessonLaunch?
     @State private var lockedLesson: Lesson?
@@ -63,6 +64,7 @@ struct LessonPathView: View {
         .sheet(isPresented: $showsSettings) {
             SettingsSheet()
                 .environment(store)
+                .environment(achievements)
         }
         .alert("Lesson locked", isPresented: $showsLockedAlert, presenting: lockedLesson) { _ in
             Button("OK", role: .cancel) {}
@@ -117,10 +119,13 @@ private struct LearnHeader: View {
             HStack(spacing: 12) {
                 LearnStreakBadge(days: store.streak(now: now))
                 Spacer(minLength: 8)
-                Text("\(store.progress.completedLessons.count) of \(Curriculum.lessons.count) lessons")
+                Text("\(completedCount) of \(Curriculum.lessons.count) lessons")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
+            ProgressView(value: Double(completedCount), total: Double(max(Curriculum.lessons.count, 1)))
+                .tint(Theme.correct)
+                .accessibilityLabel("\(completedCount) of \(Curriculum.lessons.count) lessons completed")
             if due > 0 {
                 dueBanner(due)
             }
@@ -128,6 +133,11 @@ private struct LearnHeader: View {
                 upNextCard(next)
             }
         }
+    }
+
+    /// Lessons passed that are still in the course.
+    private var completedCount: Int {
+        min(store.progress.completedLessons.count, Curriculum.lessons.count)
     }
 
     /// The first lesson that is open but not passed yet, once two or more lessons are done.

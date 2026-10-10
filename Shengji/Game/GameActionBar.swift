@@ -1,7 +1,7 @@
 import SwiftUI
 import ShengjiCore
 
-/// Hint, Clear, a short status and the main action (Play, Bury, Continue...).
+/// Hint (Hint, Another hint, Show me), Clear, a short status and the main action (Play, Bury, Continue...).
 @MainActor
 struct GameActionBar: View {
     let controller: GameController
@@ -12,11 +12,13 @@ struct GameActionBar: View {
                 Button {
                     controller.showHint()
                 } label: {
-                    Label("Hint", systemImage: "lightbulb")
+                    Label(controller.hintButtonTitle, systemImage: "lightbulb")
+                        .lineLimit(1)
                 }
                 .buttonStyle(.bordered)
                 .tint(Color.white)
                 .disabled(!controller.canHint)
+                .accessibilityHint("Each tap gives a little more help.")
             }
             Button {
                 controller.clearSelection()
@@ -133,10 +135,12 @@ struct GameDeclareRow: View {
     }
 }
 
-/// The coach's message: icon, text (with **bold**) and the concept tag.
+/// The coach's message: icon, text (with **bold**) and the concept tag. Under a hint, a "Why?" chip
+/// asks the coach why that hint applies.
 @MainActor
 struct GameCoachBannerView: View {
     let message: GameCoachMessage?
+    var onWhy: (() -> Void)? = nil
 
     var body: some View {
         Group {
@@ -167,21 +171,43 @@ struct GameCoachBannerView: View {
                     .font(.subheadline)
                     .foregroundStyle(Color.white)
                     .fixedSize(horizontal: false, vertical: true)
-                if let concept = message.concept {
-                    Text(concept)
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Theme.cardInk)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(color(for: message.kind)))
-                        .accessibilityLabel("Idea: \(concept)")
+                if message.concept != nil || onWhy != nil {
+                    HStack(spacing: 8) {
+                        if let concept = message.concept {
+                            Text(concept)
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(Theme.cardInk)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(color(for: message.kind)))
+                                .accessibilityLabel("Idea: \(concept)")
+                        }
+                        if let onWhy {
+                            whyChip(onWhy)
+                        }
+                    }
                 }
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: onWhy == nil ? .combine : .contain)
+    }
+
+    private func whyChip(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label("Why?", systemImage: "bubble.left.and.text.bubble.right.fill")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.white.opacity(0.18)))
+                .overlay(Capsule().strokeBorder(Color.white.opacity(0.5), lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Why? Ask the coach about this hint")
     }
 
     private func icon(for kind: GameCoachMessage.Kind) -> String {

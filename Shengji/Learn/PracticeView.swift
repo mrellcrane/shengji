@@ -75,6 +75,11 @@ struct PracticeRunner: View {
     let onAnswer: (Int, Double) -> Void
     let onContinue: () -> Void
 
+    /// The coach chat about the answered question (a fresh chat for each question).
+    @State private var coach = CoachConversation.live()
+    @State private var showsCoach = false
+    @State private var coachQuestionNumber: Int? = nil
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -107,6 +112,9 @@ struct PracticeRunner: View {
                 continueBar
             }
         }
+        .sheet(isPresented: $showsCoach) {
+            CoachSheet(conversation: coach)
+        }
     }
 
     private var continueBar: some View {
@@ -116,9 +124,37 @@ struct PracticeRunner: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            LearnPrimaryButton(title: model.remainingCount == 0 ? "Finish" : "Continue", action: onContinue)
+            HStack(spacing: 10) {
+                Button(action: askWhy) {
+                    Label("Ask why", systemImage: "bubble.left.and.text.bubble.right.fill")
+                        .font(.headline)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .tint(Theme.usColor)
+                .accessibilityHint("Opens a chat with the coach about this question.")
+                LearnPrimaryButton(title: model.remainingCount == 0 ? "Finish" : "Continue", action: onContinue)
+            }
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// Opens the coach on the answered question and asks why straight away (once per question).
+    private func askWhy() {
+        guard let question = model.question else { return }
+        let chips = SuggestedQuestions.forQuestion(question, answeredCorrectly: model.isCorrect)
+        let isNewQuestion = coachQuestionNumber != model.questionNumber
+        if isNewQuestion {
+            coach.newChat()
+            coachQuestionNumber = model.questionNumber
+        }
+        coach.prepare(scope: .question,
+                      context: CoachContext.describe(question: question, chosenAnswer: model.selectedChoice),
+                      suggestions: chips)
+        if isNewQuestion, let why = chips.first {
+            coach.ask(why)
+        }
+        showsCoach = true
     }
 }
 

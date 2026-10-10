@@ -175,7 +175,9 @@ opens straight into a deterministic scene so CI can capture simulator screenshot
 `learn` (lesson path), `lesson` (lesson 4, a cards page), `predict` (a lesson predict page, answered),
 `review` (review tab), `quiz` (a practice question answered, showing feedback), `game` (table mid-trick, seed 7,
 Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `result` (round result sheet),
-`rules` (rules reference). Without the argument the app starts normally. Scene setup must never touch saved progress.
+`rules` (rules reference), `coach` (the `game` table with the coach sheet open on a canned chat, no network),
+`achievements` (the achievements screen with sample progress). Without the argument the app starts normally.
+Scene setup must never touch saved progress.
 
 ## Work ownership (for parallel development)
 
@@ -202,6 +204,15 @@ Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `r
   `LearningStore(ephemeral: DemoScene.current != nil)`, inject it, TabView with Learn (`LessonPathView`),
   Review (`ReviewView`), Play (`PlayHomeView`), Rules (`RulesView`); initial tab `DemoScene.current?.tab ?? .learn`.
 - Saved game: game UI persists the in-progress game as JSON in Application Support (`savedGame.json`).
+- `AchievementStore` (`Shengji/Achievements/`): `@MainActor @Observable`, persisted `AchievementProgress` (JSON in
+  UserDefaults, `achievements.v1`; ephemeral in demo scenes), injected next to `LearningStore` by `ShengjiApp`
+  (`@Environment(AchievementStore.self)`). Journey counts follow `LearningStore.onProgressChange`; the table reports
+  moves through `GameController.onMoves` / `onGameProgress` (`connectAchievements`) and shows the store's toasts
+  (setting `play.moveCelebrations`, held during "who wins?" prompts).
+- Coach client (`Shengji/Coach/`): `CoachClient` (SSE over `URLSession.bytes`, device id in UserDefaults
+  `coach.deviceID`), `CoachConversation` (SwiftUI-free; keeps requests within the proxy's limits) and `CoachSheet`.
+  Entry points: the table's coach button and the hint banner's "Why?", "Ask the coach" on lesson pages, "Ask why"
+  after a practice answer. Demo scenes use an offline conversation and never touch the network.
 
 ## Coach (Claude-powered tutor)
 

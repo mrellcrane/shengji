@@ -4,6 +4,10 @@ import Foundation
 /// Without the argument `DemoScene.current` is nil and the app starts normally.
 enum DemoScene: String, CaseIterable {
     case learn, lesson, predict, review, quiz, game, dealing, result, rules
+    /// The `game` table with the coach sheet open on a canned chat (never touches the network).
+    case coach
+    /// The Play tab's achievements screen with sample progress.
+    case achievements
 
     static var current: DemoScene? {
         UserDefaults.standard.string(forKey: "ScreenshotScene").flatMap(DemoScene.init(rawValue:))
@@ -14,7 +18,7 @@ enum DemoScene: String, CaseIterable {
         switch self {
         case .learn, .lesson, .predict: return .learn
         case .review, .quiz: return .review
-        case .game, .dealing, .result: return .play
+        case .game, .dealing, .result, .coach, .achievements: return .play
         case .rules: return .rules
         }
     }

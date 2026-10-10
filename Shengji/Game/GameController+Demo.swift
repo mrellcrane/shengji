@@ -13,10 +13,10 @@ extension GameController {
     /// The table for a Play-tab demo scene (nil for scenes of other tabs).
     static func demo(_ scene: DemoScene) -> GameController? {
         switch scene {
-        case .game: return playingDemo()
+        case .game, .coach: return playingDemo()
         case .dealing: return dealingDemo()
         case .result: return resultDemo()
-        case .learn, .lesson, .predict, .review, .quiz, .rules: return nil
+        case .learn, .lesson, .predict, .review, .quiz, .rules, .achievements: return nil
         }
     }
 
@@ -28,7 +28,8 @@ extension GameController {
         return controller
     }
 
-    /// Mid-round, at least 3 tricks done, your turn with 1 or 2 bot plays on the table, Guided, a hint shown.
+    /// Mid-round, at least 3 tricks done, your turn with 1 or 2 bot plays on the table, Guided, a hint shown
+    /// (the ladder's second step, so the concept tag shows and the button offers "Show me").
     static func playingDemo() -> GameController {
         var last: GameController?
         for seed in demoSeeds {
@@ -39,6 +40,7 @@ extension GameController {
             last = controller
             if controller.isPlayingDemoMoment {
                 controller.coachLevel = .guided
+                controller.showHint()
                 controller.showHint()
                 controller.predictionsEnabled = true
                 return controller

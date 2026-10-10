@@ -1,9 +1,9 @@
 import SwiftUI
 import ShengjiCore
 
-/// Sheets the table can show from its menu.
+/// Sheets the table can show from its menu, the coach button and the hint banner.
 enum GameTableSheet: String, Identifiable {
-    case rules, lastTrick
+    case rules, lastTrick, coach
 
     var id: String { rawValue }
 }
@@ -16,9 +16,23 @@ struct GameTableView: View {
     var onExit: () -> Void
 
     @Environment(LearningStore.self) private var learning
+    @Environment(AchievementStore.self) private var achievements
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sheet: GameTableSheet? = nil
+    /// The chat with the coach, kept for the whole visit to the table.
+    @State private var coach: CoachConversation
+    /// Measured, so celebration toasts sit just under the top bar.
+    @State private var topBarHeight: CGFloat = 76
+    /// The `coach` demo scene opens the sheet on this canned chat.
+    private let demoCoach: CoachConversation?
+
+    init(controller: GameController, demoCoach: CoachConversation? = nil, onExit: @escaping () -> Void) {
+        _controller = Bindable(wrappedValue: controller)
+        self.onExit = onExit
+        self.demoCoach = demoCoach
+        _coach = State(initialValue: demoCoach ?? CoachConversation.live())
+    }
 
     var body: some View {
         ZStack {
@@ -27,22 +41,33 @@ struct GameTableView: View {
                 GameTopBar(controller: controller, coachLevel: coachBinding,
                            onShowRules: { sheet = .rules },
                            onShowLastTrick: { sheet = .lastTrick },
+                           onAskCoach: { openCoach(explainingHint: false) },
                            onQuit: quit)
+                    .background(topBarReader)
                 GameTableArea(controller: controller)
                     .frame(maxHeight: .infinity)
-                GameCoachArea(controller: controller)
+                GameCoachArea(controller: controller) {
+                    openCoach(explainingHint: true)
+                }
                 GameActionBar(controller: controller)
                 GameHandView(controller: controller)
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 4)
             resultOverlay
+            toastLayer
         }
         .sheet(item: $sheet) { item in
             sheetContent(item)
         }
         .onAppear(perform: appear)
-        .onDisappear { controller.tearDown() }
+        .onDisappear {
+            controller.tearDown()
+            achievements.clearToasts()
+        }
+        .task {
+            await openDemoCoachIfNeeded()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 if sheet == nil { controller.start() }
@@ -55,7 +80,7 @@ struct GameTableView: View {
             if !controller.isDemo { controller.coachLevel = level }
         }
         .onChange(of: sheet) { _, newSheet in
-            // The bots wait while you read the rules or review the last trick.
+            // The bots wait while you read the rules, review the last trick or talk to the coach.
             if newSheet == nil {
                 controller.start()
             } else {
@@ -63,6 +88,26 @@ struct GameTableView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: controller.isShowingResult)
+    }
+
+    /// Celebrations just under the top bar: above the table and the result panel, never over your hand.
+    private var toastLayer: some View {
+        VStack(spacing: 0) {
+            AchievementToastLayer(store: achievements, canShow: controller.stage != .predicting)
+                .padding(.top, topBarHeight + 4)
+                .padding(.horizontal, 16)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var topBarReader: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear { topBarHeight = proxy.size.height }
+                .onChange(of: proxy.size.height) { _, height in
+                    topBarHeight = height
+                }
+        }
     }
 
     @ViewBuilder private var resultOverlay: some View {
@@ -94,7 +139,32 @@ struct GameTableView: View {
                           trickNumber: controller.round.tricks.count,
                           trump: controller.round.trump,
                           explanation: lastTrickExplanation)
+        case .coach:
+            CoachSheet(conversation: coach)
         }
+    }
+
+    /// Opens the coach on the table as it is now (fresh chips and context each time). From the hint
+    /// banner's "Why?", it asks why that hint applies straight away.
+    private func openCoach(explainingHint: Bool) {
+        guard controller.canAskCoach else { return }
+        if demoCoach == nil {
+            controller.prepareCoach(coach)
+            if explainingHint, let question = controller.explainHintQuestion {
+                let lastAsked = coach.messages.last(where: { $0.role == .user })?.sentText
+                if lastAsked != question.prompt {
+                    coach.ask(question)
+                }
+            }
+        }
+        sheet = .coach
+    }
+
+    /// The `coach` demo scene: the sheet opens over the table once it has appeared.
+    private func openDemoCoachIfNeeded() async {
+        guard demoCoach != nil, sheet == nil else { return }
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        sheet = .coach
     }
 
     private var lastTrickExplanation: String? {
@@ -115,11 +185,13 @@ struct GameTableView: View {
     private func appear() {
         if controller.isDemo {
             controller.disconnectLearning()
+            controller.disconnectAchievements()
         } else {
             controller.connectLearning(learning)
+            controller.connectAchievements(achievements)
             controller.coachLevel = learning.coachLevel
         }
-        controller.start()
+        if sheet == nil { controller.start() }
     }
 
     private func quit() {
@@ -141,6 +213,8 @@ struct GameFeltBackground: View {
 @MainActor
 struct GameCoachArea: View {
     let controller: GameController
+    /// "Why?" under a hint: ask the coach why that hint applies.
+    var onWhy: (() -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -150,7 +224,8 @@ struct GameCoachArea: View {
                 GamePredictionPanel { seat in controller.answerPrediction(seat) }
                     .transition(AnyTransition.opacity)
             } else {
-                GameCoachBannerView(message: controller.banner)
+                GameCoachBannerView(message: controller.banner,
+                                    onWhy: controller.isShowingHint && controller.canAskCoach ? onWhy : nil)
             }
             if !controller.availableDeclarations.isEmpty {
                 GameDeclareRow(declarations: controller.availableDeclarations,
