@@ -44,7 +44,7 @@ struct OnlineTableView: View {
             Button("End game", role: .destructive, action: endGame)
             Button("Keep playing", role: .cancel) {}
         } message: {
-            Text("Only the player who started it can end it.")
+            Text("It ends for everyone at the table, and can't be undone.")
         }
         .onAppear(perform: appear)
         .onDisappear(perform: disappear)

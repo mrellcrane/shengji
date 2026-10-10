@@ -9,7 +9,7 @@ enum BotBurying {
     /// Nil unless the viewer is the dealer, burying, with at least 8 cards (the kitty included).
     static func decide(for bot: Bot, view: SeatView) -> BotDecision? {
         guard view.phase == .burying, view.dealer == 0, view.hand.count >= Round.kittySize else { return nil }
-        let table = BotTable(view: view, compassSeat: bot.normalizedSeat, tuning: bot.tuning)
+        let table = BotTable(view: view, compassSeat: bot.normalizedSeat, usesPlayerNames: bot.usesPlayerNames, tuning: bot.tuning)
         switch bot.level {
         case .beginner: return beginner(table)
         case .standard: return standard(table)

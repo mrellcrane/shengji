@@ -100,9 +100,16 @@ test("summaries are viewer-relative, and someone not seated sees seat order from
   const finished = summarize({ ...snapshot, status: "finished", turn: null, winner: 1 }, 1);
   assert.deepEqual([finished.winnerTeam, finished.yourTurn, finished.turn], [0, false, null]);
   assert.deepEqual(Object.keys(sam).sort(), [
-    "clubId", "createdAt", "id", "lastEvent", "phase", "players", "roundNumber", "status", "targetRank", "teamLevels",
-    "turn", "updatedAt", "winnerTeam", "yourTurn",
+    "clubId", "createdAt", "id", "lastEvent", "phase", "players", "roundNumber", "startedByYou", "status", "targetRank",
+    "teamLevels", "turn", "updatedAt", "winnerTeam", "yourTurn",
   ]);
+});
+
+test("only the player who started a game is told so (only they can end it)", () => {
+  const creator = players.findIndex((p) => p.userID === snapshot.createdBy);
+  assert.ok(creator >= 0);
+  for (const seat of [0, 1, 2, 3]) assert.equal(summarize(snapshot, seat).startedByYou, seat === creator, `seat ${seat}`);
+  assert.equal(summarize(snapshot, null).startedByYou, false);
 });
 
 test("event lines name people (\"You\" for the viewer) and never more than the event shows", () => {

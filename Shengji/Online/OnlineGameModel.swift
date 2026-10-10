@@ -90,6 +90,9 @@ final class OnlineGameModel: Identifiable {
     private(set) var illegalAttempt: IllegalAttempt?
     private(set) var lastNudge: Date?
     var coachLevel: CoachLevel = .guided
+    /// Reminders reach the other player (false while the server sends no notifications: a reminder
+    /// would reach nobody, so the table doesn't offer one).
+    var canRemind = true
 
     /// Hints for your play or bury from a seat view (nil: no Hint button). `OnlineSession.makeTable`
     /// plugs in `Bot(seat: 0).decide(view:)`.
@@ -691,7 +694,7 @@ final class OnlineGameModel: Identifiable {
     // MARK: Nudging
 
     var canNudge: Bool {
-        guard !isGameOver, !isGone, let view, let seat = OnlineGameText.actingSeat(view), seat != Seats.human,
+        guard canRemind, !isGameOver, !isGone, let view, let seat = OnlineGameText.actingSeat(view), seat != Seats.human,
               view.players.indices.contains(seat), !view.players[seat].isBot else { return false }
         if let lastNudge, Date().timeIntervalSince(lastNudge) < OnlineGameModel.nudgeInterval { return false }
         return true

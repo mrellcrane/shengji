@@ -17,6 +17,8 @@ struct OnlineNewGameSheet: View {
     @State private var length: GameLengthOption = .toTen
     @State private var isCreating = false
     @State private var didSetDefaults = false
+    /// The seats as `resetSeatsForClub` chose them (to tell whether you have changed any).
+    @State private var defaultSeats: [OnlineSeatChoice] = []
 
     private var club: OnlineClub? { session.club(id: clubID) }
 
@@ -57,6 +59,7 @@ struct OnlineNewGameSheet: View {
             }
         }
         .onAppear(perform: setDefaults)
+        .task { await refreshMembers() }
         .onChange(of: clubID) { _, _ in
             resetSeatsForClub()
         }
@@ -128,6 +131,16 @@ struct OnlineNewGameSheet: View {
         partner = choices[0]
         right = choices[1]
         left = choices[2]
+        defaultSeats = [partner, right, left]
+    }
+
+    /// A friend may have joined since your clubs last loaded: load them again, and while the seats are
+    /// still the ones chosen for you, seat the newcomer too.
+    private func refreshMembers() async {
+        let before = club?.members
+        await session.refreshMe()
+        guard club?.members != before, [partner, right, left] == defaultSeats else { return }
+        resetSeatsForClub()
     }
 
     private func create() {

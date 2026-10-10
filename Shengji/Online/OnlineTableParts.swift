@@ -162,7 +162,7 @@ struct OnlineTableMenu: View {
                 }
             }
             Divider()
-            if !model.isGameOver && !model.isGone {
+            if !model.isGameOver && !model.isGone && model.summary?.startedByYou != false {
                 Button(role: .destructive, action: onEndGame) {
                     Label("End game for everyone", systemImage: "xmark.octagon")
                 }

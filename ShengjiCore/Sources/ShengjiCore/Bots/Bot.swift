@@ -120,6 +120,9 @@ public enum BotLevel: String, Codable, CaseIterable, Sendable {
 public struct Bot: Sendable {
     public var seat: Int
     public var level: BotLevel
+    /// Texts name the other players as `view.players` does ("Lin's A♠"), for online tables, which show
+    /// names. Off (the default): compass names ("East's A♠"), as the offline table labels the seats.
+    public var usesPlayerNames = false
     /// Strategy knobs (tests compare variants; the app always uses the defaults).
     var tuning = BotTuning()
 
@@ -163,7 +166,7 @@ public struct Bot: Sendable {
     public func decide(view: SeatView) -> BotDecision? {
         if view.phase == .burying { return cardsToBury(view: view) }
         guard view.phase == .playing, view.turn == 0, !view.hand.isEmpty else { return nil }
-        let table = BotTable(view: view, compassSeat: normalizedSeat, tuning: tuning)
+        let table = BotTable(view: view, compassSeat: normalizedSeat, usesPlayerNames: usesPlayerNames, tuning: tuning)
         switch level {
         case .beginner:
             return BeginnerPlay.decide(table)

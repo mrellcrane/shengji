@@ -137,6 +137,7 @@ struct TableDescription {
         add(gameLine(), 2)
         for line in trumpLines() { add(line, 1) }
         add(teamsLine(), 0)
+        add(CoachText.namesLine(view), 0)
         add(pointsLine(), 0)
         add(handLine(), 0)
         add(combinationsLine(), 3)
@@ -550,6 +551,25 @@ enum CoachText {
         out = out.replacingOccurrences(of: "\r", with: " ")
         out = out.replacingOccurrences(of: "\n", with: " ")
         return out
+    }
+
+    /// What the table calls `seat` (someone other than you): the player's name in the view. Offline views
+    /// carry the compass names ("East", "Partner", "West"); online ones carry people's names, as the table shows.
+    static func seatName(_ seat: Int, in view: SeatView) -> String {
+        let s = ((seat % 4) + 4) % 4
+        guard view.players.indices.contains(s) else { return Seats.name(s) }
+        let name = plain(view.players[s].name).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? Seats.name(s) : clip(name, 24)
+    }
+
+    /// "Names at this table: East is Bo, Partner (North) is Cy, West is Di." for an online table, which
+    /// shows names rather than compass seats. Nil offline, where the table says East and West too.
+    static func namesLine(_ view: SeatView) -> String? {
+        let seats = [1, 2, 3]
+        guard seats.contains(where: { seatName($0, in: view) != Seats.name($0) }) else { return nil }
+        let labels = ["", "East", "Partner (North)", "West"]
+        let pairs = seats.map { "\(labels[$0]) is \(seatName($0, in: view))" }
+        return "Names at this table: \(pairs.joined(separator: ", ")). The table shows these names, so call players by them, not by compass seats."
     }
 
     /// Cuts `text` to at most `limit` characters (adding "..." when cut).

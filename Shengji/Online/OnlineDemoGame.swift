@@ -231,7 +231,8 @@ struct OnlineDemoGame: Sendable {
                                  updatedAt: OnlineDates.string(updatedAt), status: isOver ? .finished : .active,
                                  players: players, teamLevels: game.levels, targetRank: game.settings.targetRank,
                                  roundNumber: view.roundNumber, phase: view.phase, turn: acting, yourTurn: acting == 0,
-                                 winnerTeam: game.winner, lastEvent: lastEvent)
+                                 winnerTeam: game.winner, lastEvent: lastEvent,
+                                 startedByYou: players.first?.userID == creatorID)
     }
 
     var state: OnlineGameState { OnlineGameState(game: summary(), view: view(), version: version) }

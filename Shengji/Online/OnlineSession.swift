@@ -44,6 +44,9 @@ final class OnlineSession {
     var needsDisplayName = false
     /// The "Know when it's your turn" card was dismissed.
     private(set) var pushOfferDismissed: Bool
+    /// Whether the server sends notifications (`GET /health`); nil until it answers. While it doesn't
+    /// (no APNs key yet), nothing promises or offers notifications or reminders.
+    private(set) var serverSendsPush: Bool?
 
     let isMock: Bool
     let push: OnlinePushCenter
@@ -140,9 +143,10 @@ final class OnlineSession {
         }.map(\.element)
     }
 
-    /// Offer notifications once you are in a game, while the system hasn't asked yet.
+    /// Offer notifications once you are in a game, while the system hasn't asked yet (and the server sends them).
     var shouldOfferPush: Bool {
-        !isMock && isSignedIn && !pushOfferDismissed && push.permission == .notDetermined && !games.isEmpty
+        !isMock && isSignedIn && serverSendsPush == true && !pushOfferDismissed && push.permission == .notDetermined
+            && !games.isEmpty
     }
 
     // MARK: Launch and refresh
@@ -157,10 +161,33 @@ final class OnlineSession {
         push.onNotification = { [weak self] gameID in
             self?.notificationReceived(gameID: gameID)
         }
-        guard isSignedIn else { return }
+        guard isSignedIn else {
+            await checkServerPush()
+            return
+        }
         await refreshAll()
+        await checkServerPush()
         await push.registerIfAllowed()
     }
+
+    /// Asks the server whether it sends notifications (until it has answered once).
+    func checkServerPush() async {
+        guard serverSendsPush == nil, let health = try? await api.health() else { return }
+        serverSendsPush = health.push ?? false
+    }
+
+    /// While a list is on screen: refreshes now and then, so a friend's move shows without pulling
+    /// (nothing else says so while the server sends no notifications). Ends when the task is cancelled.
+    func keepRefreshing() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: UInt64(OnlineSession.pollInterval * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await refreshIfStale()
+        }
+    }
+
+    /// Seconds between the list's own refreshes while it is on screen.
+    static let pollInterval: TimeInterval = 30
 
     func refreshAll() async {
         await refreshMe()
@@ -207,8 +234,10 @@ final class OnlineSession {
         if let last = lastGamesRefresh, Date().timeIntervalSince(last) < OnlineSession.autoRefreshInterval { return }
         isAutoRefreshing = true
         defer { isAutoRefreshing = false }
-        if user == nil { await refreshMe() }
+        // Your clubs too: a friend who just joined shows up in the club and in New game.
+        await refreshMe()
         await refreshGames()
+        await checkServerPush()
     }
 
     // MARK: Signing in and out
@@ -424,9 +453,13 @@ final class OnlineSession {
     func makeTable(gameID: String) -> OnlineGameModel {
         let model = OnlineGameModel(gameID: gameID, api: api, summary: game(id: gameID), liveConnector: liveConnector,
                                     ledger: ledger)
-        // The same bot that plays offline, reading only what you can see (you are always seat 0).
-        let bot = Bot(seat: 0)
+        // The same bot that plays offline, reading only what you can see (you are always seat 0), and
+        // naming players as this table does (by name, not East or West).
+        var bot = Bot(seat: 0)
+        bot.usesPlayerNames = true
         model.hintProvider = { bot.decide(view: $0) }
+        // Reminders reach nobody while the server sends no notifications (the demo's friends answer them).
+        model.canRemind = isMock || serverSendsPush == true
         return model
     }
 
