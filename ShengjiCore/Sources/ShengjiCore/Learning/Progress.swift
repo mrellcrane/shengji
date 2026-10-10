@@ -646,10 +646,15 @@ public struct PracticeSession: Sendable {
         let unlocked = progress.unlockedItemIDs
         let before = unlocked.firstIndex(where: { lessonSet.contains($0) }).map { Array(unlocked[..<$0]) } ?? unlocked
         let candidates = before.filter { !lessonSet.contains($0) }.shuffled(using: &rng)
-        let ranked = candidates.enumerated()
-            .map { (offset: $0.offset, id: $0.element, mastery: progress.mastery(of: $0.element)) }
-            .sorted { $0.mastery != $1.mastery ? $0.mastery < $1.mastery : $0.offset < $1.offset }
-            .map(\.id)
+        var scored: [(offset: Int, id: String, mastery: Double)] = []
+        for (offset, id) in candidates.enumerated() {
+            scored.append((offset: offset, id: id, mastery: progress.mastery(of: id)))
+        }
+        scored.sort { a, b in
+            if a.mastery != b.mastery { return a.mastery < b.mastery }
+            return a.offset < b.offset
+        }
+        let ranked: [String] = scored.map { $0.id }
         let earlierCount = min(lessonQuizEarlierLimit, max(0, limit - core.count))
         let earlier = Array(ranked.prefix(earlierCount))
 
