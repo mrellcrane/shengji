@@ -32,8 +32,8 @@ enum BeginnerPlay {
     }
 
     private static func follow(_ table: BotTable) -> BotDecision {
-        let trick = table.round.currentTrick
-        let builder = FollowBuilder(hand: table.hand, lead: table.round.currentLead, trump: table.trump)
+        let trick = table.view.currentTrick
+        let builder = FollowBuilder(hand: table.hand, lead: table.view.currentLead, trump: table.trump)
         let high = builder.build(CostModel(table: table, mode: .highest))
         let nudge = "Look at the card that is winning this trick and your highest cards."
         if builder.isLegal(high) && wins(high, trick: trick, table: table) {

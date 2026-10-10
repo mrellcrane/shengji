@@ -39,12 +39,17 @@ struct CardOrder {
 }
 
 /// One seat's view of the table, plus the card values the strategies share.
-/// Built only from what the seat may know (`BotKnowledge`): its own hand, the cards played,
-/// its own buried kitty and the voids other players have shown.
+/// Built only from a `SeatView`, so only from what the seat may know (`BotKnowledge`): its own hand,
+/// the cards played, its own buried kitty and the voids other players have shown. Seats are
+/// viewer-relative: this seat is 0, its partner 2, the opponents 1 (next to play) and 3.
 struct BotTable {
-    let round: Round
+    let view: SeatView
+    /// Always 0: the viewer.
     let seat: Int
     let partner: Int
+    /// The seat the texts are written from: other players get the compass names of a table where
+    /// seat 0 is South, as seen from this seat (`Bot.seat`; 0 for hints, so the viewer is South).
+    let compassSeat: Int
     let trump: Trump
     /// Display order for this round's trump.
     let order: CardOrder
@@ -64,21 +69,20 @@ struct BotTable {
     private let topUnseen: [SuitGroup: Int]
     private let topUnseenPair: [SuitGroup: Int]
 
-    init(round: Round, seat: Int, tuning: BotTuning = BotTuning()) {
-        let me = ((seat % 4) + 4) % 4
+    init(view: SeatView, compassSeat: Int = 0, tuning: BotTuning = BotTuning()) {
         self.tuning = tuning
-        let trump = round.trump
-        self.round = round
-        self.seat = me
-        self.partner = Seats.partner(of: me)
+        let trump = view.trump
+        self.view = view
+        self.seat = 0
+        self.partner = Seats.partner(of: 0)
+        self.compassSeat = ((compassSeat % 4) + 4) % 4
         self.trump = trump
-        let mine: [Card] = round.hands.indices.contains(me) ? round.hands[me] : []
         let order = CardOrder(trump)
         self.order = order
-        self.hand = order.sorted(mine)
-        let knowledge = BotKnowledge(round: round, seat: me)
+        self.hand = order.sorted(view.hand)
+        let knowledge = BotKnowledge(view: view)
         self.knowledge = knowledge
-        self.isDeclarer = round.declarerTeam == Seats.team(of: me)
+        self.isDeclarer = view.declarerTeam == Seats.team(of: 0)
 
         var groups: [SuitGroup: [Card]] = [:]
         var counts: [Face: Int] = [:]
@@ -119,10 +123,28 @@ struct BotTable {
         self.topUnseen = tops
         self.topUnseenPair = pairTops
     }
+
+    /// The table of `seat` in an offline round: `round.seatView(for: seat)`, texts written from `seat`.
+    init(round: Round, seat: Int, tuning: BotTuning = BotTuning()) {
+        self.init(view: round.seatView(for: seat), compassSeat: seat, tuning: tuning)
+    }
 }
 
 extension BotTable {
-    var isLeading: Bool { round.currentTrick.isEmpty }
+    var isLeading: Bool { view.currentTrick.isEmpty }
+
+    /// How the texts name `player` (viewer-relative): "you", "your partner", or a compass name.
+    func name(_ player: Int) -> String {
+        BotText.name(absolute(player), from: compassSeat)
+    }
+
+    /// "your", "your partner's", "East's".
+    func possessive(_ player: Int) -> String {
+        BotText.possessive(absolute(player), from: compassSeat)
+    }
+
+    /// The compass seat of viewer-relative `player`.
+    private func absolute(_ player: Int) -> Int { (((player % 4) + 4) % 4 + compassSeat) % 4 }
 
     /// The two opponents, the one after this seat first.
     var opponents: [Int] { [(seat + 1) % 4, (seat + 3) % 4] }

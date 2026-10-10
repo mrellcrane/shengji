@@ -6,13 +6,10 @@ import Foundation
 ///    otherwise the lowest singles.
 ///  - Beginner: the 8 lowest cards that aren't trumps.
 enum BotBurying {
-    static func decide(for bot: Bot, in round: Round) -> BotDecision {
-        let seat = bot.normalizedSeat
-        guard round.phase == .burying, round.dealer == seat, round.hands.indices.contains(seat),
-              round.hands[seat].count >= Round.kittySize else {
-            return BotText.notBurying()
-        }
-        let table = BotTable(round: round, seat: seat, tuning: bot.tuning)
+    /// Nil unless the viewer is the dealer, burying, with at least 8 cards (the kitty included).
+    static func decide(for bot: Bot, view: SeatView) -> BotDecision? {
+        guard view.phase == .burying, view.dealer == 0, view.hand.count >= Round.kittySize else { return nil }
+        let table = BotTable(view: view, compassSeat: bot.normalizedSeat, tuning: bot.tuning)
         switch bot.level {
         case .beginner: return beginner(table)
         case .standard: return standard(table)
