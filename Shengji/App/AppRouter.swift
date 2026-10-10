@@ -10,6 +10,11 @@ final class AppRouter {
     /// The tab on screen. `RootView` binds its `TabView` selection to this.
     var selectedTab: AppTab
 
+    /// "Now", refreshed about once a minute and whenever the app becomes active, so due counts,
+    /// streaks and "next review in ..." stay current. (A plain value instead of nested TimelineViews,
+    /// which put SwiftUI into an endless update loop on iOS 26.)
+    var now: Date = .now
+
     init(initialTab: AppTab = .learn) {
         selectedTab = initialTab
     }

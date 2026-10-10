@@ -27,10 +27,8 @@ struct ReviewView: View {
 
     var body: some View {
         NavigationStack {
-            TimelineView(.everyMinute) { context in
-                ReviewContent(now: context.date) { kind in
-                    launch = PracticeLaunch(kind: kind)
-                }
+            ReviewContent(now: router.now) { kind in
+                launch = PracticeLaunch(kind: kind)
             }
             .navigationTitle("Review")
         }

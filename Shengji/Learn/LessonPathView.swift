@@ -36,10 +36,8 @@ struct LessonPathView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    TimelineView(.everyMinute) { context in
-                        LearnHeader(now: context.date) { lesson in
-                            activeLesson = LessonLaunch(lesson: lesson)
-                        }
+                    LearnHeader(now: router.now) { lesson in
+                        activeLesson = LessonLaunch(lesson: lesson)
                     }
                     LessonPath { lesson, state in
                         select(lesson, state: state)

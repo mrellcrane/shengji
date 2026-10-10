@@ -11,15 +11,24 @@ struct RootView: View {
 
     private let scene = DemoScene.current
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         #if DEBUG
         let _ = DebugRender.enabled ? Self._printChanges() : ()
         #endif
-        // Re-evaluated every minute so the Review badge picks up items as they fall due.
-        TimelineView(.everyMinute) { context in
-            tabs(dueCount: store.dueCount(now: context.date))
-        }
-        .environment(router)
+        tabs(dueCount: store.dueCount(now: router.now))
+            .environment(router)
+            .task {
+                // Keep "now" fresh so the Review badge picks up items as they fall due.
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    router.now = .now
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { router.now = .now }
+            }
     }
 
     private func tabs(dueCount: Int) -> some View {
