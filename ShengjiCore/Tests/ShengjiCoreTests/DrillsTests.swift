@@ -214,10 +214,14 @@ final class DrillsTests: XCTestCase {
             for (size, row) in counts {
                 let total = row.reduce(0, +)
                 guard total >= 300 else { continue }
-                let expected = Double(total) / Double(size)
+                // An unbiased shuffle puts the answer in each position with chance 1/size: allow 4 standard
+                // deviations (a ±25% band let a clearly favoured position through).
+                let share = 1.0 / Double(size)
+                let expected = Double(total) * share
+                let spread = 4 * (Double(total) * share * (1 - share)).squareRoot()
                 for (position, count) in row.enumerated() {
-                    XCTAssertGreaterThan(Double(count), expected * 0.75, "\(skill): \(size) choices, position \(position) \(row)")
-                    XCTAssertLessThan(Double(count), expected * 1.25, "\(skill): \(size) choices, position \(position) \(row)")
+                    XCTAssertLessThanOrEqual(abs(Double(count) - expected), spread,
+                                             "\(skill): \(size) choices, position \(position) \(row)")
                 }
             }
         }
@@ -284,6 +288,13 @@ final class DrillsTests: XCTestCase {
             XCTAssertTrue(sizes.contains(cards.count), "L\(level): \(cards.count) cards")
             let sum = cards.map(DrillJudge.points).reduce(0, +)
             XCTAssertEqual(Self.correctLabel(q), String(sum), "L\(level) \(cards.shortText)")
+            // The worked sum lists exactly the point cards.
+            if sum == 0 {
+                XCTAssertTrue(q.explanation.contains("**0 points**"), q.explanation)
+            } else {
+                let terms = cards.filter { DrillJudge.points($0) > 0 }.map { "\($0.description) (\(DrillJudge.points($0)))" }
+                XCTAssertTrue(q.explanation.contains(terms.joined(separator: " + ") + " = **\(sum)**"), q.explanation)
+            }
             XCTAssertEqual(q.choices.count, 4)
             for choice in q.choices {
                 guard let value = Int(choice.label) else {
@@ -310,6 +321,8 @@ final class DrillsTests: XCTestCase {
             XCTAssertEqual(Set(q.choices.map(\.label)), ["Trump", "Not trump"])
             XCTAssertEqual(Self.correctLabel(q), isTrump ? "Trump" : "Not trump", "L\(level) \(trump) \(card)")
             XCTAssertTrue(q.explanation.hasPrefix(isTrump ? "Yes." : "No."), q.explanation)
+            // The card shown is not one of yours: "the 7♠", never "your 7♠".
+            XCTAssertFalse(q.explanation.contains("Your ") || q.explanation.contains(" your "), q.explanation)
             if level == 1 {
                 XCTAssertNotNil(trump.suit)
                 XCTAssertFalse(card.isJoker)
@@ -344,6 +357,8 @@ final class DrillsTests: XCTestCase {
             let strengths = q.choices.map { trump.strength($0.cards[0]) }
             XCTAssertEqual(strengths[q.correctChoice], strengths.max())
             if level == 1 { XCTAssertFalse(q.choices.contains { $0.cards[0].isJoker }) }
+            // The explanation names the top card.
+            XCTAssertTrue(q.explanation.contains(DrillJudge.spoken(q.choices[q.correctChoice].cards[0])), q.explanation)
         }
         XCTAssertTrue(Self.questions(.trumpOrder, level: 3).contains { $0.trump?.suit == nil })
     }
@@ -556,6 +571,22 @@ final class DrillsTests: XCTestCase {
             for choice in q.choices {
                 XCTAssertTrue(DrillJudge.allOutcomeTexts.contains(choice.label), choice.label)
             }
+            // The explanation names the band the points fall in.
+            if points == 0 {
+                XCTAssertTrue(q.explanation.contains("**0**"), q.explanation)
+            } else {
+                let bands = DrillJudge.captureAll(#"\*\*(\d+) to (\d+)\*\*"#, in: q.explanation)
+                XCTAssertEqual(bands.count, 1, q.explanation)
+                if let band = bands.first, let low = Int(band[0]), let high = Int(band[1]) {
+                    XCTAssertTrue((low...high).contains(points), "\(points): \(q.explanation)")
+                    XCTAssertEqual(DrillJudge.outcomeText(low), expected, q.explanation)
+                    XCTAssertEqual(DrillJudge.outcomeText(high), expected, q.explanation)
+                }
+            }
+            // Tricks hold only 200 points: more than that needs the kitty bonus, so nobody "captures" it.
+            if points > Scoring.totalPoints {
+                XCTAssertFalse(q.prompt.contains("captures"), q.prompt)
+            }
         }
         XCTAssertGreaterThanOrEqual(largest, 200)
         // Boundaries come up often.
@@ -574,14 +605,22 @@ final class DrillsTests: XCTestCase {
                 XCTFail("kittyBonus states the kitty and shows the lead")
                 continue
             }
-            let defendersWin = q.prompt.contains("The defenders win the last trick")
-            XCTAssertNotEqual(defendersWin, q.prompt.contains("The declarers win the last trick"), q.prompt)
+            let defendersWin = q.prompt.hasPrefix("Defenders win the last trick")
+            XCTAssertNotEqual(defendersWin, q.prompt.hasPrefix("Declarers win the last trick"), q.prompt)
+            // Short enough to read at a glance (the brief's 90-character ideal).
+            XCTAssertLessThanOrEqual(q.prompt.count, 90, q.prompt)
             XCTAssertGreaterThan(kitty, 0)
             let multiplier = DrillJudge.kittyMultiplier(lead, trump: trump)
             XCTAssertEqual(multiplier, Scoring.kittyMultiplier(lastLead: lead, trump: trump))
             let expected = defendersWin ? kitty * multiplier : 0
             XCTAssertEqual(Self.correctLabel(q), String(expected), "L\(level) \(q.prompt) \(lead.shortText)")
-            XCTAssertTrue(q.explanation.contains("**\(expected)**") || q.explanation.contains("**0**"), q.explanation)
+            XCTAssertNotNil(Combos.group(of: lead, trump: trump), "a lead is all one suit or all trump: \(lead.shortText)")
+            if defendersWin {
+                XCTAssertTrue(q.explanation.contains("**×\(multiplier)**"), q.explanation)
+                XCTAssertTrue(q.explanation.contains("\(kitty) × \(multiplier) = **\(expected)**"), q.explanation)
+            } else {
+                XCTAssertTrue(q.explanation.contains("**0**") && q.explanation.contains("**last trick**"), q.explanation)
+            }
             XCTAssertEqual(q.choices.count, 4)
             shapes.insert(multiplier)
             if Combos.decompose(lead, trump: trump).count > 1 { throwShown = true }
@@ -596,7 +635,10 @@ final class DrillsTests: XCTestCase {
     func testBestPlayAnswers() {
         var principles: [Int: Set<String>] = [:]
         for (level, q) in Self.all(.bestPlay) {
-            guard let trump = q.trump else { continue }
+            guard let trump = q.trump else {
+                XCTFail("bestPlay needs a trump badge: \(q.prompt)")
+                continue
+            }
             XCTAssertTrue((2...3).contains(q.choices.count))
             let correct = q.choices[q.correctChoice].cards
             switch q.visual {
@@ -639,6 +681,351 @@ final class DrillsTests: XCTestCase {
         }
         XCTAssertEqual(principles[1], ["Feed points", "Duck low", "Lead sure winners"])
         XCTAssertEqual(principles[2], ["Feed points", "Win cheaply", "Ruff low", "Duck low", "Lead sure winners"])
+    }
+
+    // MARK: Prompts and explanations state true facts
+    //
+    // Each claim a prompt or an explanation makes about the cards ("Partner is winning", "West ruffed
+    // first", "15 points are on the table", "You hold only one club") is checked against the cards shown.
+
+    func testCardBeatsAsksWhichCardYouCanPlay() {
+        var lookalikes = 0
+        for (level, q) in Self.all(.cardBeats) {
+            guard let trump = q.trump, case let .trick(plays) = q.visual else { continue }
+            // A trump-rank card printed in the led suit beats the lead if played, but you may not play it
+            // while you can follow, so the prompt must ask what you can play, not just what beats it.
+            var beatIfPlayed = 0
+            for choice in q.choices {
+                let trick = plays + [Play(player: Seats.human, cards: choice.cards)]
+                if Rules.winningIndex(trick, trump: trump) == 1 { beatIfPlayed += 1 }
+            }
+            if beatIfPlayed > 1 {
+                lookalikes += 1
+                XCTAssertTrue(q.prompt.contains("can you play"), "L\(level) \(q.prompt) \(q.choices.map(\.label))")
+            }
+            // The lead and the choices are one set of physical cards.
+            DrillJudge.checkVisualCards(plays.flatMap(\.cards) + q.choices.flatMap(\.cards), context: q.prompt)
+        }
+        XCTAssertGreaterThan(lookalikes, 100, "the rank-card lookalike comes up often")
+    }
+
+    func testBestPlayClaimsAreTrue() {
+        var fired: Set<String> = []
+        for (level, q) in Self.all(.bestPlay) {
+            guard let trump = q.trump else {
+                XCTFail("bestPlay needs a trump badge")
+                continue
+            }
+            let context = "L\(level) \(q.prompt) | \(q.explanation)"
+            let answer = q.choices[q.correctChoice].cards
+            guard case let .situation(plays, hand) = q.visual else {
+                // On lead: "A lone K" would mean the King is your only card of that suit.
+                if case let .cards(hand) = q.visual,
+                   let king = DrillJudge.capture(#"lone (\S+)"#, in: q.explanation).first,
+                   let card = hand.first(where: { $0.description == king }) {
+                    let sameSuit = hand.filter { !trump.isTrump($0) && $0.suit == card.suit }
+                    XCTAssertEqual(sameSuit.count, 1, "\(context): the \(king) is not alone in \(hand.shortText)")
+                }
+                continue
+            }
+            let lead = plays[0].cards
+            let current = plays[Rules.winningIndex(plays, trump: trump)].player
+            let table = plays.flatMap(\.cards).map(DrillJudge.points).reduce(0, +)
+            let legal = hand.filter { Rules.validateFollow([$0], hand: hand, lead: lead, trump: trump) == nil }
+            func winner(after card: Card) -> Int {
+                let trick = plays + [Play(player: Seats.human, cards: [card])]
+                return trick[Rules.winningIndex(trick, trump: trump)].player
+            }
+            func card(named name: String) -> Card? {
+                (hand + plays.flatMap(\.cards)).first { DrillJudge.spoken($0) == name }
+            }
+
+            for seat in [1, 2, 3] where q.prompt.contains("\(Seats.name(seat)) is winning") {
+                fired.insert("is winning")
+                XCTAssertEqual(current, seat, context)
+            }
+            if q.prompt.contains("West has ruffed") {
+                fired.insert("has ruffed")
+                XCTAssertTrue(trump.isTrump(plays[2].cards[0]) && !trump.isTrump(lead[0]), context)
+            }
+            if q.prompt.contains("You have no") || q.explanation.contains("you have no") {
+                fired.insert("you have no")
+                XCTAssertFalse(hand.contains { trump.group($0) == trump.group(lead[0]) }, context)
+            }
+            // "X's card wins whatever you play": true for every card you may play.
+            if let name = DrillJudge.capture(#"(Your|East's|Partner's|West's) [^,.]+ wins whatever you play"#,
+                                             in: q.explanation).first {
+                fired.insert("wins whatever")
+                let seat = DrillJudge.seat(possessive: name)
+                for card in legal { XCTAssertEqual(winner(after: card), seat, "\(context): \(card) changes the winner") }
+            }
+            for value in DrillJudge.capture(#"(\d+) points are on the table"#, in: q.explanation)
+                + DrillJudge.capture(#"take the (\d+) points"#, in: q.explanation) {
+                fired.insert("points")
+                XCTAssertEqual(Int(value), table, context)
+            }
+            if let name = DrillJudge.capture(#"Partner's (\S+) is winning"#, in: q.explanation).first {
+                fired.insert("partner winning")
+                XCTAssertEqual(current, 2, context)
+                XCTAssertEqual(plays[1].cards.first.map(DrillJudge.spoken), name, context)
+            }
+            // "your lowest non-point card" / "your lowest plain card": nothing lower qualifies.
+            if let name = DrillJudge.capture(#"lowest non-point card, the ([^\s,.]+)"#, in: q.explanation).first {
+                fired.insert("lowest non-point")
+                XCTAssertEqual(DrillJudge.spoken(answer[0]), name, context)
+                let options = legal.filter { DrillJudge.points($0) == 0 }
+                XCTAssertEqual(options.map { trump.strength($0) }.min(), trump.strength(answer[0]), context)
+            }
+            if let name = DrillJudge.capture(#"lowest plain card, the ([^\s,.]+)"#, in: q.explanation).first {
+                fired.insert("lowest plain")
+                XCTAssertEqual(DrillJudge.spoken(answer[0]), name, context)
+                let plain = hand.filter { !trump.isTrump($0) }
+                XCTAssertEqual(plain.map { trump.strength($0) }.min(), trump.strength(answer[0]), context)
+            }
+            // "The least you can" must really be your lowest card.
+            if q.explanation.contains("the least you can") {
+                XCTAssertEqual(legal.map { trump.strength($0) }.min(), trump.strength(answer[0]), "\(context): a lower card exists")
+            }
+            // Win cheaply: the answer is your lowest card that takes the trick; the kept card wins too;
+            // the low card loses.
+            if let pair = DrillJudge.captureAll(#"your (\S+) is enough to beat the (\S+)"#, in: q.explanation).first {
+                fired.insert("enough to beat")
+                XCTAssertEqual(DrillJudge.spoken(answer[0]), pair[0], context)
+                XCTAssertEqual(current, DrillJudge.seat(holding: pair[1], in: plays), context)
+                let winning = legal.filter { Seats.team(of: winner(after: $0)) == 0 }
+                XCTAssertEqual(winning.map { trump.strength($0) }.min(), trump.strength(answer[0]), context)
+                // A point card that wins scores for your team too: say so, or it looks like giving points away.
+                let own = DrillJudge.points(answer[0])
+                if own > 0 {
+                    XCTAssertTrue(q.explanation.contains("plus \(own) for the \(answer[0].description) itself"), context)
+                }
+            }
+            if let kept = DrillJudge.capture(#"Keep the (\S+) for later"#, in: q.explanation).first, let card = card(named: kept) {
+                fired.insert("keep")
+                XCTAssertEqual(winner(after: card), Seats.human, context)
+            }
+            if let low = DrillJudge.capture(#"the (\S+) would let the opponents win"#, in: q.explanation).first,
+               let card = card(named: low) {
+                fired.insert("let the opponents win")
+                XCTAssertEqual(Seats.team(of: winner(after: card)), 1, context)
+            }
+            if let pair = DrillJudge.captureAll(#"your ([^.,]+?) wins as surely as the ([^.,]+?)\."#, in: q.explanation).first {
+                fired.insert("as surely")
+                for name in pair {
+                    guard let card = card(named: name) else {
+                        XCTFail("\(context): no \(name)")
+                        continue
+                    }
+                    XCTAssertEqual(winner(after: card), Seats.human, context)
+                }
+            }
+            if let name = DrillJudge.capture(#"your ([^.,]+?) can't beat it"#, in: q.explanation).first, let card = card(named: name) {
+                fired.insert("can't beat")
+                XCTAssertEqual(winner(after: card), current, context)
+            }
+        }
+        // Every kind of claim came up, so none of these checks is silently skipped.
+        XCTAssertEqual(fired, ["is winning", "has ruffed", "you have no", "wins whatever", "points", "partner winning",
+                               "lowest non-point", "lowest plain", "enough to beat", "keep", "let the opponents win",
+                               "as surely", "can't beat"])
+    }
+
+    func testTrickWinnerClaimsAreTrue() {
+        var fired: Set<String> = []
+        for (level, q) in Self.all(.trickWinner) {
+            guard let trump = q.trump, case let .trick(plays) = q.visual else { continue }
+            let context = "L\(level) \(q.prompt) \(plays.map { $0.cards.shortText }) | \(q.explanation)"
+            let lead = plays[0].cards
+            let ledGroup = Combos.group(of: lead, trump: trump)
+            let winner = Rules.winningIndex(plays, trump: trump)
+            let format = Rules.LeadFormat(lead, trump: trump)
+            let winningKey = Rules.structureKey(plays[winner].cards, format: format, trump: trump)
+            func play(_ seat: Int) -> (index: Int, cards: [Card])? {
+                guard let index = plays.firstIndex(where: { $0.player == seat }) else { return nil }
+                return (index, plays[index].cards)
+            }
+            func isAllTrump(_ cards: [Card]) -> Bool { Combos.group(of: cards, trump: trump) == .trump }
+
+            // A lone card is "the 8♥" or "the small joker", as in the prompt.
+            XCTAssertFalse(q.explanation.contains("with small joker") || q.explanation.contains("with big joker"), context)
+            if level == 1 {
+                XCTAssertFalse(plays.contains { $0.cards.contains { $0.isJoker } }, "jokers start at level 2: \(context)")
+            }
+            for name in DrillJudge.capture(#"(You|East|Partner|West) (?:was|were) out of \w+ and ruffed"#, in: q.explanation) {
+                fired.insert("ruffed")
+                XCTAssertEqual(play(DrillJudge.seat(name: name))?.index, winner, context)
+                XCTAssertTrue(ledGroup?.isTrump == false && isAllTrump(plays[winner].cards), context)
+            }
+            for pair in DrillJudge.captureAll(#"(You|East|Partner|West) ruffed first, but (you|East|Partner|West) over-ruffed"#,
+                                              in: q.explanation) {
+                guard let first = play(DrillJudge.seat(name: pair[0])), let second = play(DrillJudge.seat(name: pair[1])) else {
+                    XCTFail(context)
+                    continue
+                }
+                fired.insert("over-ruffed")
+                XCTAssertEqual(second.index, winner, context)
+                XCTAssertTrue(first.index < winner && isAllTrump(first.cards), context)
+                XCTAssertNotNil(Rules.structureKey(first.cards, format: format, trump: trump), context)
+            }
+            for name in DrillJudge.capture(#"(Your|East's|Partner's|West's) trump(?: \w+)? was lower"#, in: q.explanation) {
+                guard let lower = play(DrillJudge.seat(possessive: name)),
+                      let key = Rules.structureKey(lower.cards, format: format, trump: trump), let top = winningKey else {
+                    XCTFail(context)
+                    continue
+                }
+                fired.insert("was lower")
+                XCTAssertTrue(isAllTrump(lower.cards) && key < top, context)
+            }
+            if q.explanation.contains("Nobody played a higher") || q.explanation.contains("Nobody matched it") {
+                fired.insert("nobody")
+                XCTAssertEqual(winner, 0, context)
+            }
+            if q.explanation.contains("It is the highest") || q.explanation.contains("Same shape,") {
+                fired.insert("highest")
+                XCTAssertNotEqual(winner, 0, context)
+                XCTAssertEqual(Combos.group(of: plays[winner].cards, trump: trump), ledGroup, context)
+            }
+            if q.explanation.contains("nobody ruffed") {
+                fired.insert("nobody ruffed")
+                XCTAssertFalse(plays.dropFirst().contains { isAllTrump($0.cards) }, context)
+            }
+            for pair in DrillJudge.captureAll(#"(Your|East's|Partner's|West's) ([^.]+?) only tied"#, in: q.explanation) {
+                guard let tie = play(DrillJudge.seat(possessive: pair[0])) else {
+                    XCTFail(context)
+                    continue
+                }
+                fired.insert("tied")
+                XCTAssertEqual(DrillJudge.listing(tie.cards), pair[1], context)
+                XCTAssertTrue(tie.index > winner, context)
+                XCTAssertEqual(Rules.structureKey(tie.cards, format: format, trump: trump), winningKey, context)
+            }
+            for pair in DrillJudge.captureAll(#"(Your|East's|Partner's|West's) ([^.]+?) are not a (?:pair|tractor)"#, in: q.explanation) {
+                guard let other = play(DrillJudge.seat(possessive: pair[0])) else {
+                    XCTFail(context)
+                    continue
+                }
+                fired.insert("not a pair")
+                XCTAssertEqual(DrillJudge.listing(other.cards), pair[1], context)
+                XCTAssertFalse(Rules.matchesStructure(other.cards, lead: lead, trump: trump), context)
+            }
+            for name in DrillJudge.capture(#"(You|East|Partner|West) mixed suits"#, in: q.explanation) {
+                guard let mixed = play(DrillJudge.seat(name: name)) else {
+                    XCTFail(context)
+                    continue
+                }
+                fired.insert("mixed")
+                XCTAssertNil(Combos.group(of: mixed.cards, trump: trump), context)
+                // A rank card printed in the led suit makes a play look all one suit: say it is a trump.
+                if let ledSuit = ledGroup?.plainSuit,
+                   let lookalike = mixed.cards.first(where: { $0.rank == trump.rank && $0.suit == ledSuit }) {
+                    fired.insert("mixed lookalike")
+                    XCTAssertTrue(q.explanation.contains("\(lookalike.description) is a trump"), context)
+                }
+            }
+            for name in DrillJudge.capture(#"(You|East|Partner|West) discarded"#, in: q.explanation) {
+                guard let discard = play(DrillJudge.seat(name: name)), let group = Combos.group(of: discard.cards, trump: trump) else {
+                    XCTFail(context)
+                    continue
+                }
+                fired.insert("discarded")
+                XCTAssertTrue(!group.isTrump && group != ledGroup, context)
+            }
+            for pair in DrillJudge.captureAll(#"The (\S+) is a trump this round, not a (\w+)"#, in: q.explanation) {
+                fired.insert("rank card")
+                let card = plays.flatMap(\.cards).first { $0.description == pair[0] }
+                XCTAssertEqual(card?.rank, trump.rank, context)
+                XCTAssertEqual(card?.suit?.singularName, pair[1], context)
+            }
+        }
+        XCTAssertEqual(fired, ["ruffed", "over-ruffed", "was lower", "nobody", "highest", "nobody ruffed", "tied",
+                               "not a pair", "mixed", "mixed lookalike", "discarded", "rank card"])
+    }
+
+    func testLegalFollowClaimsAreTrue() {
+        var fired: Set<String> = []
+        for (level, q) in Self.all(.legalFollow) {
+            guard let trump = q.trump, case let .handAndLead(hand, lead, _) = q.visual,
+                  let ledGroup = Combos.group(of: lead, trump: trump) else { continue }
+            let context = "L\(level) \(q.prompt) hand \(hand.shortText) | \(q.explanation)"
+            let held = hand.filter { trump.group($0) == ledGroup }
+            let answer = q.choices[q.correctChoice].cards
+            func cards(_ text: String) -> [Card]? {
+                var pool = hand
+                var found: [Card] = []
+                for name in text.split(separator: " ").map(String.init) {
+                    guard let index = pool.firstIndex(where: { $0.description == name }) else { return nil }
+                    found.append(pool.remove(at: index))
+                }
+                return found
+            }
+
+            for pair in DrillJudge.captureAll(#"You hold only one (\w+), the (\S+),"#, in: q.explanation) {
+                fired.insert("only one")
+                XCTAssertEqual(held.map(\.description), [pair[1]], context)
+                XCTAssertEqual(ledGroup.plainSuit?.singularName, pair[0], context)
+            }
+            if !DrillJudge.capture(#"but no (\w+) pair"#, in: q.explanation).isEmpty {
+                fired.insert("no pair")
+                XCTAssertEqual(Combos.pairCount(in: held), 0, context)
+                XCTAssertGreaterThanOrEqual(held.count, lead.count, context)
+            }
+            if let name = DrillJudge.capture(#"your only trump is the \*\*(.+?)\*\*"#, in: q.explanation).first {
+                fired.insert("only trump")
+                let trumps = hand.filter { trump.isTrump($0) }
+                XCTAssertEqual(trumps.map(DrillJudge.spoken), [name], context)
+            }
+            if let text = DrillJudge.capture(#"you hold a \*\*\w+ pair\*\*, (.+?), so you must play it"#, in: q.explanation).first {
+                fired.insert("hold a pair")
+                let pair = cards(text) ?? []
+                XCTAssertTrue(Combos.isPair(pair) && trump.group(pair[0]) == ledGroup, context)
+                XCTAssertEqual(DrillJudge.sorted(pair), DrillJudge.sorted(answer), context)
+            }
+            if !DrillJudge.capture(#"You have no (\w+) tractor"#, in: q.explanation).isEmpty {
+                fired.insert("no tractor")
+                XCTAssertLessThan(Combos.longestRun(in: held, trump: trump), 2, context)
+            }
+            if !DrillJudge.capture(#"but one (\w+) pair"#, in: q.explanation).isEmpty {
+                fired.insert("one pair")
+                XCTAssertEqual(Combos.pairCount(in: held), 1, context)
+            }
+            if q.explanation.contains("as many") {
+                fired.insert("as many")
+                XCTAssertEqual(Combos.pairCount(in: held), 2, context)
+            }
+            if let text = DrillJudge.capture(#"you hold one in \w+, (.+?), so you must play it"#, in: q.explanation).first {
+                fired.insert("hold a tractor")
+                let tractor = cards(text) ?? []
+                XCTAssertEqual(Combos.shape(of: tractor, trump: trump), .tractor(2), context)
+                XCTAssertEqual(DrillJudge.sorted(tractor), DrillJudge.sorted(answer), context)
+            }
+            if let text = DrillJudge.capture(#"so (.+?) is a \w+ tractor, and you must play it"#, in: q.explanation).first {
+                fired.insert("tractor across the rank")
+                XCTAssertEqual(Combos.shape(of: cards(text) ?? [], trump: trump), .tractor(2), context)
+            }
+            for pair in DrillJudge.captureAll(#"The (\S+) is a trump(?: this round)?, not a (\w+)"#, in: q.explanation) {
+                fired.insert("rank card")
+                let card = hand.first { $0.description == pair[0] }
+                XCTAssertEqual(card?.rank, trump.rank, context)
+                XCTAssertEqual(card?.suit?.singularName, pair[1], context)
+            }
+            if let text = DrillJudge.capture(#"Your (.+?) are trumps, not"#, in: q.explanation).first {
+                fired.insert("rank pair")
+                XCTAssertTrue((cards(text) ?? []).allSatisfy { $0.rank == trump.rank }, context)
+            }
+            if let text = DrillJudge.capture(#"your (.+?) is a \*\*trump pair\*\*"#, in: q.explanation).first {
+                fired.insert("trump pair")
+                let pair = cards(text) ?? []
+                XCTAssertTrue(Combos.isPair(pair) && trump.isTrump(pair[0]), context)
+            }
+            if let name = DrillJudge.capture(#"Your \*\*(\S+)\*\* is a trump: every"#, in: q.explanation).first {
+                fired.insert("rank single")
+                XCTAssertEqual(answer.map(\.description), [name], context)
+                XCTAssertEqual(answer.first?.rank, trump.rank, context)
+            }
+        }
+        XCTAssertEqual(fired, ["only one", "no pair", "only trump", "hold a pair", "no tractor", "one pair", "as many",
+                               "hold a tractor", "tractor across the rank", "rank card", "rank pair", "trump pair",
+                               "rank single"])
     }
 }
 
@@ -820,6 +1207,54 @@ enum DrillJudge {
             return choice.label == (card.face == .smallJoker ? "Small joker" : "Big joker")
         }
         return choice.label == choice.cards.shortText
+    }
+
+    // MARK: Reading claims out of text
+
+    /// The first capture group of every match of `pattern` in `text`.
+    static func capture(_ pattern: String, in text: String) -> [String] {
+        captureAll(pattern, in: text).compactMap(\.first)
+    }
+
+    /// Every capture group of every match of `pattern` in `text`.
+    static func captureAll(_ pattern: String, in text: String) -> [[String]] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            XCTFail("bad pattern \(pattern)")
+            return []
+        }
+        let whole = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: whole).map { match in
+            (1..<match.numberOfRanges).compactMap { group in
+                Range(match.range(at: group), in: text).map { String(text[$0]) }
+            }
+        }
+    }
+
+    /// "You" / "you" → 0, "East" → 1, "Partner" → 2, "West" → 3.
+    static func seat(name: String) -> Int {
+        Seats.all.first { Seats.name($0).lowercased() == name.lowercased() } ?? -1
+    }
+
+    /// "Your" → 0, "East's" → 1, "Partner's" → 2, "West's" → 3.
+    static func seat(possessive: String) -> Int {
+        if possessive.lowercased() == "your" { return Seats.human }
+        return seat(name: String(possessive.dropLast(2)))
+    }
+
+    /// The seat whose play contains the card named `name`.
+    static func seat(holding name: String, in plays: [Play]) -> Int? {
+        plays.first { $0.cards.contains { spoken($0) == name } }?.player
+    }
+
+    /// How explanations list a play: "8♥", "small joker", "two small jokers", "9♣ 9♣".
+    static func listing(_ cards: [Card]) -> String {
+        if cards.count == 1, let only = cards.first { return spoken(only) }
+        if cards.count == 2, cards[0].face == cards[1].face, cards[0].isJoker { return "two \(spoken(cards[0]))s" }
+        return cards.shortText
+    }
+
+    static func sorted(_ cards: [Card]) -> [Int] {
+        cards.map(\.id).sorted()
     }
 
     static func inSeatOrder(_ plays: [Play]) -> Bool {

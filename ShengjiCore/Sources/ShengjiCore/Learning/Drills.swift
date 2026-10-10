@@ -487,7 +487,8 @@ private enum BasicDrills {
                 if dice.chance(50) {
                     trump = Trump(rank: rank, suit: dice.pick(Suit.allCases))
                 } else {
-                    let otherRank = dice.pick(Rank.allCases.filter { $0 != rank }) ?? .two
+                    let otherRanks: [Rank] = Rank.allCases.filter { (other: Rank) -> Bool in other != rank }
+                    let otherRank: Rank = dice.pick(otherRanks) ?? .two
                     trump = Trump(rank: otherRank, suit: cardSuit)
                 }
             } else {
@@ -679,7 +680,7 @@ private enum TrumpDrills {
             return "Yes. The \(shown) is the trump rank **and** the trump suit: the highest trump after the two jokers."
         case .offRank:
             return "Yes. **Every \(rankWord)** is a trump this round, whatever its suit: \(trump.rank.label) is the trump rank. "
-                + "Your \(shown) isn't a \(cardSuit.singularName) now."
+                + "The \(shown) isn't a \(cardSuit.singularName) this round."
         case .suitCard:
             return "Yes. \(trumpSuit.symbol) is the trump suit, so every \(trumpSuit.singularName) is a trump, "
                 + "from the ace down. The jokers and every \(rankWord) are trumps too."
@@ -818,8 +819,10 @@ private enum CardBeatsDrill {
         return draft ?? fallback()
     }
 
+    /// "Which card can you play": a trump-rank card printed in the led suit would beat the lead, but you
+    /// may not play it while you can follow suit, so the question is about legal plays that win.
     private static func prompt(_ trump: Trump, _ lead: Card, extra: String) -> String {
-        "\(DrillText.trumpLine(trump)) West leads the \(DrillText.name(lead))\(extra). Which of your cards beats it?"
+        "\(DrillText.trumpLine(trump)) West leads the \(DrillText.name(lead))\(extra). Which card can you play to beat it?"
     }
 
     private static func draft(trump: Trump, lead: Card, extra: String, answer: Card, wrong: [Card],
@@ -1183,7 +1186,8 @@ private enum ShapeDrills {
             }
 
         case .skipRun:
-            let rank = dice.pick(Rank.allCases.filter { $0 != .two && $0 != .ace }) ?? .eight
+            let middleRanks: [Rank] = Rank.allCases.filter { (rank: Rank) -> Bool in rank != .two && rank != .ace }
+            let rank: Rank = dice.pick(middleRanks) ?? .eight
             let trump = DrillDeck.randomTrump(&dice, noTrumpPercent: 15)
             let round = Trump(rank: rank, suit: trump.suit)
             guard let below = Rank(rawValue: rank.rawValue - 1), let above = Rank(rawValue: rank.rawValue + 1),
@@ -1474,9 +1478,14 @@ private enum TrickDrill {
         let pairs = dice.weighted(shapeWeights)
         let handSize = level == 1 ? 8 : 10
         var pool = DrillPool()
-        // Difficulty 1 keeps to the basics: plain-suit leads, and no rank cards of other suits in play.
+        // Difficulty 1 keeps to the basics: plain-suit leads, and the only trumps in play are trump-suit cards
+        // (rank cards of other suits and jokers come in at difficulty 2).
         let basic = level == 1
-        let basicFace: (Face) -> Bool = { face in !basic || face.rank != trump.rank || face.suit == trump.suit }
+        let basicFace: (Face) -> Bool = { face in
+            guard basic else { return true }
+            guard let suit = face.suit else { return false }
+            return face.rank != trump.rank || suit == trump.suit
+        }
         let plainSuit: Suit? = basic || dice.chance(80) ? dice.pick(DrillDeck.plainSuits(trump)) : nil
         let ledGroup: SuitGroup = plainSuit.map { SuitGroup.plain($0) } ?? .trump
         guard let lead = DrillDeck.combo(in: ledGroup, pairs: pairs, above: nil, trump: trump, pool: &pool, dice: &dice)
@@ -1753,7 +1762,9 @@ private enum TrickDrill {
         let isYou = winning.player == Seats.human
         let name = Seats.name(winning.player)
         let suitSingular = ledGroup.plainSuit?.singularName ?? "trump"
-        var sentences: [String] = ["\(name) \(isYou ? "win" : "wins") with \(DrillText.list(winning.cards))."]
+        // A lone card reads "the 8♥" or "the small joker", as in the prompt.
+        let winningText = winning.cards.count == 1 ? "the " + DrillText.list(winning.cards) : DrillText.list(winning.cards)
+        var sentences: [String] = ["\(name) \(isYou ? "win" : "wins") with \(winningText)."]
 
         if facts.ruff {
             if let before = facts.ruffedBefore {
@@ -1798,7 +1809,12 @@ private enum TrickDrill {
             note = "\(DrillText.possessive(plays[index].player)) \(DrillText.list(plays[index].cards)) are not a "
                 + "\(word), so they can't win\(facts.unmatchedLooksStrong ? ", however high" : "")."
         } else if let index = facts.mixed {
-            note = "\(Seats.name(plays[index].player)) mixed suits, and a mixed play never wins."
+            // A rank card printed in the led suit makes the play look all one suit: name the trump.
+            let lookalike = plays[index].cards.first { card in
+                card.rank == trump.rank && ledGroup.plainSuit != nil && card.suit == ledGroup.plainSuit
+            }
+            let which = lookalike.map { " (the \($0.description) is a trump)" } ?? ""
+            note = "\(Seats.name(plays[index].player)) mixed suits\(which), and a mixed play never wins."
         } else if let index = facts.discard {
             note = "\(Seats.name(plays[index].player)) discarded, and a discard never wins."
         }
@@ -2101,7 +2117,12 @@ private enum FollowDrill {
                   let plainCard = single(dice.pick(DrillDeck.otherPlainSuits(trump, except: rankSuit)) ?? rankSuit,
                                          ranks: ranks, pool: &pool, dice: &dice) else { return nil }
             let wrong: [[Card]] = [[mine[0], loose], plainPair, [loose, plainCard]]
-            return Setup(trump: trump, lead: led, hand: mine + [loose] + plainPair + [plainCard], correct: mine, wrong: wrong,
+            // Built step by step: a long chain of array literals is slow to type-check.
+            var hand: [Card] = mine
+            hand.append(loose)
+            hand.append(contentsOf: plainPair)
+            hand.append(plainCard)
+            return Setup(trump: trump, lead: led, hand: hand, correct: mine, wrong: wrong,
                          explanation: "Trumps were led, and your \(mine.shortText) is a **trump pair**: every \(rankWord) is "
                             + "a trump this round. You hold a trump pair, so you must play it.")
 
@@ -2164,7 +2185,9 @@ private enum FollowDrill {
         if dice.chance(40), let below = Rank(rawValue: trump.rank.rawValue - 1),
            let above = Rank(rawValue: trump.rank.rawValue + 1),
            pool.freeCopies(.regular(suit, below)) == 2, pool.freeCopies(.regular(suit, above)) == 2 {
-            mine = (pool.takePair(.regular(suit, below)) ?? []) + (pool.takePair(.regular(suit, above)) ?? [])
+            let belowPair: [Card] = pool.takePair(.regular(suit, below)) ?? []
+            let abovePair: [Card] = pool.takePair(.regular(suit, above)) ?? []
+            mine = belowPair + abovePair
             across = true
         } else {
             mine = DrillDeck.combo(in: .plain(suit), pairs: 2, above: nil, trump: trump, pool: &pool, dice: &dice)
@@ -2244,12 +2267,18 @@ private enum ScoringDrills {
         let outcome = Scoring.outcome(defenderPoints: points)
         let index = ladder.firstIndex { $0.hold == outcome.declarersHold && $0.levels == outcome.levels } ?? 0
         // The nearest rows of the table make the most tempting distractors.
-        let others = dice.shuffled(ladder.indices.filter { $0 != index }).sorted { abs($0 - index) < abs($1 - index) }
+        // In steps with explicit types: a chained shuffle-and-sort is slow for the type checker.
+        let otherRows: [Int] = ladder.indices.filter { (row: Int) -> Bool in row != index }
+        let shuffledRows: [Int] = dice.shuffled(otherRows)
+        let others: [Int] = shuffledRows.sorted { (a: Int, b: Int) -> Bool in abs(a - index) < abs(b - index) }
         let wrong = others.prefix(3).map { Choice(outcomeText(hold: ladder[$0].hold, levels: ladder[$0].levels)) }
 
-        let prompts = ["The defenders end the round with \(points) points. What happens?",
-                       "You are declaring, and the defenders score \(points) points. What happens?",
-                       "Your team is defending and captures \(points) points. What happens?"]
+        var prompts = ["The defenders end the round with \(points) points. What happens?",
+                       "You are declaring, and the defenders score \(points) points. What happens?"]
+        // Tricks hold only 200 points: a bigger total includes the kitty bonus, so it isn't all "captured".
+        if points <= Scoring.totalPoints {
+            prompts.append("Your team is defending and captures \(points) points. What happens?")
+        }
         let explanation: String
         switch points {
         case 0:
@@ -2337,9 +2366,10 @@ private enum ScoringDrills {
             case .tractor: shown = "this tractor"
             }
         }
-        let who = defendersWin ? "defenders" : "declarers"
-        let question = defendersWin ? "What is their kitty bonus?" : "What is the defenders' kitty bonus?"
-        let prompt = "Kitty: \(kitty) points. The \(who) win the last trick, led with \(shown). \(question)"
+        // At most 89 characters: who won and how the trick was led, then the kitty, then the question.
+        let who = defendersWin ? "Defenders" : "Declarers"
+        let question = defendersWin ? "Their kitty bonus?" : "Defenders' bonus?"
+        let prompt = "\(who) win the last trick, led with \(shown). Kitty: \(kitty) points. \(question)"
 
         let explanation: String
         if defendersWin {
@@ -2519,10 +2549,12 @@ private enum StrategyDrill {
                   let ruff = lowTrump(trump, notSuit: suit, pool: &pool, dice: &dice) else { return nil }
             let hand = neutralFiller([feedCard, lowCard, ruff], ledSuit: suit, above: -1, trump: trump,
                                      pool: &pool, dice: &dice)
+            // Not "wins whatever you play": your ruff would take the trick instead (for your team).
+            let ledName = suit.singularName
             return Setup(trump: trump, plays: plays, hand: hand, correct: feedCard, wrong: [lowCard, ruff], prompt: prompt,
-                         explanation: "**Feed points**: Partner's \(partnerCard.description) wins whatever you play, so "
-                            + "discard your \(feedCard.description) for \(feedCard.points) more points. Ruffing would waste a "
-                            + "trump on a trick your team already has.")
+                         explanation: "**Feed points**: Partner's \(partnerCard.description) is the top \(ledName) and "
+                            + "nobody plays after you, so your team takes this trick. Discard your \(feedCard.description) "
+                            + "for \(feedCard.points) more points. Ruffing would waste a trump.")
         }
         guard let feedCard = card(dice.pick(feedRanks), suit, pool: &pool),
               let lowCard = card(dice.pick(lowRanks), suit, pool: &pool) else { return nil }
@@ -2569,10 +2601,12 @@ private enum StrategyDrill {
         let winnerName = westWins ? "West" : "East"
         let prompt = level == 2 ? "\(line) \(winnerName) is winning and you play last. What should you play?"
             : "\(line) You play last. What should you play?"
+        // When the cheapest winner is itself a point card, say that its points come to your team too.
+        let own = cheap.points > 0 ? ", plus \(cheap.points) for the \(cheap.description) itself" : ""
         return Setup(trump: trump, plays: plays, hand: hand, correct: cheap, wrong: [high, low], prompt: prompt,
                      explanation: "**Win cheaply**: you play last, so your \(cheap.description) is enough to beat the "
-                        + "\(winning.description) and take the \(points) points. Keep the \(high.description) for later; the "
-                        + "\(low.description) would let the opponents win.")
+                        + "\(winning.description) and take the \(points) points\(own). Keep the \(high.description) for "
+                        + "later; the \(low.description) would let the opponents win.")
     }
 
     /// You are out of the led suit, points are on the table and you play last: ruff with a low trump.
@@ -2662,13 +2696,14 @@ private enum StrategyDrill {
         let winner = eastLeadsTop ? east : west
         let prompt = level == 1 ? "\(line) \(Seats.name(winner)) is winning and you play last. What should you play?"
             : "\(line) You play last. What should you play?"
+        // "Lowest non-point card", not "the least you can": the point card may be lower (a 5 below a 6).
         return Setup(trump: trump, plays: plays, hand: hand, correct: low, wrong: wrong, prompt: prompt,
                      explanation: "**Duck low**: \(DrillText.possessive(winner)) \(topCard.description) wins whatever you "
-                        + "play, so give the least you can: your \(low.description). Your \(pointCard.description) would "
-                        + "hand the opponents \(pointCard.points) more points.")
+                        + "play, so play your lowest non-point card, the \(low.description). Your \(pointCard.description) "
+                        + "would hand the opponents \(pointCard.points) more points.")
     }
 
-    /// You are on lead: cash a top card, don't lead a lone King into the ace.
+    /// You are on lead: cash a top card, don't lead a King into the ace.
     private static func leadAce(level: Int, trump: Trump, pool: inout DrillPool, dice: inout DrillDice) -> Setup? {
         var round = trump
         if round.rank >= .ten { round.rank = dice.pick([Rank.two, .three, .four, .six, .seven, .eight, .nine]) ?? .two }
@@ -2697,7 +2732,7 @@ private enum StrategyDrill {
         return Setup(trump: round, plays: [], hand: hand, correct: ace, wrong: wrong,
                      prompt: "\(DrillText.trumpLine(round)) You are on lead. Which card should you lead?",
                      explanation: "**Lead sure winners**: no \(aceSuit.singularName) can beat your \(ace.description), so it "
-                        + "should win the trick. A lone \(king.description) invites an opponent's A\(kingSuit.symbol) to "
-                        + "capture it, plus its 10 points." + extra)
+                        + "should win the trick. Leading the \(king.description) invites an opponent's A\(kingSuit.symbol) "
+                        + "to capture it, plus its 10 points." + extra)
     }
 }
