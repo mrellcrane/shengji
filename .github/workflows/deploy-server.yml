@@ -1,0 +1,178 @@
+name: Deploy online server
+
+# Tests the online multiplayer Worker in server/ (shengji-online), deploys it, and runs the
+# end-to-end smoke test (server/scripts/smoke.ts) against the deployed URL.
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN    API token from the "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID   Your Cloudflare account ID
+# Optional (push notifications stay off until APNS_KEY_P8 and APNS_KEY_ID exist):
+#   APNS_KEY_P8             Contents of the APNs AuthKey_XXXXXXXXXX.p8 file
+#   APNS_KEY_ID             That key's 10-character id
+#   APPLE_TEAM_ID           Your Apple team id (the TestFlight workflow uses it too)
+# Every deploy sets a fresh random DEV_AUTH_SECRET Worker secret, used only by its smoke test.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, claude/epic-einstein-25elio]
+    paths:
+      - server/**
+      - .github/workflows/deploy-server.yml
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: server
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # The whole API in wrangler dev (workerd: real Durable Objects, WebSockets, rate limiters).
+      - name: End-to-end test (wrangler dev)
+        run: npm run e2e
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Check secrets
+        id: secrets
+        run: |
+          missing=""
+          for v in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!v}" ]; then missing="$missing $v"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice::Skipping deploy: missing repository secrets:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm ci
+        if: steps.secrets.outputs.ready == 'true'
+
+      - name: Deploy Worker
+        id: deploy
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          set -o pipefail
+          npx wrangler deploy --var "VERSION:${GITHUB_SHA}" 2>&1 | tee deploy.log
+          url=$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          if [ -z "$url" ]; then
+            echo "::error::Could not find the workers.dev URL in the deploy output. If this is a new Cloudflare account, open Workers & Pages in the dashboard once to pick a workers.dev subdomain."
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      # One bulk upload (one new Worker version): a fresh DEV_AUTH_SECRET every time, plus the
+      # APNs credentials when the repository has them. The dev secret goes to a private file for
+      # the smoke test and never into the log.
+      - name: Set Worker secrets
+        id: workersecrets
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          dev_secret=$(openssl rand -hex 32)
+          echo "::add-mask::$dev_secret"
+          printf '%s' "$dev_secret" > "$RUNNER_TEMP/dev-auth-secret"
+          push=false
+          if [ -n "$APNS_KEY_P8" ] && [ -n "$APNS_KEY_ID" ]; then
+            if [ -z "$APPLE_TEAM_ID" ]; then
+              echo "::warning::APNS_KEY_P8 and APNS_KEY_ID are set but APPLE_TEAM_ID is not; push stays off."
+            else
+              push=true
+            fi
+          else
+            echo "::notice::Push notifications are off (add the APNS_KEY_P8 and APNS_KEY_ID repository secrets to turn them on)."
+          fi
+          if [ "$push" = true ]; then
+            jq -n --arg dev "$dev_secret" --arg p8 "$APNS_KEY_P8" --arg kid "$APNS_KEY_ID" --arg team "$APPLE_TEAM_ID" \
+              '{DEV_AUTH_SECRET: $dev, APNS_KEY_P8: $p8, APNS_KEY_ID: $kid, APPLE_TEAM_ID: $team}' > "$RUNNER_TEMP/secrets.json"
+          else
+            jq -n --arg dev "$dev_secret" '{DEV_AUTH_SECRET: $dev}' > "$RUNNER_TEMP/secrets.json"
+          fi
+          npx wrangler secret bulk "$RUNNER_TEMP/secrets.json"
+          rm -f "$RUNNER_TEMP/secrets.json"
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          PUSH: ${{ steps.workersecrets.outputs.push }}
+        run: |
+          set -uo pipefail
+          export DEV_AUTH_SECRET="$(cat "$RUNNER_TEMP/dev-auth-secret")"
+          # Wait until the new version (with its secrets) is the one answering.
+          want_push='"push":false'
+          if [ "$PUSH" = true ]; then want_push='"push":true'; fi
+          for i in $(seq 1 24); do
+            health=$(curl -s "$URL/health" || true)
+            echo "health: $health"
+            case "$health" in *"\"version\":\"$GITHUB_SHA\""*"$want_push"*) break;; esac
+            sleep 5
+          done
+          # A just-deployed version can take a little while to settle everywhere, so retry a few times.
+          ok=false
+          for i in $(seq 1 5); do
+            if node --experimental-strip-types scripts/smoke.ts "$URL" > "$RUNNER_TEMP/smoke.json" 2> "$RUNNER_TEMP/smoke.log"; then
+              ok=true
+              break
+            fi
+            echo "attempt $i failed:"
+            cat "$RUNNER_TEMP/smoke.log"
+            sleep 15
+          done
+          rm -f "$RUNNER_TEMP/dev-auth-secret"
+          if [ "$ok" != true ]; then
+            echo "::error::The smoke test failed against $URL (see the log above)."
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/smoke.json"
+          {
+            echo "### Online server deployed"
+            echo ""
+            echo "URL: $URL"
+            echo ""
+            echo "Version: \`$GITHUB_SHA\`, push notifications: $(jq -r '.push' "$RUNNER_TEMP/smoke.json")"
+            echo ""
+            echo "Smoke test (two dev users, two bots, one whole round in $(jq -r '.durationMs' "$RUNNER_TEMP/smoke.json") ms):"
+            echo ""
+            jq -r '.checks[] | "- " + .' "$RUNNER_TEMP/smoke.json"
+            echo ""
+            echo "Last round: $(jq -r '.lastRoundSummary' "$RUNNER_TEMP/smoke.json")"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -127,11 +127,23 @@ interface GamesFile {
   }[];
 }
 
+interface ViewsFile {
+  cases: {
+    label: string;
+    players: E.SeatPlayer[];
+    game: E.GameState;
+    round: Round;
+    /** The Swift `SeatView` Codable JSON for seats 0...3 (absent optionals left out). */
+    views: unknown[];
+  }[];
+}
+
 const combos = loadVectors<CombosFile>("combos.json");
 const rules = loadVectors<RulesFile>("rules.json");
 const rounds = loadVectors<RoundsFile>("rounds.json");
 const games = loadVectors<GamesFile>("games.json");
 const edges = loadVectors<EdgesFile>("edges.json");
+const views = loadVectors<ViewsFile>("views.json");
 
 interface EdgesFile {
   declarations: { declaration: Declaration; description: string }[];
@@ -555,5 +567,42 @@ test("vectors: game progression over many rounds", () => {
   }
   assert.ok(games.games.length >= 20);
   assert.ok(winners >= 20, `only ${winners} games reached a winner`);
+  p.finish();
+});
+
+// MARK: views.json
+
+/** JSON with null-valued object keys removed: Swift's Codable leaves nil optionals out. */
+function withoutNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) if (v !== null) out[key] = withoutNulls(v);
+    return out;
+  }
+  return value;
+}
+
+test("vectors: seat views match the Swift SeatView JSON for all four seats", () => {
+  const p = parity("views");
+  const labels = new Map<string, number>();
+  let summaries = 0;
+  let winners = 0;
+  for (const [index, c] of views.cases.entries()) {
+    labels.set(c.label, (labels.get(c.label) ?? 0) + 1);
+    for (let seat = 0; seat < 4; seat++) {
+      // Round trip through JSON first: exactly what the server sends.
+      const view = JSON.parse(JSON.stringify(E.toSeatView(c.game, c.round, seat, c.players))) as E.SeatView;
+      if (view.lastRoundSummary !== null) summaries++;
+      if (view.gameWinnerTeam !== null) winners++;
+      p.equal(`case ${index} (${c.label}, round phase ${c.round.phase}), seat ${seat}`, withoutNulls(view),
+        withoutNulls(c.views[seat]));
+    }
+  }
+  assert.ok(views.cases.length >= 80, `only ${views.cases.length} view cases`);
+  for (const label of ["burying", "buried", "playing", "finished", "recorded"]) {
+    assert.ok((labels.get(label) ?? 0) >= 5, `only ${labels.get(label) ?? 0} ${label} cases`);
+  }
+  assert.ok(summaries >= 200 && winners >= 40, `summaries ${summaries}, winners ${winners}`);
   p.finish();
 });

@@ -1,4 +1,5 @@
-// The per-seat view of a round: everything one player is allowed to see (DESIGN.md, Privacy).
+// The per-seat view of a round in absolute seats: everything one player is allowed to see (DESIGN.md,
+// Privacy). The wire format the server sends is `SeatView` in seatview.ts (viewer-relative, Swift shape).
 //
 // Hidden from a seat: the other hands, the undealt cards, and the kitty, except that the dealer
 // sees the kitty while holding it (burying) and after burying it, and everyone sees it once the
@@ -21,7 +22,7 @@ export interface BiddingView {
   bids: Bid[];
 }
 
-export interface SeatView {
+export interface RoundView {
   /** The seat this view belongs to. */
   seat: number;
   phase: RoundPhase;
@@ -78,7 +79,7 @@ function copyDeclaration(d: Declaration): Declaration {
 }
 
 /** The view of `round` for `seat` (0...3). Shares no objects with `round`. */
-export function viewFor(round: Round, seat: number): SeatView {
+export function viewFor(round: Round, seat: number): RoundView {
   if (!Number.isInteger(seat) || seat < 0 || seat >= round.hands.length) {
     throw new RangeError(`seat must be 0...3, got ${seat}`);
   }

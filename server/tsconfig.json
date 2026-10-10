@@ -1,4 +1,6 @@
 {
+  // Node: the engine, all server logic, tests and scripts. The Worker entry and the Durable Object
+  // adapters (which import cloudflare:workers) are checked by tsconfig.worker.json instead.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ES2022",
@@ -17,5 +19,6 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["src/worker.ts", "src/env.ts", "src/durable/**"]
 }

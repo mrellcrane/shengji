@@ -1,0 +1,62 @@
+# Cloudflare Worker for online multiplayer (DESIGN.md "Online multiplayer", docs/online-protocol.md).
+# Free plan: SQLite-backed Durable Objects, rate limiting bindings, WebSocket hibernation.
+#
+# Worker secrets (set by .github/workflows/deploy-server.yml, never committed):
+#   DEV_AUTH_SECRET   enables POST /v1/auth/dev; a fresh random value on every deploy, for the smoke test
+#   APNS_KEY_P8       APNs auth key (.p8 contents); with APNS_KEY_ID and APPLE_TEAM_ID enables push
+#   APNS_KEY_ID       the key's 10-character id
+#   APPLE_TEAM_ID     the developer team id
+# Locally, put them in server/.dev.vars (gitignored) or pass --var to `wrangler dev`.
+name = "shengji-online"
+main = "src/worker.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+preview_urls = false
+
+[observability]
+enabled = true
+
+[vars]
+# The deploy workflow passes the git sha with --var VERSION:<sha>.
+VERSION = "dev"
+
+# One Hub (users, sign-in identities, sessions, devices, clubs, the games index), named "hub".
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "Hub"
+
+# One GameRoom per game: authoritative state, action log, live WebSockets.
+[[durable_objects.bindings]]
+name = "GAMES"
+class_name = "GameRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub", "GameRoom"]
+
+# Per signed-in user (key = user id).
+[[ratelimits]]
+name = "USER_LIMITER"
+namespace_id = "2001"
+
+  [ratelimits.simple]
+  limit = 120
+  period = 60
+
+# Per IP, so many accounts from one place can't get around the user limit.
+[[ratelimits]]
+name = "IP_LIMITER"
+namespace_id = "2002"
+
+  [ratelimits.simple]
+  limit = 300
+  period = 60
+
+# Sign-in and invite-code attempts per IP (slows down guessing).
+[[ratelimits]]
+name = "AUTH_LIMITER"
+namespace_id = "2003"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
