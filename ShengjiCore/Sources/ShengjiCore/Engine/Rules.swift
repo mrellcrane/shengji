@@ -44,7 +44,8 @@ public enum LeadViolation: Equatable, Sendable {
         case .cardsNotInHand:
             return "You can only play cards that are in your hand."
         case .mixedSuits:
-            return "A lead must be all one suit, or all trumps. Pick cards from just one of them."
+            return "A lead must be all one suit, or all trumps. "
+                + "Jokers and trump-rank cards count as trumps, not as their printed suit."
         }
     }
 }
@@ -70,14 +71,24 @@ public enum FollowViolation: Equatable, Sendable {
         case let .mustFollowSuit(group):
             let name = group.name
             let capitalized = name.prefix(1).uppercased() + name.dropFirst()
-            return "\(capitalized) were led and you still have \(name), so you must play \(name). "
-                + "If you have too few, play all of them and fill up with other cards."
+            // Learners often take a trump-rank card (2♠ when 2s are trump) for a card of its printed
+            // suit, so say where those cards belong.
+            let reminder: String
+            switch group {
+            case .trump:
+                reminder = "Jokers and trump-rank cards of every suit are trumps too."
+            case let .plain(suit):
+                reminder = "A \(suit.singularName) of the trump rank counts as a trump, not a \(suit.singularName)."
+            }
+            return "\(capitalized) were led and you still have \(name), so you must play \(name). \(reminder) "
+                + "If you have too few \(name), play them all and fill up with other cards."
         case let .mustPlayTractor(length):
             let tractor = length > 2 ? "a tractor of \(length) pairs" : "a tractor"
             return "A tractor was led and you hold \(tractor) in that suit, so you must play it."
         case let .mustPlayPairs(required):
             if required <= 1 {
-                return "The lead contains a pair and you have a pair in that suit, so you must play a pair."
+                return "The lead contains a pair and you have a pair in that suit, so you must play a pair "
+                    + "(two identical cards)."
             }
             return "The lead contains pairs and you have pairs in that suit, so you must play at least \(required) pairs."
         }
@@ -277,7 +288,8 @@ extension Rules {
     // MARK: Following
 
     /// The greedy walk of DESIGN.md §Following. When a tractor must be removed and several can be,
-    /// the choice that keeps the most structure for the remaining components is used.
+    /// or pairs must be given up for a tractor the follower can't match, the choice that keeps the
+    /// most tractors for the remaining components is used.
     static func requirementWalk(_ components: ArraySlice<Component>, remaining: [Card],
                                 trump: Trump) -> (tractors: [Int], pairs: Int) {
         guard let component = components.first else { return ([], 0) }
@@ -314,27 +326,64 @@ extension Rules {
                 return ([length] + chosen.tractors, chosen.pairs + length)
             }
             // No run long enough: as many pairs as they have, up to `length`.
-            let count = min(Combos.pairCount(in: remaining), length)
-            var left = remaining
-            for _ in 0..<count {
-                let pairs = Combos.pairs(in: left, trump: trump)
-                guard var choice = pairs.first else { break }
-                var bestRun = -1
-                // Remove the pair that leaves the longest run for later tractors (lowest if tied).
-                for pair in pairs {
-                    var trial = left
-                    trial.remove(cards: pair)
-                    let run = Combos.longestRun(in: trial, trump: trump)
-                    if run > bestRun {
-                        bestRun = run
-                        choice = pair
-                    }
-                }
-                left.remove(cards: choice)
+            let pairs = Combos.pairs(in: remaining, trump: trump)
+            let count = min(pairs.count, length)
+            let reachable = rest.filter { $0.shape.isTractor }.count
+            // Pairs that sit next to no other pair can never be part of a tractor, so giving them up
+            // first costs nothing. Only if more pairs are owed does the choice matter.
+            let loose = pairs.filter { !isNextToAnotherPair($0, pairs: pairs, trump: trump) }
+            let linked = pairs.filter { isNextToAnotherPair($0, pairs: pairs, trump: trump) }
+            var base = remaining
+            for pair in loose.prefix(count) { base.remove(cards: pair) }
+            let stillOwed = count - min(count, loose.count)
+            if stillOwed == 0 || reachable == 0 {
+                for pair in linked.prefix(stillOwed) { base.remove(cards: pair) }
+                let sub = requirementWalk(rest, remaining: base, trump: trump)
+                return (sub.tractors, sub.pairs + count)
             }
-            let sub = requirementWalk(rest, remaining: left, trump: trump)
-            return (sub.tractors, sub.pairs + count)
+            // Try every choice of linked pairs and keep the one that leaves the most structure.
+            var best: (tractors: [Int], pairs: Int)?
+            forEachCombination(of: linked[...], size: stillOwed, chosen: []) { chosen in
+                var left = base
+                for pair in chosen { left.remove(cards: pair) }
+                let sub = requirementWalk(rest, remaining: left, trump: trump)
+                if let current = best {
+                    if isMoreStructure(sub.tractors, than: current.tractors) { best = sub }
+                } else {
+                    best = sub
+                }
+                return sub.tractors.count == reachable
+            }
+            let chosen = best ?? ([], 0)
+            return (chosen.tractors, chosen.pairs + count)
         }
+    }
+
+    /// True if another pair in `pairs` is of the same group and one strength above or below `pair`,
+    /// so the two could be part of a tractor.
+    static func isNextToAnotherPair(_ pair: [Card], pairs: [[Card]], trump: Trump) -> Bool {
+        guard let card = pair.first else { return false }
+        let group = trump.group(card)
+        let strength = trump.strength(card)
+        return pairs.contains { other in
+            guard let otherCard = other.first, trump.group(otherCard) == group else { return false }
+            return abs(trump.strength(otherCard) - strength) == 1
+        }
+    }
+
+    /// Calls `visit` with every way to pick `size` of `items` (in order). Returns true if a visit
+    /// returned true, which stops the enumeration.
+    @discardableResult
+    static func forEachCombination<T>(of items: ArraySlice<T>, size: Int, chosen: [T],
+                                      visit: ([T]) -> Bool) -> Bool {
+        if chosen.count == size { return visit(chosen) }
+        guard items.count >= size - chosen.count else { return false }
+        var rest = items
+        while let item = rest.first, rest.count >= size - chosen.count {
+            rest = rest.dropFirst()
+            if forEachCombination(of: rest, size: size, chosen: chosen + [item], visit: visit) { return true }
+        }
+        return false
     }
 
     static func isMoreStructure(_ a: [Int], than b: [Int]) -> Bool {

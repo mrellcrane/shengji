@@ -82,8 +82,11 @@ final class RulesTests: XCTestCase {
     }
 
     func testLeadViolationExplanations() {
+        // The usual mistake is mixing a trump-rank card (2♠ when 2s are trump) with its printed suit,
+        // so the explanation says where those cards belong.
         XCTAssertEqual(LeadViolation.mixedSuits.explanation,
-                       "A lead must be all one suit, or all trumps. Pick cards from just one of them.")
+                       "A lead must be all one suit, or all trumps. "
+                       + "Jokers and trump-rank cards count as trumps, not as their printed suit.")
         for violation in [LeadViolation.empty, .cardsNotInHand, .mixedSuits] {
             XCTAssertFalse(violation.explanation.isEmpty)
             XCTAssertFalse(violation.explanation.contains("\u{2014}"))
@@ -257,6 +260,25 @@ final class RulesTests: XCTestCase {
                        FollowRequirement(tractorLengths: [2], totalPairs: 5))
     }
 
+    func testFallbackPairsAreChosenToKeepEveryLaterTractor() {
+        // Trumps (hearts, rank 2) thrown: 5♥-6♥-7♥, A♥-2♦ and J♥-Q♥ tractors (7 pairs).
+        let lead = pair(.five, .hearts) + pair(.six, .hearts) + pair(.seven, .hearts)
+            + pair(.ace, .hearts) + pair(.two, .diamonds) + pair(.jack, .hearts) + pair(.queen, .hearts)
+        // The follower has no 3-run, so the 3-tractor asks for 3 pairs. Giving up K♥K♥, BJBJ and one
+        // off-suit rank pair keeps three 2-runs (3♥-4♥, 8♥-9♥, 2♠/2♣-2♥) for the two 2-tractors.
+        let held = pair(.three, .hearts) + pair(.four, .hearts) + pair(.eight, .hearts) + pair(.nine, .hearts)
+            + pair(.king, .hearts) + pair(.two, .clubs) + pair(.two, .spades) + pair(.two, .hearts) + [sj0, bj0, bj1]
+        XCTAssertEqual(Rules.followRequirement(lead: lead, suitCards: held, trump: t),
+                       FollowRequirement(tractorLengths: [2, 2], totalPairs: 7))
+        // Seven pairs with only one tractor is not enough.
+        let oneTractor = pair(.three, .hearts) + pair(.four, .hearts) + pair(.eight, .hearts) + pair(.king, .hearts)
+            + pair(.two, .clubs) + pair(.two, .spades) + [bj0, bj1]
+        XCTAssertEqual(Rules.validateFollow(oneTractor, hand: held, lead: lead, trump: t), .mustPlayTractor(length: 2))
+        let twoTractors = pair(.three, .hearts) + pair(.four, .hearts) + pair(.eight, .hearts) + pair(.nine, .hearts)
+            + pair(.two, .spades) + pair(.two, .hearts) + pair(.king, .hearts)
+        XCTAssertNil(Rules.validateFollow(twoTractors, hand: held, lead: lead, trump: t))
+    }
+
     // MARK: Following
 
     func testWrongCountAndCardsNotInHand() {
@@ -277,6 +299,44 @@ final class RulesTests: XCTestCase {
         XCTAssertEqual(Rules.validateFollow([c(.ace, .spades)], hand: trumpHand, lead: [c(.six, .hearts)], trump: t),
                        .mustFollowSuit(.trump))
         XCTAssertNil(Rules.validateFollow([c(.two, .clubs)], hand: trumpHand, lead: [c(.six, .hearts)], trump: t))
+    }
+
+    func testTrumpRankCardOfTheLedSuitIsNotThatSuit() {
+        // Rank 2, hearts trump: 2♠ is a trump, so it can't follow a spade lead while you hold a real spade,
+        // and someone whose only "spade" is 2♠ is void in spades.
+        let lead = [c(.king, .spades)]
+        let hand = [c(.two, .spades), c(.seven, .spades), c(.nine, .diamonds)]
+        XCTAssertEqual(Rules.validateFollow([c(.two, .spades)], hand: hand, lead: lead, trump: t), .mustFollowSuit(.plain(.spades)))
+        XCTAssertNil(Rules.validateFollow([c(.seven, .spades)], hand: hand, lead: lead, trump: t))
+        let onlyRankSpade = [c(.two, .spades), c(.nine, .diamonds)]
+        XCTAssertNil(Rules.validateFollow([c(.nine, .diamonds)], hand: onlyRankSpade, lead: lead, trump: t))
+        // ...and 2♠ played to a spade lead is a ruff that wins.
+        XCTAssertEqual(Rules.winningIndex(plays(lead, [c(.ace, .spades)], [c(.two, .spades)]), trump: t), 2)
+        // A spade and 2♠ together can't be led: they are two different groups.
+        XCTAssertEqual(Rules.validateLead([c(.seven, .spades), c(.two, .spades)], hand: hand, trump: t), .mixedSuits)
+        // With trumps led, 2♣ and jokers are trumps you must play.
+        let trumpLead = [c(.five, .hearts)]
+        let trumpHand = [c(.two, .clubs), c(.queen, .clubs)]
+        XCTAssertEqual(Rules.validateFollow([c(.queen, .clubs)], hand: trumpHand, lead: trumpLead, trump: t), .mustFollowSuit(.trump))
+    }
+
+    func testNoTrumpRoundRankPairsAndJokers() {
+        // No trump suit, rank 2: rank cards of every suit are equal trumps just below the jokers.
+        let lead = pair(.two, .spades) + [sj0, sj1]
+        XCTAssertEqual(Combos.shape(of: lead, trump: nt), .tractor(2))
+        // Two rank pairs have the same strength, so they are not a tractor.
+        XCTAssertNil(Combos.shape(of: pair(.two, .clubs) + pair(.two, .hearts), trump: nt))
+        // A rank pair and the big jokers skip the small jokers, so the follower has two pairs, no tractor.
+        let held = pair(.two, .clubs) + [bj0, bj1] + [c(.ace, .hearts), c(.king, .hearts)]
+        XCTAssertEqual(Rules.followRequirement(lead: lead, suitCards: Combos.cards(held, in: .trump, trump: nt), trump: nt),
+                       FollowRequirement(tractorLengths: [], totalPairs: 2))
+        XCTAssertEqual(Rules.validateFollow(pair(.two, .clubs) + [c(.ace, .hearts), c(.king, .hearts)], hand: held, lead: lead, trump: nt),
+                       .mustFollowSuit(.trump))
+        XCTAssertNil(Rules.validateFollow(pair(.two, .clubs) + [bj0, bj1], hand: held, lead: lead, trump: nt))
+        // Two loose pairs don't beat the tractor even though the big jokers are higher.
+        XCTAssertEqual(Rules.winningIndex(plays(lead, pair(.two, .clubs) + [bj0, bj1]), trump: nt), 0)
+        // In no trump, A♥ is a plain heart, not a trump.
+        XCTAssertEqual(Rules.winningIndex(plays([c(.king, .hearts)], [c(.ace, .hearts)], [c(.two, .diamonds)]), trump: nt), 2)
     }
 
     func testShortInSuitPlaysAllAndFills() {
@@ -372,16 +432,25 @@ final class RulesTests: XCTestCase {
     }
 
     func testFollowViolationExplanations() {
+        // Learners often take a trump-rank card (2♠ when 2s are trump) for a card of its printed
+        // suit, so the follow-suit explanations say where those cards belong.
         XCTAssertEqual(FollowViolation.mustFollowSuit(.plain(.spades)).explanation,
                        "Spades were led and you still have spades, so you must play spades. "
-                       + "If you have too few, play all of them and fill up with other cards.")
-        XCTAssertTrue(FollowViolation.mustFollowSuit(.trump).explanation.hasPrefix(
-            "Trumps were led and you still have trumps, so you must play trumps."))
+                       + "A spade of the trump rank counts as a trump, not a spade. "
+                       + "If you have too few spades, play them all and fill up with other cards.")
+        XCTAssertEqual(FollowViolation.mustFollowSuit(.trump).explanation,
+                       "Trumps were led and you still have trumps, so you must play trumps. "
+                       + "Jokers and trump-rank cards of every suit are trumps too. "
+                       + "If you have too few trumps, play them all and fill up with other cards.")
+        XCTAssertTrue(FollowViolation.mustFollowSuit(.plain(.diamonds)).explanation.contains(
+            "A diamond of the trump rank counts as a trump, not a diamond."))
         XCTAssertEqual(FollowViolation.mustPlayTractor(length: 2).explanation,
                        "A tractor was led and you hold a tractor in that suit, so you must play it.")
         XCTAssertTrue(FollowViolation.mustPlayTractor(length: 3).explanation.contains("tractor of 3 pairs"))
+        // A "pair" means two identical cards (2♠ + 2♣ is not a pair), so the explanation says so.
         XCTAssertEqual(FollowViolation.mustPlayPairs(required: 1).explanation,
-                       "The lead contains a pair and you have a pair in that suit, so you must play a pair.")
+                       "The lead contains a pair and you have a pair in that suit, so you must play a pair "
+                       + "(two identical cards).")
         XCTAssertTrue(FollowViolation.mustPlayPairs(required: 2).explanation.contains("at least 2 pairs"))
         XCTAssertEqual(FollowViolation.wrongCount(expected: 1).explanation, "Play exactly 1 card, the same number as the lead.")
         XCTAssertEqual(FollowViolation.wrongCount(expected: 4).explanation, "Play exactly 4 cards, the same number as the lead.")

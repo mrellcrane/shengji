@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ShengjiCore
 
@@ -67,6 +68,19 @@ final class GameTests: XCTestCase {
         XCTAssertEqual(summary.explanation,
                        "The defenders scored 85 points, reaching 80, so they take over the deal. "
                        + "Nobody goes up a level this time. East deals next at level 2.")
+    }
+
+    func testYourTeamTakesOverAndYouDealNext() {
+        var game = GameState()
+        // West deals and East and West defend badly: your team scores 125 and takes over.
+        let summary = game.record(result(dealer: 3, points: 125))
+        XCTAssertEqual(game.nextDealer, 0)
+        XCTAssertEqual(game.levels, [.three, .two])
+        XCTAssertEqual(summary.advancingTeam, 0)
+        XCTAssertEqual(summary.explanation,
+                       "The defenders scored 125 points, reaching 80, so they take over the deal. "
+                       + "Your team goes up 1 level, to 3. You deal next at level 3.")
+        XCTAssertEqual(game.nextTrumpRank, .three)
     }
 
     func testTakeoverLevelsByPoints() {

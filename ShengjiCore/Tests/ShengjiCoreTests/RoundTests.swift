@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ShengjiCore
 
@@ -418,6 +419,39 @@ final class RoundTests: XCTestCase {
         }
         XCTAssertEqual(round.tricks.count, 1)
         XCTAssertEqual(round.hands.map(\.count), [22, 22, 22, 22])
+    }
+
+    func testThrowBlockedByPartnerForcesThePairAndFollowersMustMatchIt() throws {
+        // Rank 2, hearts trump. Seat 0 throws A♠ + 7♠7♠. Only the partner (seat 2) can beat a part of it
+        // (9♠9♠ beats the pair), and a partner blocks a throw just like an opponent.
+        let otherSpades = [c(.ace, .spades, 1), c(.five, .spades, 1)]
+            + [Rank.king, .queen, .jack, .ten, .nine, .eight, .six, .four].flatMap { both($0, .spades) }
+        let deck = EngineTestSupport.deck(
+            hands: [[c(.two, .hearts), c(.ace, .spades)] + both(.seven, .spades), both(.three, .spades) + [c(.five, .spades)],
+                    otherSpades, []],
+            seed: 13)
+        var round = Round(trumpRank: .two, dealer: 0, deck: deck)
+        round.dealAll()
+        try round.declare(Declaration(player: 0, cards: [c(.two, .hearts)], suit: .hearts, strength: 1))
+        round.finishDealing()
+        let keep = Set([c(.two, .hearts), c(.ace, .spades)] + both(.seven, .spades))
+        try round.bury(Array(round.hands[0].filter { !keep.contains($0) }.prefix(8)))
+
+        let lead = [c(.ace, .spades)] + both(.seven, .spades)
+        XCTAssertEqual(try round.play(lead, by: 0), .throwFailed(forced: both(.seven, .spades), blocker: 2))
+        XCTAssertEqual(round.currentLead, both(.seven, .spades))
+        XCTAssertTrue(round.hands[0].contains(c(.ace, .spades)), "the rest of the throw goes back to the hand")
+        // Seat 1 must now follow the pair with its 3♠3♠.
+        XCTAssertEqual(round.legalityError(for: [c(.three, .spades), c(.five, .spades)], by: 1),
+                       .illegalFollow(.mustPlayPairs(required: 1)))
+        try round.play(both(.three, .spades), by: 1)
+        try round.play(both(.nine, .spades), by: 2)
+        let seat3 = round.hands[3]
+        XCTAssertFalse(seat3.contains { round.trump.group($0) == .plain(.spades) }, "seat 3 has no spades")
+        try round.play(Array(seat3.filter { !round.trump.isTrump($0) }.prefix(2)), by: 3)
+        XCTAssertEqual(round.lastTrick?.winner, 2)
+        XCTAssertEqual(round.leader, 2)
+        XCTAssertEqual(round.hands.map(\.count), [23, 23, 23, 23])
     }
 
     func testRoundErrorExplanations() {
