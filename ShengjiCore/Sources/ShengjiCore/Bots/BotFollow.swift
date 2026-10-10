@@ -93,8 +93,8 @@ struct StandardFollow {
 
     init(table: BotTable) {
         self.table = table
-        let trick = table.round.currentTrick
-        let lead = table.round.currentLead
+        let trick = table.view.currentTrick
+        let lead = table.view.currentLead
         self.trick = trick
         self.lead = lead
         self.count = lead.count
@@ -104,7 +104,7 @@ struct StandardFollow {
         self.leadShape = judge.format.largest?.shape ?? .single
         let index = judge.winnerIndex
         let winning: Play? = trick.indices.contains(index) ? trick[index] : trick.first
-        self.winner = winning?.player ?? table.round.leader
+        self.winner = winning?.player ?? table.view.leader
         self.winningCards = winning?.cards ?? lead
         var points = 0
         for play in trick { points += play.cards.points }
@@ -238,7 +238,7 @@ struct StandardFollow {
     }
 
     /// The player after this seat when it plays third (the last player), by name.
-    private var lastPlayerName: String { BotText.name((seat + 1) % 4, from: seat) }
+    private var lastPlayerName: String { table.name((seat + 1) % 4) }
 
     // MARK: Partner winning
 
@@ -295,7 +295,7 @@ struct StandardFollow {
     private func overtake(_ candidate: Candidate) -> BotDecision {
         let names = BotText.cards(candidate.cards, trump)
         let theirs = BotText.cards(winningCards, trump)
-        let threat = BotText.list(laterOpponents.map { BotText.name($0, from: seat) })
+        let threat = BotText.list(laterOpponents.map { table.name($0) })
         let points = onTable + candidate.cards.points
         let protect = points > 0 ? ", and protect \(BotText.points(points))" : ""
         return BotDecision(
@@ -310,7 +310,7 @@ struct StandardFollow {
 
     private func duckForPartner(_ play: [Card]) -> BotDecision {
         let names = BotText.cards(play, trump)
-        let threat = BotText.list(laterOpponents.map { BotText.name($0, from: seat) })
+        let threat = BotText.list(laterOpponents.map { table.name($0) })
         let opening = "Your partner is winning for now, but \(threat) plays after you and could still beat it"
         let reason: String
         if wouldWin(play) {
@@ -448,7 +448,7 @@ struct StandardFollow {
         let partnerLedVoid = trick.first?.player == table.partner && table.knowledge.isVoid(seat, in: ledGroup)
         var reason: String
         if overruff {
-            let who = BotText.capitalized(BotText.name(winner, from: seat))
+            let who = BotText.capitalized(table.name(winner))
             reason = "\(who) trumped with \(BotText.cards(winningCards, trump)), so beat it with \(names) \(prize)."
         } else if partnerLedVoid {
             reason = "Your partner led \(suits) knowing you're out of them, so trump with \(names) \(prize)."
@@ -457,7 +457,7 @@ struct StandardFollow {
         }
         let threats = laterOpponents.filter { table.mayRuff($0, ledGroup) }
         if !isLast, !threats.isEmpty, candidate.key >= Trump.topPlainStrength - 1 {
-            let threatNames = BotText.list(threats.map { BotText.name($0, from: seat) })
+            let threatNames = BotText.list(threats.map { table.name($0) })
             reason += " Trump high, because \(threatNames) is out of \(suits) too and could trump over a low one."
         }
         let nudge = partnerLedVoid
@@ -476,7 +476,7 @@ struct StandardFollow {
     }
 
     private var winnerPhrase: String {
-        "\(BotText.possessive(winner, from: seat)) \(BotText.cards(winningCards, trump))"
+        "\(table.possessive(winner)) \(BotText.cards(winningCards, trump))"
     }
 
     private func dumpDecision(_ play: [Card], canWin: Bool) -> BotDecision {

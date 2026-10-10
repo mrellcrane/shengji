@@ -105,8 +105,14 @@ Game won when the declaring team holds while at the target rank.
 - When the 4th card of a trick lands, `Round.play` scores it immediately: `tricks.last` is the finished trick,
   `currentTrick` is empty and `leader` is the winner. UIs show `tricks.last` for a moment before the next lead.
 - `Rules.winningIndex` works on partial tricks (bots use it to see who is winning right now).
-- `Bot` never looks at other hands. `BotKnowledge` = own hand, played cards, own buried kitty, and voids shown so far.
-- Hints = `Bot(seat: 0).decide(in:)` with its `reason` and `concept` strings.
+- `Bot` never looks at other hands: every decision is made from a `SeatView` alone (viewer = seat 0), so the same
+  bot plays offline and gives hints online. `BotKnowledge` = own hand, played cards, own buried kitty, and voids
+  shown so far. View methods: `decide(view:)` (play, or bury for the dealer), `cardsToBury(view:)`,
+  `declaration(view:available:)` (offline deal or online bidding; nil = pass) and `bid(view:)` (bidding hint texts).
+  The `Round` methods (`decide(in:)`, `cardsToBury(in:)`, `declaration(in:)`) build `round.seatView(for: seat)`
+  and call them.
+- Hints = `Bot(seat: 0).decide(in:)` offline, `Bot(seat: 0).decide(view:)` online, with its `reason` and `concept`
+  strings. Texts name the other players from the viewer's side (East on the right, West on the left).
 
 ## Bot strategy (standard level)
 
