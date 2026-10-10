@@ -41,18 +41,28 @@ struct CoachSheet: View {
     }
 }
 
-/// "Sees your hand and the table" under the title.
+/// "Sees your hand and the table" under the title, and who answers (always on screen, also when
+/// "Why?" sends a question as the sheet opens).
 @MainActor
 private struct CoachScopeNote: View {
     let scope: CoachScope
 
+    static let disclosure = "Answers come from Claude, an AI by Anthropic. Your questions go to it with what the coach sees."
+
     var body: some View {
-        Label(scope.note, systemImage: scope.systemImage)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, 6)
-            .accessibilityLabel("The coach \(scope.note.lowercased())")
+        VStack(spacing: 2) {
+            Label(scope.note, systemImage: scope.systemImage)
+                .font(.footnote)
+                .accessibilityLabel("The coach \(scope.note.lowercased())")
+            Text(Self.disclosure)
+                .font(.caption2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
     }
 }
 

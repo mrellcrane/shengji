@@ -859,6 +859,53 @@ final class ProgressTests: XCTestCase {
         XCTAssertGreaterThan(p.mastery(of: "skill.isTrump"), 0.9)
         XCTAssertEqual(p.studyDays.count, 4)
     }
+
+    // MARK: From the robustness review (same fixes, checked independently)
+
+    /// Always right but slow (VoiceOver reads every card out): over 24 s on a skill and 16 s on a fact.
+    /// The items still take each step and graduate, instead of coming back every minute forever.
+    func testSlowRightAnswersStillTakeEachStepAndGraduate() {
+        var p = F.progress(completing: [F.lesson6])
+        for id in ["skill.isPair", "fact.pairRule"] {
+            p.record(itemID: id, correct: true, seconds: 40, now: t0, updateSchedule: true,
+                     scheduler: Scheduler(), calendar: F.utc)
+            XCTAssertEqual(p.schedules[id]?.learningStep, 1, id)
+            XCTAssertEqual(p.schedules[id]?.due, t0.addingTimeInterval(600), id)
+            p.record(itemID: id, correct: true, seconds: 40, now: t0.addingTimeInterval(600), updateSchedule: true,
+                     scheduler: Scheduler(), calendar: F.utc)
+            XCTAssertNil(p.schedules[id]?.learningStep, id)
+            XCTAssertEqual(p.schedules[id]?.intervalDays, 1, id)
+        }
+        // Once graduated, a slow answer still counts as hard: a smaller step up and a little less ease.
+        p.record(itemID: "skill.isPair", correct: true, seconds: 40, now: t0.addingTimeInterval(600 + day),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(p.schedules["skill.isPair"]?.intervalDays ?? 0, 1.2, accuracy: 1e-9)
+        XCTAssertEqual(p.schedules["skill.isPair"]?.ease ?? 0, 2.35, accuracy: 1e-9)
+    }
+
+    func testSlowRightAnswerAfterALapseStillReGraduates() {
+        var p = F.progress(completing: [F.lesson3])
+        p.schedules["skill.isTrump"] = F.graduated("skill.isTrump", interval: 6, due: t0)
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        p.record(itemID: "skill.isTrump", correct: true, seconds: 40, now: t0.addingTimeInterval(600),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertNil(p.schedules["skill.isTrump"]?.learningStep)
+        XCTAssertEqual(p.schedules["skill.isTrump"]?.intervalDays ?? 0, 3, accuracy: 1e-9)
+    }
+
+    /// Every new item was just asked in the lesson quiz, so a quick answer at its first review is short-term
+    /// memory. It takes the 10-minute step, as "Lesson passed" promises, instead of jumping to 4 days.
+    func testFastFirstReviewRightAfterTheLessonStillTakesEachStep() {
+        var p = F.progress(completing: [F.lesson6])
+        let firstReview = t0.addingTimeInterval(30)
+        for id in ["skill.isPair", "fact.pairRule"] {
+            p.record(itemID: id, correct: true, seconds: 1, now: firstReview, updateSchedule: true,
+                     scheduler: Scheduler(), calendar: F.utc)
+            XCTAssertEqual(p.schedules[id]?.learningStep, 1, id)
+            XCTAssertEqual(p.schedules[id]?.due, firstReview.addingTimeInterval(600), id)
+        }
+    }
 }
 
 /// Practice sessions with fake question and lesson providers (the real ones live in Curriculum).

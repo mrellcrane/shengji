@@ -158,6 +158,12 @@ struct GameCoachBannerView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black.opacity(message == nil ? 0.12 : 0.34))
         )
+        // VoiceOver doesn't read a changed banner by itself, and it carries the news: a play that was
+        // refused, a hint, who won the trick. Read each new message out.
+        .task(id: message?.id) { [message] in
+            guard let message else { return }
+            AccessibilityAnnouncer.announce(String(RichText.styled(message.text).characters))
+        }
     }
 
     private func content(_ message: GameCoachMessage) -> some View {
@@ -267,6 +273,9 @@ struct GamePredictionPanel: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Theme.gold, lineWidth: 1.5)
         )
+        .onAppear {
+            AccessibilityAnnouncer.announce("Who wins this trick?")
+        }
     }
 
     private func answerLabel(_ seat: Int) -> String {
