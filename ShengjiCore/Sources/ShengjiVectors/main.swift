@@ -30,7 +30,7 @@ let outputs: [(name: String, make: () -> [(String, JSON)])] = [
     ("games.json", { GameVectors.make() }),
     ("edges.json", { EdgeVectors.make(count: 200) }),
     ("views.json", { ViewVectors.make(games: 20) }),
-    ("bots.json", { BotVectors.make(online: 240, offline: 60, deals: 400) }),
+    ("bots.json", { BotVectors.make(online: 240, offline: 60, deals: 400, ruffRounds: 80) }),
 ]
 
 var total = 0

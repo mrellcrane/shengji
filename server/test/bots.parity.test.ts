@@ -76,6 +76,17 @@ function situation(view: SeatView): string {
   return lines.join("\n    ");
 }
 
+/** Cards of `group` the viewer of `view` has not seen (not in hand, not played, not its buried kitty). */
+function unseenCount(view: SeatView, group: E.SuitGroup): number {
+  const known = new Set<Card>(view.hand);
+  for (const trick of view.tricks) for (const play of trick.plays) for (const card of play.cards) known.add(card);
+  for (const play of view.currentTrick) for (const card of play.cards) known.add(card);
+  if (view.phase === "playing" && view.dealer === 0) for (const card of view.kitty ?? []) known.add(card);
+  let count = 0;
+  for (let card = 0; card < E.DECK_SIZE; card++) if (!known.has(card) && E.groupOf(view.trump, card) === group) count++;
+  return count;
+}
+
 /** Coverage of the vectors: what kinds of decisions they hold. */
 function newCoverage() {
   return {
@@ -93,6 +104,9 @@ function newCoverage() {
     tractorLeads: 0,
     tractorFollows: 0,
     ruffs: 0,
+    /** Standard ruffs of a throw, and of a suit too short for the opponents still to play to follow. */
+    throwRuffs: 0,
+    shortSuitRuffs: 0,
     seats: [0, 0, 0, 0],
   };
 }
@@ -229,7 +243,15 @@ function replay(): Replay {
           if (E.decompose(cards, view.trump).some((c) => c.shape.type === "tractor")) coverage.tractorLeads += 1;
         }
         if (level === "standard" && ledGroup !== null && ledGroup !== "trump" && cards.length > 0) {
-          if (cards.every((card) => E.isTrump(view.trump, card))) coverage.ruffs += 1;
+          if (cards.every((card) => E.isTrump(view.trump, card))) {
+            coverage.ruffs += 1;
+            const later = 3 - view.currentTrick.length;
+            const laterOpponents = later >= 3 ? 2 : later >= 1 ? 1 : 0;
+            if (E.isThrow(lead, view.trump)) coverage.throwRuffs += 1;
+            else if (laterOpponents > 0 && unseenCount(view, ledGroup) < Math.max(1, lead.length * laterOpponents)) {
+              coverage.shortSuitRuffs += 1;
+            }
+          }
         }
         return cards;
       });
@@ -268,5 +290,7 @@ test("bots.json covers every kind of decision", () => {
   assert.ok(c.leads >= 5000 && c.follows >= 15000, report);
   assert.ok(c.throws >= 500 && c.tractorLeads >= 200, `few throws or tractor leads: ${report}`);
   assert.ok(c.tractorFollows >= 300 && c.ruffs >= 700, `few tractor follows or ruffs: ${report}`);
+  // Rare at random, so ShengjiVectors keeps extra rounds that hold them (BotVectors `ruffRounds`).
+  assert.ok(c.throwRuffs >= 30 && c.shortSuitRuffs >= 100, `few ruffs of throws or of short suits: ${report}`);
   assert.ok(c.seats.every((n) => n >= 5000), `every seat decides: ${report}`);
 });

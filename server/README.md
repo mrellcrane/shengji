@@ -197,18 +197,21 @@ Field names match the TypeScript types.
   and short hand lists. 200 follows to leads of two or three tractors, with plays that hold only
   some of the required tractors (which length `mustPlayTractor` names). 200 tricks where a
   plain-suit lead, often a throw, is ruffed and over-ruffed.
-- `bots.json`: what the Swift bots choose, standard and beginner, at every decision of 300 whole
+- `bots.json`: what the Swift bots choose, standard and beginner, at every decision of 380 whole
   rounds (240 with the server's turn-based bidding, 60 declaring while the cards are dealt, as the
-  app does) and 400 more deals that stop once the kitty is buried. Each round has its deal (trump
-  rank, dealer, deck order), how trump is decided, who moves for each seat (a bot level, or a random
-  stand-in whose legal moves include failed throws) and one step per decision: the deciding seat,
-  both levels' cards (a declaration by its cards, none for a pass) and a random seat's move. A fifth
-  of the deals are pair-rich (tractors) and about one in seven put all four jokers in one hand, so
-  the steps hold throws, tractors, ruffs and over-ruffs, no-trump rounds, overrides and every seat
-  as the viewer. Only choices are stored (about 2 MB): the test rebuilds each round with the
-  TypeScript engine and each view with `toSeatView`, requires the same cards in the same order from
-  both levels (a mismatch names the round, step, seat and level, both choices and the situation),
-  checks the round's `RoundResult`, and asserts how many of each kind of decision the file covers.
+  app does, and 80 kept from further seeds because the standard bot ruffs a throw in them, or a
+  suit too short for the opponents still to play to follow, both rare at random) and 400 more
+  deals that stop once the kitty is buried. Each round has its deal (trump rank, dealer, deck
+  order), how trump is decided, who moves for each seat (a bot level, or a random stand-in whose
+  legal moves include failed throws) and one step per decision: the deciding seat, both levels'
+  cards (a declaration by its cards, none for a pass) and a random seat's move. A fifth of the
+  deals are pair-rich (tractors) and about one in seven put all four jokers in one hand, so the
+  steps hold throws, tractors, ruffs and over-ruffs, no-trump rounds, overrides and every seat as
+  the viewer. Only choices are stored (about 2.4 MB): the test rebuilds each round with the
+  TypeScript engine and each view with `toSeatView`, requires the same cards in the same order
+  from both levels (a mismatch names the round, step, seat and level, both choices and the
+  situation), checks the round's `RoundResult`, and asserts how many of each kind of decision the
+  file covers.
 
 ## Testing
 

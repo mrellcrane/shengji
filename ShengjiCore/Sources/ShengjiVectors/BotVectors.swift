@@ -13,16 +13,28 @@ import ShengjiCore
 /// deals `deal` cards. Only choices are recorded: the TypeScript test replays each round with its own
 /// engine (proven identical by the other vectors) to rebuild every view, and checks the `result`.
 /// `deals` are more rounds that stop once the kitty is buried (no `playing`, no `result`): cheap
-/// extra declaring and burying decisions.
+/// extra declaring and burying decisions. The last `ruffRounds` rounds are picked from more seeds:
+/// only rounds in which the standard bot ruffs a throw, or ruffs a suit too short for the
+/// opponents still to play to follow, are kept (both rare at random, and both have their own logic).
 enum BotVectors {
     enum Controller: String {
         case standard, beginner, random
     }
 
-    static func make(online: Int, offline: Int, deals: Int) -> [(String, JSON)] {
+    static func make(online: Int, offline: Int, deals: Int, ruffRounds: Int) -> [(String, JSON)] {
         var rounds: [JSON] = []
         for index in 0..<online { rounds.append(entry(seed: UInt64(9000 + index), online: true)) }
         for index in 0..<offline { rounds.append(entry(seed: UInt64(9500 + index), online: false)) }
+        var seed: UInt64 = 20_000
+        var kept = 0
+        while kept < ruffRounds {
+            let candidate = round(seed: seed, online: seed % 4 != 3)
+            if candidate.rareRuffs > 0 {
+                rounds.append(candidate.json)
+                kept += 1
+            }
+            seed += 1
+        }
         var short: [JSON] = []
         for index in 0..<deals {
             short.append(entry(seed: UInt64(10_000 + index), online: index % 4 != 3, playOut: false))
@@ -36,6 +48,11 @@ enum BotVectors {
     }
 
     static func entry(seed: UInt64, online: Bool, playOut: Bool = true) -> JSON {
+        round(seed: seed, online: online, playOut: playOut).json
+    }
+
+    /// The round of `seed`, and how many times the standard bot made a rare ruff in it (`isRareRuff`).
+    static func round(seed: UInt64, online: Bool, playOut: Bool = true) -> (json: JSON, rareRuffs: Int) {
         var rand = Rand(seed)
         let rank = Rank.allCases[rand.below(Rank.allCases.count)]
         let dealer: Int? = rand.percent(25) ? nil : rand.below(4)
@@ -73,14 +90,37 @@ enum BotVectors {
             ("declaring", .array(declaring)),
             ("burying", burying),
         ]
-        guard playOut else { return .object(fields) }
+        guard playOut else { return (.object(fields), 0) }
         var playing: [JSON] = []
+        var rareRuffs = 0
         while round.phase == .playing, let player = round.turn {
-            playing.append(play(&round, player: player, controllers: controllers, rand: &rand))
+            let step = play(&round, player: player, controllers: controllers, rand: &rand)
+            playing.append(step.json)
+            if step.rareRuff { rareRuffs += 1 }
         }
         guard let result = round.result else { fatalError("bot round \(seed) did not finish") }
         fields += [("playing", .array(playing)), ("result", json(result))]
-        return .object(fields)
+        return (.object(fields), rareRuffs)
+    }
+
+    /// The standard bot's `choice` from `view` trumps a plain-suit lead it is out of, and the lead is
+    /// a throw, or so few cards of the suit are unseen that an opponent still to play is likely out of
+    /// it too (the bot's `isRunningOut`).
+    static func isRareRuff(view: SeatView, choice: [Card]) -> Bool {
+        let trump = view.trump
+        guard let lead = view.currentTrick.first?.cards, let group = Combos.group(of: lead, trump: trump),
+              !group.isTrump, !view.hand.contains(where: { trump.group($0) == group }),
+              !choice.isEmpty, choice.allSatisfy({ trump.isTrump($0) }) else { return false }
+        if Rules.isThrow(lead, trump: trump) { return true }
+        // Opponents (seats 1 and 3) still to play after the viewer (seat 0).
+        let later = view.currentTrick.count < 3 ? Array(1...(3 - view.currentTrick.count)) : []
+        let laterOpponents = later.filter { $0 % 2 == 1 }.count
+        guard laterOpponents > 0 else { return false }
+        var known = Set(view.hand.map(\.id))
+        for card in view.playedCards { known.insert(card.id) }
+        if view.phase == .playing, view.dealer == 0 { for card in view.kitty ?? [] { known.insert(card.id) } }
+        let unseen = Cards.all.filter { !known.contains($0.id) && trump.group($0) == group }.count
+        return unseen < max(1, lead.count * laterOpponents)
     }
 
     /// A shuffled deck in which one seat is dealt all four jokers and a few trump-rank cards, so
@@ -209,7 +249,8 @@ enum BotVectors {
         return .object(fields)
     }
 
-    static func play(_ round: inout Round, player: Int, controllers: [Controller], rand: inout Rand) -> JSON {
+    static func play(_ round: inout Round, player: Int, controllers: [Controller],
+                     rand: inout Rand) -> (json: JSON, rareRuff: Bool) {
         let view = round.seatView(for: player)
         let standard = Bot(seat: player, level: .standard).decide(view: view)?.cards ?? []
         let beginner = Bot(seat: player, level: .beginner).decide(view: view)?.cards ?? []
@@ -230,6 +271,6 @@ enum BotVectors {
         } catch {
             fatalError("play refused: \(error)")
         }
-        return .object(fields)
+        return (.object(fields), isRareRuff(view: view, choice: standard))
     }
 }
