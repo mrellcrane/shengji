@@ -31,20 +31,32 @@ final class OnlineNotificationDelegate: NSObject, UNUserNotificationCenterDelega
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let gameID = OnlinePushCenter.gameID(in: notification.request.content.userInfo)
+        let reply = OnlineCompletion(completionHandler)
         Task { @MainActor in
             let push = OnlinePushCenter.shared
             push.didReceive(gameID: gameID)
             // The open table already shows its own game live.
-            completionHandler(push.isShowing(gameID: gameID) ? [] : [.banner, .list, .sound])
+            reply.handler(push.isShowing(gameID: gameID) ? [] : [.banner, .list, .sound])
         }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let gameID = OnlinePushCenter.gameID(in: response.notification.request.content.userInfo)
+        let reply = OnlineCompletion(completionHandler)
         Task { @MainActor in
             OnlinePushCenter.shared.didOpen(gameID: gameID)
-            completionHandler()
+            reply.handler()
         }
+    }
+}
+
+/// A completion handler from UserNotifications carried to the main actor. The system lets it be called
+/// from any thread, and it is called exactly once, so handing it over is safe (Swift 6 can't see that).
+private struct OnlineCompletion<Handler>: @unchecked Sendable {
+    let handler: Handler
+
+    init(_ handler: Handler) {
+        self.handler = handler
     }
 }

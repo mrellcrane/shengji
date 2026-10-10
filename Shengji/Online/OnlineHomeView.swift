@@ -51,7 +51,8 @@ struct OnlineHomeView: View {
                 await session.refreshIfStale()
                 await session.push.refreshPermission()
             }
-            .task(id: session.push.pendingGameID) {
+            // Keyed on signing in too: a game tapped while signed out opens once you sign in here.
+            .task(id: session.isSignedIn ? session.push.pendingGameID : nil) {
                 await openPendingGame()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -124,8 +125,11 @@ struct OnlineHomeView: View {
 
     private func openPendingGame() async {
         guard let id = session.push.pendingGameID, session.isSignedIn else { return }
+        // A sheet in the way (a new game, a club) closes first: the table can't open over it.
+        let closingSheet = sheet != nil
+        sheet = nil
         // Let this screen finish appearing (a presentation started mid-transition is dropped).
-        try? await Task.sleep(nanoseconds: 600_000_000)
+        try? await Task.sleep(nanoseconds: closingSheet ? 900_000_000 : 600_000_000)
         guard !Task.isCancelled, session.push.pendingGameID == id else { return }
         session.push.pendingGameID = nil
         if table?.gameID != id { table = session.makeTable(gameID: id) }

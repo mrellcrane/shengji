@@ -108,6 +108,8 @@ struct OnlineRoundSummarySheet: View {
     let summary: RoundSummary
     let players: [SeatView.Player]
     let roundNumber: Int
+    /// The game's target level (for "levels stop at A").
+    let target: Rank
 
     @Environment(\.dismiss) private var dismiss
 
@@ -195,8 +197,9 @@ struct OnlineRoundSummarySheet: View {
         RoundResultSection(title: "What happened") {
             Text(result.outcome.summary)
                 .fontWeight(.semibold)
-            Text(summary.explanation)
+            Text(OnlineGameText.roundExplanation(summary, players: players, target: target))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

@@ -9,6 +9,7 @@ struct OnlinePlaySection: View {
     let onOpen: () -> Void
 
     @Environment(OnlineSession.self) private var session
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Section {
@@ -31,6 +32,10 @@ struct OnlinePlaySection: View {
             OnlineEntryLabel(title: entryTitle, subtitle: entrySubtitle, count: session.yourTurnCount)
         }
         .task { await session.refreshIfStale() }
+        // Back in the app: the your-turn count may have changed while you were away.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await session.refreshIfStale() } }
+        }
     }
 
     private var entryTitle: String {
@@ -202,7 +207,9 @@ struct OnlineShowsPlayTab: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: session.push.pendingGameID) { _, id in
+            // `initial`: a tap that launched the app can set the game before this view first draws,
+            // and a plain onChange never sees a value that was there from the start.
+            .onChange(of: session.push.pendingGameID, initial: true) { _, id in
                 if id != nil { showPlay() }
             }
     }

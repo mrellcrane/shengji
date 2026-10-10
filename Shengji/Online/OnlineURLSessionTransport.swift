@@ -48,7 +48,20 @@ final class URLSessionOnlineLiveSocket: OnlineLiveSocket, @unchecked Sendable {
             }
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
+        } catch {
+            // The server closes with 4004 when the game is deleted, and refuses to open the connection
+            // when the session or the game is gone.
+            if task.closeCode.rawValue == OnlineLiveGameClosed.closeCode { throw OnlineLiveGameClosed() }
+            if let status = (task.response as? HTTPURLResponse)?.statusCode,
+               OnlineLiveGameClosed.refusedStatuses.contains(status) {
+                throw OnlineLiveGameClosed()
+            }
+            throw error
         }
+    }
+
+    func sendPing() async throws {
+        try await task.send(.string("ping"))
     }
 
     func close() {

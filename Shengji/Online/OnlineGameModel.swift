@@ -154,9 +154,9 @@ final class OnlineGameModel: Identifiable {
         sheetTask = nil
     }
 
-    /// The app went to the background (false) or came back (true).
+    /// The app went to the background (false) or came back (true). A closed table stays disconnected.
     func setActive(_ active: Bool) {
-        guard isStarted else { return }
+        guard isStarted, !isGone else { return }
         if active {
             if let live { live.resume() } else { startLive() }
             Task { await refresh() }
@@ -189,14 +189,15 @@ final class OnlineGameModel: Identifiable {
     }
 
     /// Fetches the game (opening, polling, returning to the app, after a notification).
-    func refresh() async {
+    /// `authoritative`: apply the server's answer even if its version is lower than the one on screen.
+    func refresh(authoritative: Bool = false) async {
         guard !isGone else { return }
         if view == nil { isLoading = true }
         defer { isLoading = false }
         do {
             let state = try await api.game(id: gameID)
             loadError = nil
-            receive(state)
+            receive(state, authoritative: authoritative)
         } catch let error as OnlineError {
             switch error {
             case .signedOut:
@@ -216,8 +217,8 @@ final class OnlineGameModel: Identifiable {
     // MARK: Applying server states
 
     /// A state from anywhere (action reply, live update, poll). Older or equal versions are ignored,
-    /// except from a stale-version reply: that is the server's answer to "your version is wrong", so it
-    /// is applied even if its version is lower (a server that was reset).
+    /// except an authoritative one (a fresh GET after a stale-version reply): that is applied even if its
+    /// version is lower (a server that was reset).
     func receive(_ state: OnlineGameState, authoritative: Bool = false) {
         if let version {
             if authoritative ? state.version == version : state.version <= version { return }
@@ -254,6 +255,8 @@ final class OnlineGameModel: Identifiable {
         let handIDs = Set(state.view.hand.map(\.id))
         selection = moved ? [] : selection.intersection(handIDs)
         if moved {
+            // A move that wasn't sent belongs to the old position (Retry would only be refused now).
+            pendingAction = nil
             hintLadder = nil
             hintBannerID = nil
             if let text = OnlineGameText.banner(old: old, new: state.view) {
@@ -482,6 +485,7 @@ final class OnlineGameModel: Identifiable {
         } else {
             selection.insert(card.id)
         }
+        selectionChanged()
     }
 
     /// Long press: the whole pair or tractor holding the card (or deselects it if already selected).
@@ -495,10 +499,21 @@ final class OnlineGameModel: Identifiable {
         } else {
             selection.formUnion(ids)
         }
+        selectionChanged()
     }
 
     func clearSelection() {
         if !selection.isEmpty { selection = [] }
+        selectionChanged()
+    }
+
+    /// Choosing other cards after a move wasn't sent: the main button goes back to Play or Bury.
+    private func selectionChanged() {
+        guard let pendingAction, !isSending else { return }
+        switch pendingAction {
+        case .play, .bury: self.pendingAction = nil
+        case .bid, .pass: break
+        }
     }
 
     // MARK: Actions
@@ -577,7 +592,7 @@ final class OnlineGameModel: Identifiable {
                 banner = GameCoachMessage(line, concept: "Throws", kind: .warning)
             }
         } catch let error as OnlineError {
-            await handleActionError(error, action: action)
+            await handleActionError(error, action: action, before: before)
         } catch is CancellationError {
             return
         } catch {
@@ -586,12 +601,24 @@ final class OnlineGameModel: Identifiable {
         }
     }
 
-    private func handleActionError(_ error: OnlineError, action: OnlineAction) async {
+    private func handleActionError(_ error: OnlineError, action: OnlineAction, before: SeatView) async {
         switch error {
         case let .stale(state):
             pendingAction = nil
-            receive(state, authoritative: true)
-            banner = GameCoachMessage(OnlineError.staleMessage)
+            if let version, state.version < version {
+                // Older than the table on screen: a live update overtook this reply (or the server was
+                // reset). Ask again and believe that answer.
+                await refresh(authoritative: true)
+            } else {
+                receive(state)
+            }
+            if OnlineGameModel.moveLanded(action, before: before, after: view ?? state.view) {
+                // The first try reached the server even though its reply was lost.
+                noteMove(action, before: before)
+                banner = GameCoachMessage(OnlineGameModel.moveLandedMessage, kind: .success)
+            } else {
+                banner = GameCoachMessage(OnlineError.staleMessage)
+            }
         case let .illegal(message):
             pendingAction = nil
             banner = GameCoachMessage(message, kind: .warning)
@@ -609,10 +636,39 @@ final class OnlineGameModel: Identifiable {
             pendingAction = nil
             isGone = true
             loadError = "This game has ended or was deleted."
+            live?.stop()
         default:
             pendingAction = nil
             banner = GameCoachMessage(error.message, kind: .warning)
         }
+    }
+
+    static let moveLandedMessage = "Your move went through."
+
+    /// True if the server's table shows that `action`, chosen at `before`, was already played (its
+    /// reply was lost, then Retry was refused as stale), within the same round: a play's or burial's
+    /// cards left your hand; a bid or pass is the next entry in the bidding after your turn (or bidding
+    /// is over, which can't happen without your turn being taken).
+    static func moveLanded(_ action: OnlineAction, before: SeatView, after: SeatView) -> Bool {
+        guard after.roundNumber == before.roundNumber else { return false }
+        let cards: [Card]
+        switch action {
+        case let .play(chosen), let .bury(chosen):
+            cards = chosen
+        case .bid, .pass:
+            guard let bidding = before.bidding, bidding.turn == Seats.human else { return false }
+            guard let next = after.bidding else { return after.phase != .bidding }
+            return next.history.count > bidding.history.count && next.history[bidding.history.count].player == Seats.human
+        }
+        guard !cards.isEmpty else { return false }
+        let beforeIDs = Set(before.hand.map(\.id))
+        let afterIDs = Set(after.hand.map(\.id))
+        return cards.allSatisfy { beforeIDs.contains($0.id) && !afterIDs.contains($0.id) }
+    }
+
+    /// A message from outside the table, such as the server refusing to end the game.
+    func showNotice(_ text: String) {
+        banner = GameCoachMessage(text, kind: .warning)
     }
 
     /// Remembers where you last played, for "What happened".
@@ -696,6 +752,7 @@ final class OnlineGameModel: Identifiable {
         if ladder.step == .show {
             let mine = Set(view?.hand.map(\.id) ?? [])
             selection = Set(ladder.highlightedCards.map(\.id)).intersection(mine)
+            selectionChanged()
         }
         let text = ladder.text.isEmpty ? ladder.decision.reason : ladder.text
         let message = GameCoachMessage(text.isEmpty ? "Look at what was led, and what you hold in that suit." : text,

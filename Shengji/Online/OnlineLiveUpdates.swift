@@ -1,10 +1,25 @@
 import Foundation
 
 /// One open live connection to a game. `receive()` returns the next text message and throws once the
-/// connection drops (or `CancellationError` after `close()`).
+/// connection drops (`OnlineLiveGameClosed` when the server ended it for good, `CancellationError` after
+/// `close()`).
 protocol OnlineLiveSocket: AnyObject, Sendable {
     func receive() async throws -> String
+    /// Sends the keep-alive text "ping" (the server answers "pong" without waking the game).
+    func sendPing() async throws
     func close()
+}
+
+extension OnlineLiveSocket {
+    func sendPing() async throws {}
+}
+
+/// The server ended the live connection for good: it closed it with code 4004 (the game was deleted), or
+/// refused to open it (401, 403 or 404: the session, the seat or the game is gone). Reconnecting can't
+/// help, so the table fetches the game at once to find out which.
+struct OnlineLiveGameClosed: Error, Equatable {
+    static let closeCode = 4004
+    static let refusedStatuses: Set<Int> = [401, 403, 404]
 }
 
 /// Opens live connections (URLSession WebSockets in the app, fakes in checks).
@@ -12,8 +27,11 @@ protocol OnlineLiveConnector: Sendable {
     func connect(to url: URL) -> OnlineLiveSocket
 }
 
-/// Keeps an open table up to date: a WebSocket while it works; while it is down, reconnects with
-/// growing pauses (1, 2, 4, 8, 15, then every 30 seconds) and polls the game every 15 seconds.
+/// Keeps an open table up to date: a WebSocket while it works (with a keep-alive ping every 30 seconds,
+/// so idle connections are not dropped, and a fresh connection when a ping goes unanswered); until it
+/// works and while it is down, polls the game every 15 seconds and reconnects with growing pauses (1, 2,
+/// 4, 8, 15, then every 30 seconds). When the server ends the connection for good (the game was deleted,
+/// or the session expired), the game is fetched at once (the table then closes).
 /// SwiftUI-free. Every update goes to `onState`; the model keeps only versions newer than its own.
 @MainActor
 final class OnlineLiveUpdates {
@@ -45,18 +63,24 @@ final class OnlineLiveUpdates {
     let pollInterval: Double
     /// Multiplies every reconnect pause (0 in checks).
     let backoffScale: Double
+    /// Seconds between keep-alive pings while connected (0: none).
+    let pingInterval: Double
 
     private var url: URL?
     private var socket: OnlineLiveSocket?
     private var socketTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
+    /// When the open connection last brought a message (an update, or "pong" after a ping).
+    private var lastHeard = Date()
     /// Bumped by start/stop; a loop from an older generation stops quietly.
     private var generation = 0
 
-    init(connector: OnlineLiveConnector, pollInterval: Double = 15, backoffScale: Double = 1) {
+    init(connector: OnlineLiveConnector, pollInterval: Double = 15, backoffScale: Double = 1,
+         pingInterval: Double = 30) {
         self.connector = connector
         self.pollInterval = pollInterval
         self.backoffScale = backoffScale
+        self.pingInterval = pingInterval
     }
 
     var isRunning: Bool { socketTask != nil }
@@ -68,6 +92,8 @@ final class OnlineLiveUpdates {
         generation += 1
         let current = generation
         status = .connecting
+        // Poll until the first update arrives: a connection can hang before it opens.
+        startPolling()
         socketTask = Task { [weak self] in
             await self?.run(url: url, generation: current)
         }
@@ -110,10 +136,14 @@ final class OnlineLiveUpdates {
         while !Task.isCancelled && current == generation {
             let socket = connector.connect(to: url)
             self.socket = socket
+            lastHeard = Date()
+            let pinger = startPinging(socket)
+            var gameClosed = false
             do {
                 while !Task.isCancelled && current == generation {
                     let text = try await socket.receive()
                     guard current == generation else { break }
+                    lastHeard = Date()
                     if status != .live {
                         attempt = 0
                         status = .live
@@ -123,20 +153,52 @@ final class OnlineLiveUpdates {
                         onState?(state)
                     }
                 }
+            } catch is OnlineLiveGameClosed {
+                gameClosed = true
             } catch {
                 // Dropped (or closed by stop()); handled below.
             }
+            pinger?.cancel()
             socket.close()
             if self.socket === socket { self.socket = nil }
             guard !Task.isCancelled, current == generation else { return }
             attempt += 1
             status = .reconnecting(attempt: attempt)
+            if gameClosed {
+                // Fetch now instead of reconnecting to a game that is gone (the fetch closes the table,
+                // or signs you out when the session expired).
+                await onPoll?()
+                guard !Task.isCancelled, current == generation else { return }
+            }
             startPolling()
             let pause = OnlineLiveUpdates.pause(forAttempt: attempt) * backoffScale
             if pause > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
             } else {
                 await Task.yield()
+            }
+        }
+    }
+
+    /// Pings `socket` every `pingInterval` seconds until cancelled or the send fails. Nothing heard for two
+    /// intervals (not even the "pong"): the connection is dead without knowing it (a phone that changed
+    /// networks), so it is closed and the loop reconnects.
+    private func startPinging(_ socket: OnlineLiveSocket) -> Task<Void, Never>? {
+        guard pingInterval > 0 else { return nil }
+        let interval = pingInterval
+        return Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                if Date().timeIntervalSince(self.lastHeard) > interval * 2 {
+                    socket.close()
+                    return
+                }
+                do {
+                    try await socket.sendPing()
+                } catch {
+                    return
+                }
             }
         }
     }

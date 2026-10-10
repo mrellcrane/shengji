@@ -55,6 +55,7 @@ final class OnlineSession {
     /// The table on screen, refreshed when a notification for it arrives.
     @ObservationIgnored weak var activeTable: OnlineGameModel?
     @ObservationIgnored private var lastGamesRefresh: Date?
+    @ObservationIgnored private var isAutoRefreshing = false
     @ObservationIgnored private var registeredDeviceToken: String?
     @ObservationIgnored private var launched = false
 
@@ -168,33 +169,44 @@ final class OnlineSession {
 
     func refreshMe() async {
         guard isSignedIn else { return }
+        let token = api.token
         do {
             let me = try await api.me()
+            guard api.token == token else { return }
             user = me.user
             clubs = me.clubs
+            clearOfflineError()
         } catch {
-            handle(error)
+            if api.token == token { handle(error) }
         }
     }
 
     func refreshGames() async {
         guard isSignedIn else { return }
+        let token = api.token
         isRefreshing = true
         defer { isRefreshing = false }
         do {
             let list = try await api.games()
+            // Signed out (or in as someone else) while this was on its way: it's not your list any more.
+            guard api.token == token else { return }
             games = OnlineSession.sorted(list)
             hasLoadedGames = true
             lastGamesRefresh = Date()
             push.setBadge(yourTurnCount)
+            clearOfflineError()
         } catch {
-            handle(error)
+            if api.token == token { handle(error) }
         }
     }
 
     /// On appear and on returning to the app: refresh unless it just happened.
     func refreshIfStale() async {
+        // Several screens ask at once (appearing, returning to the app): one refresh is enough.
+        guard !isAutoRefreshing, !isRefreshing else { return }
         if let last = lastGamesRefresh, Date().timeIntervalSince(last) < OnlineSession.autoRefreshInterval { return }
+        isAutoRefreshing = true
+        defer { isAutoRefreshing = false }
         if user == nil { await refreshMe() }
         await refreshGames()
     }
@@ -212,21 +224,31 @@ final class OnlineSession {
             let response = try await api.signInWithApple(identityToken: identityToken, displayName: name)
             await completeSignIn(response, hadName: name != nil)
             return true
+        } catch OnlineError.signedOut {
+            // 401 here means Apple's token was refused, not that a session expired.
+            errorMessage = OnlineSession.signInRefusedMessage
+            return false
         } catch {
             handle(error)
             return false
         }
     }
 
+    static let signInRefusedMessage = "Sign in with Apple didn't work. Try again."
+
     /// Test sign-in for development servers (`DEV_AUTH_SECRET`).
     @discardableResult
     func devSignIn(secret: String, name: String) async -> Bool {
         isSigningIn = true
         defer { isSigningIn = false }
+        errorMessage = nil
         do {
             let response = try await api.devSignIn(secret: secret, name: name)
             await completeSignIn(response, hadName: true)
             return true
+        } catch OnlineError.signedOut {
+            errorMessage = "That sign-in didn't work. Check the secret and try again."
+            return false
         } catch {
             handle(error)
             return false
@@ -243,12 +265,20 @@ final class OnlineSession {
         if let token = push.deviceToken { await registerDevice(token) }
     }
 
-    /// Signs out on this phone: the device stops getting pushes, the session token is forgotten.
+    /// Signs out on this phone: the session token is forgotten at once, then the device stops getting
+    /// pushes (best effort: offline, that request would otherwise hold up signing out for 20 seconds).
     func signOut() async {
-        if let token = push.deviceToken, isSignedIn, !isMock {
-            try? await api.unregisterDevice(token: token)
-        }
+        let previous = api
+        let deviceToken = push.deviceToken
         signOutLocally(message: nil)
+        if let deviceToken, previous.token != nil, !isMock {
+            try? await previous.unregisterDevice(token: deviceToken)
+            // Signed in again while that was on its way: this phone belongs to the new session.
+            if isSignedIn {
+                registeredDeviceToken = nil
+                await registerDevice(deviceToken)
+            }
+        }
     }
 
     private func signOutLocally(message: String?) {
@@ -286,13 +316,13 @@ final class OnlineSession {
     // MARK: Clubs
 
     func createClub(name: String) async -> OnlineClub? {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = OnlineDisplayName.limited(name, to: OnlineDisplayName.clubNameMaxLength)
         guard !trimmed.isEmpty else {
             errorMessage = "Give your club a name."
             return nil
         }
         do {
-            let club = try await api.createClub(name: String(trimmed.prefix(40)))
+            let club = try await api.createClub(name: trimmed)
             upsert(club)
             return club
         } catch {
@@ -324,6 +354,8 @@ final class OnlineSession {
             upsert(detail.club)
             return detail
         } catch {
+            // Deleted, or you're no longer a member (left on another phone): it leaves your list.
+            if case .notFound? = error as? OnlineError { clubs.removeAll { $0.id == id } }
             handle(error)
             return nil
         }
@@ -376,14 +408,16 @@ final class OnlineSession {
     func deleteGame(id: String) async -> Bool {
         do {
             try await api.deleteGame(id: id)
-            games.removeAll { $0.id == id }
-            ledger.remove(id)
-            push.setBadge(yourTurnCount)
-            return true
+        } catch OnlineError.notFound {
+            // Already gone (ended from another phone, or a second tap): the same as ending it now.
         } catch {
             handle(error)
             return false
         }
+        games.removeAll { $0.id == id }
+        ledger.remove(id)
+        push.setBadge(yourTurnCount)
+        return true
     }
 
     /// The table for a game (live updates, achievements, the coach).
@@ -440,6 +474,17 @@ final class OnlineSession {
     }
 
     // MARK: Errors
+
+    /// A request just worked, so an "offline" note from earlier no longer applies.
+    private func clearOfflineError() {
+        if errorMessage == OnlineError.offlineMessage { errorMessage = nil }
+    }
+
+    /// The current problem, cleared (for a screen that shows it somewhere else, such as the table).
+    func takeErrorMessage() -> String? {
+        defer { errorMessage = nil }
+        return errorMessage
+    }
 
     private func handle(_ error: Error) {
         if error is CancellationError { return }
