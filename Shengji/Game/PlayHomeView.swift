@@ -24,6 +24,7 @@ struct PlayHomeView: View {
     @State private var confirmingNewGame = false
     @State private var demoOpened = false
     @State private var showsAchievements = false
+    @State private var showsOnline = false
 
     /// Screenshot scenes never read or write the real saved game (games started there live in memory).
     private var isDemoMode: Bool { demoScene != nil }
@@ -35,6 +36,7 @@ struct PlayHomeView: View {
             Form {
                 PlayHomeHeader()
                 gameSection
+                OnlinePlaySection { showsOnline = true }
                 movesSection
                 coachSection
                 tableSection
@@ -43,7 +45,11 @@ struct PlayHomeView: View {
             .navigationDestination(isPresented: $showsAchievements) {
                 AchievementsView(category: .moves)
             }
+            .navigationDestination(isPresented: $showsOnline) {
+                OnlineHomeView()
+            }
         }
+        .modifier(OnlineOpensPendingGame(isOnlineOpen: $showsOnline))
         .fullScreenCover(item: $activeGame, onDismiss: refreshSavedGame) { controller in
             GameTableView(controller: controller, demoCoach: demoScene == .coach ? CoachConversation.demo() : nil) {
                 activeGame = nil
@@ -190,6 +196,9 @@ struct PlayHomeView: View {
         try? await Task.sleep(nanoseconds: 300_000_000)
         if scene == .achievements {
             showsAchievements = true
+        } else if scene == .online || scene == .onlineGame {
+            // The online home (the onlineGame scene then opens its table from the demo server).
+            showsOnline = true
         } else {
             activeGame = GameController.demo(scene)
         }

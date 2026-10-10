@@ -176,8 +176,9 @@ opens straight into a deterministic scene so CI can capture simulator screenshot
 `review` (review tab), `quiz` (a practice question answered, showing feedback), `game` (table mid-trick, seed 7,
 Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `result` (round result sheet),
 `rules` (rules reference), `coach` (the `game` table with the coach sheet open on a canned chat, no network),
-`achievements` (the achievements screen with sample progress). Without the argument the app starts normally.
-Scene setup must never touch saved progress.
+`achievements` (the achievements screen with sample progress), `online` (Play online: sample clubs and games from
+the in-memory demo server), `onlineGame` (an online table mid-play, a seeded round's seat view, demo server).
+Without the argument the app starts normally. Scene setup must never touch saved progress (or the network).
 
 ## Work ownership (for parallel development)
 
@@ -210,6 +211,12 @@ Scene setup must never touch saved progress.
   moves through `GameController.onMoves` / `onGameProgress` (`connectAchievements`) and shows the store's toasts
   (setting `play.moveCelebrations`, held during "who wins?" prompts and while a sheet covers the table). While you
   guess who won a round's last trick, the top bar keeps showing the levels from before the round.
+- Online client (`Shengji/Online/`): `OnlineSession` (`@MainActor @Observable`, created by `ShengjiApp`, injected with
+  `.environment(online)`; the demo server in screenshot scenes) holds the account, clubs and games and talks to the
+  server through `OnlineAPI` (SwiftUI-free, URLSession transport; session token in the Keychain). `OnlineGameModel`
+  runs one table from the server's `SeatView` (live updates over a WebSocket, polling while it is down) and
+  `OnlineTableView` draws it. Push: `ShengjiAppDelegate` (`@UIApplicationDelegateAdaptor`) forwards the device token
+  and notification taps to `OnlinePushCenter`; a tap opens the game (Play tab, online, table).
 - Coach client (`Shengji/Coach/`): `CoachClient` (SSE over `URLSession.bytes`, device id in UserDefaults
   `coach.deviceID`), `CoachConversation` (SwiftUI-free; keeps requests within the proxy's limits) and `CoachSheet`.
   Entry points: the table's coach button and the hint banner's "Why?", "Ask the coach" on lesson pages, "Ask why"

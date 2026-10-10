@@ -8,6 +8,10 @@ enum DemoScene: String, CaseIterable {
     case coach
     /// The Play tab's achievements screen with sample progress.
     case achievements
+    /// Play online: the online home with sample clubs and games (demo server, never the network).
+    case online
+    /// An online table mid-play from the demo server (a seeded round's seat view).
+    case onlineGame
 
     static var current: DemoScene? {
         UserDefaults.standard.string(forKey: "ScreenshotScene").flatMap(DemoScene.init(rawValue:))
@@ -18,7 +22,7 @@ enum DemoScene: String, CaseIterable {
         switch self {
         case .learn, .lesson, .predict: return .learn
         case .review, .quiz: return .review
-        case .game, .dealing, .result, .coach, .achievements: return .play
+        case .game, .dealing, .result, .coach, .achievements, .online, .onlineGame: return .play
         case .rules: return .rules
         }
     }

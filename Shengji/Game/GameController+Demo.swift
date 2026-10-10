@@ -16,7 +16,7 @@ extension GameController {
         case .game, .coach: return playingDemo()
         case .dealing: return dealingDemo()
         case .result: return resultDemo()
-        case .learn, .lesson, .predict, .review, .quiz, .rules, .achievements: return nil
+        case .learn, .lesson, .predict, .review, .quiz, .rules, .achievements, .online, .onlineGame: return nil
         }
     }
 
