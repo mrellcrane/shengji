@@ -2,7 +2,7 @@ import Foundation
 
 /// The basic building blocks of a play.
 ///  - single: one card
-///  - pair: two identical cards (same face; e.g. two 7♠ — but 2♠ + 2♣ is NOT a pair)
+///  - pair: two identical cards (same face; e.g. two 7♠; but 2♠ + 2♣ is NOT a pair)
 ///  - tractor(n): n ≥ 2 pairs of consecutive strength in the same suit group (拖拉机)
 public enum ComboShape: Hashable, Codable, Sendable, CustomStringConvertible {
     case single

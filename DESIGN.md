@@ -1,4 +1,4 @@
-# Shengji · Tractor — design spec
+# Shengji · Tractor: design spec
 
 An iOS app that **teaches** Shengji (升级, "Level Up", also called **Tractor** / 拖拉机 tuōlājī)
 and lets you **practise against bots**. The teaching side is built on learning-science
@@ -70,7 +70,7 @@ lowest-ranked beatable component (smallest shape first, then lowest strength) an
 point penalty. Bots only throw when the unseen cards make it guaranteed.
 
 **Following (跟牌).** Play the same number of cards. If you hold enough cards of the led group you must play only
-that group, and match structure: algorithm `Rules.followRequirement` —
+that group, and match structure: algorithm `Rules.followRequirement`:
 walk the lead's components largest first over your led-group cards: a tractor(k) requires a k-tractor if you have a
 run ≥ k (remove it), otherwise as many pairs as you have up to k (remove them); a pair requires a pair if you have one
 (remove it); singles require nothing. The play must contain the required tractors (disjoint) and at least the
@@ -140,18 +140,18 @@ cards without breaking pairs. Every decision carries a one-sentence reason and a
 | **Motivation & metacognition** | Streak, due counts, per-skill mastery bars so you can see what you know and don't. |
 
 Curriculum (lesson → skills/facts it unlocks):
-1. The big picture — teams, levels, goal, 80-point line. (facts: teams, goal, threshold)
-2. Cards & points — 108 cards, 5/10/K. (pointValue, countPoints)
-3. What's trump — rank, suit, jokers. (isTrump)
-4. Trump order — jokers > rank-in-suit > other rank cards > suit A…  (trumpOrder)
-5. Following suit & winning tricks with singles — follow, ruff, discard. (cardBeats)
-6. Pairs (对子) — what is/isn't a pair; following a pair. (isPair, legalFollow)
-7. Tractors (拖拉机) — consecutive pairs, skipping the rank, trump tractors. (isTractor)
-8. Who wins the trick — full tricks with pairs/tractors/ruffs. (trickWinner)
-9. Dealing, declaring & the kitty — declaring strength, burying. (facts)
-10. Scoring & levelling up — the table, kitty multiplier. (levelOutcome, kittyBonus)
-11. Throws (甩牌) — when they succeed and fail. (facts)
-12. Strategy basics — feed partner points, count cards, void a suit, don't lead points. (bestPlay)
+1. The big picture: teams, levels, goal, 80-point line. (facts: teams, goal, threshold)
+2. Cards & points: 108 cards, 5/10/K. (pointValue, countPoints)
+3. What's trump: rank, suit, jokers. (isTrump)
+4. Trump order: jokers > rank-in-suit > other rank cards > suit A…  (trumpOrder)
+5. Following suit & winning tricks with singles: follow, ruff, discard. (cardBeats)
+6. Pairs (对子): what is/isn't a pair; following a pair. (isPair, legalFollow)
+7. Tractors (拖拉机): consecutive pairs, skipping the rank, trump tractors. (isTractor)
+8. Who wins the trick: full tricks with pairs/tractors/ruffs. (trickWinner)
+9. Dealing, declaring & the kitty: declaring strength, burying. (facts)
+10. Scoring & levelling up: the table, kitty multiplier. (levelOutcome, kittyBonus)
+11. Throws (甩牌): when they succeed and fail. (facts)
+12. Strategy basics: feed partner points, count cards, void a suit, don't lead points. (bestPlay)
 
 ## App UI
 
@@ -188,3 +188,17 @@ Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `r
 - Game UI: `Shengji/Game/`.
 - Learn UI + app shell: `Shengji/Learn/`, `Shengji/App/`.
 - Shared UI (`Shengji/Shared/`): additive changes only.
+
+## App integration contract
+
+- `LearningStore` (`Shengji/App/LearningStore.swift`, done): `@MainActor @Observable`, persisted `LearnerProgress`.
+  Shared through the environment: `.environment(store)` / `@Environment(LearningStore.self) private var learning`.
+  Game UI uses `coachLevel`, `noteGameMistake(_:)`, `record(itemID:correct:seconds:updateSchedule:)` (in-game
+  predictions use `updateSchedule: false`), `recordRoundPlayed()`, `recordGameFinished(won:)`.
+- `DemoScene` and `AppTab` (`Shengji/App/DemoScene.swift`, done).
+- Play tab root: `PlayHomeView(demoScene: DemoScene? = nil)` in `Shengji/Game/` (game UI owns it). For `.game`,
+  `.dealing` and `.result` it opens the table directly in that state, without touching any saved game.
+- App entry `ShengjiApp` (`@main`) and `RootView` in `Shengji/App/` (learn UI owns them): create
+  `LearningStore(ephemeral: DemoScene.current != nil)`, inject it, TabView with Learn (`LessonPathView`),
+  Review (`ReviewView`), Play (`PlayHomeView`), Rules (`RulesView`); initial tab `DemoScene.current?.tab ?? .learn`.
+- Saved game: game UI persists the in-progress game as JSON in Application Support (`savedGame.json`).

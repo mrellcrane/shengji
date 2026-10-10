@@ -7,3 +7,4 @@ build/
 xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 .DS_Store
+.claude/worktrees/
