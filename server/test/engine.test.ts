@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as E from "../src/engine/index.ts";
 import type { Card, Rank, RoundResult } from "../src/engine/index.ts";
-import { seededRandom } from "./support.ts";
+import { buildDeck, seededRandom } from "./support.ts";
 
 // MARK: Shuffle
 
@@ -128,10 +128,89 @@ test("parseDeclaration accepts well-formed declarations only", () => {
     null, 3, "x", [], {},
     { ...good, player: "1" }, { ...good, player: 1.5 },
     { ...good, cards: [13, 67, 13] }, { ...good, cards: [13, 200] }, { ...good, cards: "13" },
-    { ...good, suit: 4 }, { ...good, suit: undefined }, { ...good, strength: "2" },
+    { ...good, suit: 4 }, { ...good, suit: "1" }, { ...good, strength: "2" },
   ]) {
     assert.equal(E.parseDeclaration(bad), null, JSON.stringify(bad));
   }
+});
+
+test("parseDeclaration reads a missing suit as no trump suit (how Swift's Codable sends nil)", () => {
+  // The iOS app encodes Declaration with JSONEncoder, which leaves out a nil optional: a joker-pair
+  // declaration arrives without a "suit" key.
+  const fromSwift = JSON.parse('{"player":3,"cards":[52,106],"strength":3}') as unknown;
+  assert.deepEqual(E.parseDeclaration(fromSwift), { player: 3, cards: [52, 106], suit: null, strength: 3 });
+  assert.deepEqual(E.parseDeclaration({ player: 0, cards: [53, 107], suit: undefined, strength: 4 }),
+    { player: 0, cards: [53, 107], suit: null, strength: 4 });
+
+  // And such a bid is accepted: seat 2 holds both small jokers.
+  const round = E.newRound(5, 1, buildDeck([[], [], [52, 106], []], [], 1, 3));
+  assert.equal(E.startBidding(round, 1), null);
+  assert.equal(E.bid(round, 1, "pass"), null);
+  const parsed = E.parseDeclaration(JSON.parse('{"player":2,"cards":[52,106],"strength":3}')) as E.Declaration;
+  assert.equal(E.bid(round, 2, parsed), null);
+  assert.equal(round.declaration?.suit, null);
+  assert.equal(round.declaration?.strength, 3);
+});
+
+test("bid and declare reject malformed declarations without throwing or changing the round", () => {
+  const round = E.newRound(5, 0, E.doubleDeck());
+  assert.equal(E.startBidding(round, 0), null);
+  const seat = 0;
+  const option = E.availableBids(round, seat)[0];
+  assert.ok(option, "seat 0 has something to declare");
+  const malformed: unknown[] = [
+    null, undefined, 7, "pass!", [],
+    { ...option, cards: undefined }, { ...option, cards: null }, { ...option, cards: "52" },
+    { ...option, cards: [undefined] }, { ...option, suit: "x" }, { ...option, strength: undefined },
+    { player: seat },
+  ];
+  for (const bad of malformed) {
+    const before = JSON.stringify(round);
+    assert.deepEqual(E.bid(round, seat, bad as E.Declaration), { case: "invalidDeclaration" }, JSON.stringify(bad));
+    assert.equal(JSON.stringify(round), before);
+  }
+  const offline = E.newRound(5, 0, E.doubleDeck());
+  E.dealAll(offline);
+  for (const bad of malformed) {
+    const before = JSON.stringify(offline);
+    assert.deepEqual(E.declare(offline, bad as E.Declaration), { case: "invalidDeclaration" }, JSON.stringify(bad));
+    assert.equal(JSON.stringify(offline), before);
+  }
+});
+
+test("recordRound keeps its own copy of the result, like the Swift value type", () => {
+  const rng = seededRandom(12);
+  const game = E.newGame();
+  const round = E.newRound(2, 0, rng.shuffle(E.doubleDeck()));
+  E.dealAll(round);
+  E.finishDealing(round);
+  assert.equal(E.bury(round, round.hands[0].slice(0, 8)), null);
+  while (round.phase === "playing") {
+    const player = E.turn(round) as number;
+    const lead = E.currentLead(round);
+    const hand = round.hands[player];
+    const cards = lead.length === 0
+      ? [hand[0]]
+      : (() => {
+          const ledGroup = E.groupOfCards(lead, round.trump) ?? E.groupOf(round.trump, lead[0]);
+          const held = E.cardsInGroup(hand, ledGroup, round.trump);
+          return held.length > 0 ? [held[0]] : [hand[0]];
+        })();
+    assert.ok(E.play(round, cards, player).ok);
+  }
+  const result = round.result as RoundResult;
+  const summary = E.recordRound(game, result);
+  const stored = JSON.stringify(game);
+  // The server rotates seats for each viewer: changing the round's result (or the returned summary's)
+  // must not rewrite the game history.
+  result.dealer = 3;
+  result.kitty.push(999);
+  result.outcome.summary = "changed";
+  result.trump.suit = 2;
+  assert.equal(JSON.stringify(game), stored);
+  summary.result.dealer = 2;
+  summary.levelsAfter[0] = 14;
+  assert.equal(JSON.stringify(game), stored);
 });
 
 test("bury checks the burying seat when one is given", () => {

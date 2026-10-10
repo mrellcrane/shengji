@@ -92,6 +92,9 @@ export function recordRound(game: GameState, result: RoundResult): RoundSummary 
     // Only reachable with damaged saved data: restore a level for each team.
     game.levels.push(game.settings.startRank);
   }
+  // Swift's RoundResult is a value type: the history keeps its own copy, so later changes to the
+  // round's result (or to the returned summary) never rewrite it.
+  result = structuredClone(result);
   const dealer = ((result.dealer % 4) + 4) % 4;
   const declarers = teamOf(dealer);
   const defenders = 1 - declarers;
@@ -131,7 +134,7 @@ export function recordRound(game: GameState, result: RoundResult): RoundSummary 
     gameWinner,
     explanation,
   };
-  game.history.push(summary);
+  game.history.push(structuredClone(summary));
   return summary;
 }
 

@@ -131,6 +131,39 @@ const combos = loadVectors<CombosFile>("combos.json");
 const rules = loadVectors<RulesFile>("rules.json");
 const rounds = loadVectors<RoundsFile>("rounds.json");
 const games = loadVectors<GamesFile>("games.json");
+const edges = loadVectors<EdgesFile>("edges.json");
+
+interface EdgesFile {
+  declarations: { declaration: Declaration; description: string }[];
+  kittyFlips: {
+    trumpRank: Rank;
+    dealer: number | null;
+    kitty: Card[];
+    phase: string;
+    trump: Trump;
+    trumpFromKitty: Card | null;
+    dealerAfter: number | null;
+    leader: number;
+  }[];
+  throws: {
+    trump: Trump;
+    leader: number;
+    hands: Card[][];
+    cards: Card[];
+    isThrow: boolean;
+    check: unknown;
+    pool: Card[];
+    poolCheck: unknown;
+  }[];
+  follows: {
+    trump: Trump;
+    lead: Card[];
+    hand: Card[];
+    requirement: E.FollowRequirement;
+    plays: { cards: Card[]; matches: boolean; violation?: E.FollowViolation; explanation?: string }[];
+  }[];
+  tricks: { trump: Trump; plays: E.Play[]; winners: number[] }[];
+}
 
 // MARK: combos.json
 
@@ -397,6 +430,93 @@ test("vectors: whole rounds through the Round API (state round-tripped through J
   }
   assert.ok(rounds.rounds.length >= 150);
   assert.ok(actions > 15000, `only ${actions} actions`);
+  p.finish();
+});
+
+// MARK: edges.json
+
+test("vectors: declaration text for every strength, suit and card variant", () => {
+  const p = parity("declarations");
+  for (const d of edges.declarations) {
+    p.equal(`declaration ${JSON.stringify(d.declaration)}`, E.declarationDescription(d.declaration), d.description);
+  }
+  assert.ok(edges.declarations.length >= 150);
+  p.finish();
+});
+
+test("vectors: kitty flips (trump-rank card, joker, highest card with ties)", () => {
+  const p = parity("kittyFlips");
+  for (const [index, f] of edges.kittyFlips.entries()) {
+    const rest = E.doubleDeck().filter((card) => !f.kitty.includes(card));
+    const round = E.newRound(f.trumpRank, f.dealer, [...rest, ...f.kitty]);
+    E.dealAll(round);
+    E.finishDealing(round);
+    p.equal(`kitty flip ${index}: ${E.shortText(f.kitty)} (rank ${E.rankLabel(f.trumpRank)}, dealer ${f.dealer})`, {
+      trumpRank: f.trumpRank,
+      dealer: f.dealer,
+      kitty: f.kitty,
+      phase: round.phase,
+      trump: round.trump,
+      trumpFromKitty: round.trumpFromKitty,
+      dealerAfter: round.dealer,
+      leader: round.leader,
+    }, f);
+    p.equal(`kitty flip ${index}: kittyFlip`, E.kittyFlip(f.kitty, f.trumpRank), { suit: f.trump.suit, card: f.trumpFromKitty });
+  }
+  assert.ok(edges.kittyFlips.length >= 100);
+  p.finish();
+});
+
+test("vectors: throws with tied components, odd leader seats and short hand lists", () => {
+  const p = parity("throws");
+  let failures = 0;
+  for (const [index, t] of edges.throws.entries()) {
+    const check = E.checkThrow(t.cards, t.leader, t.hands, t.trump);
+    if (check.type === "fails") failures++;
+    p.equal(`throw ${index} ${E.shortText(t.cards)} by ${t.leader} (trump ${E.trumpDescription(t.trump)})`, {
+      trump: t.trump,
+      leader: t.leader,
+      hands: t.hands,
+      cards: t.cards,
+      isThrow: E.isThrow(t.cards, t.trump),
+      check,
+      pool: t.pool,
+      poolCheck: E.checkThrowAgainstPool(t.cards, t.pool, t.trump),
+    }, t);
+  }
+  assert.ok(failures >= 100, `only ${failures} failing throws`);
+  p.finish();
+});
+
+test("vectors: follows to leads of several tractors", () => {
+  const p = parity("follows");
+  let tractorViolations = 0;
+  for (const [index, f] of edges.follows.entries()) {
+    const ledGroup = E.groupOfCards(f.lead, f.trump) ?? E.groupOf(f.trump, f.lead[0]);
+    const where = `follow ${index} to ${E.shortText(f.lead)} (trump ${E.trumpDescription(f.trump)})`;
+    p.equal(`${where}: requirement`, E.followRequirement(f.lead, E.cardsInGroup(f.hand, ledGroup, f.trump), f.trump),
+      f.requirement);
+    for (const play of f.plays) {
+      const violation = E.validateFollow(play.cards, f.hand, f.lead, f.trump);
+      if (violation?.case === "mustPlayTractor") tractorViolations++;
+      const actual: Record<string, unknown> = { cards: play.cards, matches: E.matchesStructure(play.cards, f.lead, f.trump) };
+      if (violation !== null) {
+        actual.violation = violation;
+        actual.explanation = E.followViolationExplanation(violation);
+      }
+      p.equal(`${where}: ${E.shortText(play.cards)}`, actual, play);
+    }
+  }
+  assert.ok(tractorViolations >= 50, `only ${tractorViolations} mustPlayTractor cases`);
+  p.finish();
+});
+
+test("vectors: ruffed and over-ruffed tricks", () => {
+  const p = parity("tricks");
+  for (const [index, t] of edges.tricks.entries()) {
+    const winners = t.plays.map((_, k) => E.winningIndex(t.plays.slice(0, k + 1), t.trump));
+    p.equal(`trick ${index} ${t.plays.map((x) => E.shortText(x.cards)).join(" | ")}`, winners, t.winners);
+  }
   p.finish();
 });
 

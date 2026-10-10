@@ -41,7 +41,12 @@ when they return an error they have not changed anything. `cloneRound` makes a c
 - Additions for online play: `seatName`, `declarationDescription` and `explainRound` take an
   optional `viewer` seat so each player reads "You" for themselves (seat 0 gives the Swift text);
   `bury` takes an optional seat and rejects anyone but the dealer; `newRound` rejects a deck that
-  is not exactly the 108 cards; `parseDeclaration` checks the shape of a client message.
+  is not exactly the 108 cards; `parseDeclaration` checks the shape of a client message (a
+  missing `suit` means no trump suit, which is how the Swift app's `Codable` sends a joker pair),
+  and `declare` and `bid` run it too, so a malformed declaration is refused with
+  `invalidDeclaration` instead of throwing.
+- Value semantics as in Swift: `recordRound` keeps its own copy of the result in the history, and
+  views share no objects with the round.
 
 ### Online bidding (no Swift counterpart)
 
@@ -106,3 +111,12 @@ differing paths of each mismatch. Field names match the TypeScript types.
 - `games.json`: the scoring table, and 30 games of `GameState` progression (levels, next dealer,
   winner, `RoundSummary` and its explanation) over many rounds, from played rounds or synthetic
   results that reach every outcome band.
+- `edges.json`: targeted cases for branches the random files reach rarely. The declaration text
+  for every strength (0...5), suit and card variant (including no cards). 200 kitty flips through
+  `finishDealing` (a trump-rank card or a joker first, the only one coming late, the highest card
+  with ties), with and without a known dealer. 200 throws checked against the hands and a pool,
+  about half of them with two or more beatable components that tie on size and strength (equal
+  trump-rank cards, so display order picks the forced one), some with leader seats outside 0...3
+  and short hand lists. 200 follows to leads of two or three tractors, with plays that hold only
+  some of the required tractors (which length `mustPlayTractor` names). 200 tricks where a
+  plain-suit lead, often a throw, is ruffed and over-ruffed.

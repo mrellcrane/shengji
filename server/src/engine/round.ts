@@ -89,16 +89,18 @@ export function declarationDescription(declaration: Declaration, viewer = HUMAN_
 
 /**
  * Parses an untrusted value (e.g. a client message) into a well-formed Declaration, or null.
- * Only the shape is checked; `declare` and `bid` check that it is allowed.
+ * Only the shape is checked; `declare` and `bid` check that it is allowed. A missing `suit` means
+ * no trump suit, as in the Swift app's JSON (its Codable leaves out nil optionals).
  */
 export function parseDeclaration(value: unknown): Declaration | null {
   if (typeof value !== "object" || value === null) return null;
   const v = value as Record<string, unknown>;
   if (typeof v.player !== "number" || !Number.isInteger(v.player)) return null;
   if (!Array.isArray(v.cards) || v.cards.length > 2 || !v.cards.every(isCard)) return null;
-  if (v.suit !== null && !isSuit(v.suit)) return null;
+  const suit = v.suit === undefined ? null : v.suit;
+  if (suit !== null && !isSuit(suit)) return null;
   if (typeof v.strength !== "number" || !Number.isInteger(v.strength)) return null;
-  return { player: v.player, cards: (v.cards as Card[]).slice(), suit: v.suit as Suit | null, strength: v.strength };
+  return { player: v.player, cards: (v.cards as Card[]).slice(), suit, strength: v.strength };
 }
 
 // MARK: Round data
@@ -386,9 +388,12 @@ function isBidding(round: Round): boolean {
  */
 export function declare(round: Round, d: Declaration): RoundError | null {
   if (isBidding(round)) return { case: "wrongPhase" };
-  const error = declarationError(round, d);
+  // A malformed value (e.g. straight from a client) is refused, never thrown on.
+  const parsed = parseDeclaration(d);
+  if (parsed === null) return { case: "invalidDeclaration" };
+  const error = declarationError(round, parsed);
   if (error !== null) return error;
-  applyDeclaration(round, d);
+  applyDeclaration(round, parsed);
   return null;
 }
 
@@ -496,12 +501,14 @@ export function bid(round: Round, seat: number, choice: Declaration | "pass"): R
     bidding.passes += 1;
     bidding.bids.push({ seat, declaration: null });
   } else {
-    if (choice.player !== seat) return { case: "invalidDeclaration" };
-    const error = declarationError(round, choice);
+    // A malformed value (e.g. straight from a client) is refused, never thrown on.
+    const parsed = parseDeclaration(choice);
+    if (parsed === null || parsed.player !== seat) return { case: "invalidDeclaration" };
+    const error = declarationError(round, parsed);
     if (error !== null) return error;
-    applyDeclaration(round, choice);
+    applyDeclaration(round, parsed);
     bidding.passes = 0;
-    bidding.bids.push({ seat, declaration: copyDeclaration(choice) });
+    bidding.bids.push({ seat, declaration: copyDeclaration(parsed) });
   }
   const finished = round.declaration !== null ? bidding.passes >= 3 : bidding.passes >= 4;
   if (!finished) {

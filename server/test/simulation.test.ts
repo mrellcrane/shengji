@@ -121,7 +121,8 @@ function playGame(settings: GameSettings, creator: number, rng: Rng, maxRounds: 
   while (game.winner === null && game.roundsPlayed < maxRounds) {
     const before = game.levels.slice();
     const dealerBefore = game.nextDealer;
-    let round = E.startOnlineRound(game, E.shuffledDeck(), creator);
+    // Seeded decks (not shuffledDeck) so a failure can be replayed from the seed.
+    let round = E.startOnlineRound(game, rng.shuffle(ALL), creator);
     assert.equal(E.biddingTurn(round), dealerBefore ?? creator);
     assert.equal(round.trumpRank, E.nextTrumpRank(game));
     assert.equal(round.dealer, dealerBefore);
@@ -190,7 +191,7 @@ test("many single rounds with every trump rank and both a known and an unknown d
   const rng = seededRandom(7);
   for (let n = 0; n < 60; n++) {
     const dealer = n % 5 === 0 ? null : rng.below(4);
-    const round = E.newRound(E.ALL_RANKS[n % 13], dealer, E.shuffledDeck());
+    const round = E.newRound(E.ALL_RANKS[n % 13], dealer, rng.shuffle(ALL));
     playRound(round, dealer ?? rng.below(4), rng);
   }
 });
