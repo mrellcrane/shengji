@@ -74,7 +74,7 @@ extension Curriculum {
             body: "Every round is a fight over **points**, 分 (fēn). The defenders need 80 to take over the deal. Knowing which cards score tells you when a trick is worth fighting for, and when to let it go cheaply."),
         .cards(
             title: "Two decks, 108 cards",
-            body: "Four players use **two full decks plus all four jokers**: 108 cards. Every card exists **twice**, so you can hold two identical cards, like these two A♠. There are two small jokers and two big jokers. Bigger groups add a deck: 6 players use 3.",
+            body: "Four players use **two full decks plus all four jokers**: 108 cards. Every card exists **twice**, so you can hold two identical cards, like these two A♠. There are two small jokers and two big jokers. Bigger groups add decks, about half a deck per player: 6 players use 3, 8 use 4.",
             cards: pair(.ace, .spades) + [smallJoker0, smallJoker1, bigJoker0, bigJoker1],
             trump: nil),
         predict(2, 1,

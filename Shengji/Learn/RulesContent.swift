@@ -104,7 +104,7 @@ enum RulesContent {
             ]),
             RuleSection(id: "points", title: "Cards & points", shortTitle: "Points", symbol: "suit.heart.fill", blocks: [
                 .text("Two full decks with jokers: **108 cards**. Everyone gets 25 cards and the last 8 form the kitty."),
-                .text("**Bigger groups** add a deck: 6 players use 3 decks, with a few rule changes. Everything here is for 4 players and 2 decks."),
+                .text("**Bigger groups** add decks, about half a deck per player: 6 players use 3, 8 use 4, with a few rule changes. Past 8 the table gets too big to follow. Everything here is for 4 players and 2 decks."),
                 .text("Only three ranks score: **5s** are worth 5, **10s** and **Kings** are worth 10. That's 200 points in all."),
                 .cards(caption: "5 + 10 + 10 = 25 points", cards: [card(.five, .hearts), card(.ten, .spades), card(.king, .clubs)], trump: nil),
                 .cards(caption: "No points: aces and jokers win tricks but score nothing.", cards: [card(.ace, .spades), .bigJoker()], trump: nil),
