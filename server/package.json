@@ -1,0 +1,18 @@
+{
+  "name": "shengji-server",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Online multiplayer server for Shengji: a TypeScript port of the Swift engine, proven identical by generated test vectors.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.0",
+    "typescript": "5.9.3"
+  }
+}

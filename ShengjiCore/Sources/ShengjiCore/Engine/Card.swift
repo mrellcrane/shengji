@@ -159,6 +159,13 @@ public struct Card: Hashable, Codable, Sendable, Identifiable, CustomStringConve
         self.init(.regular(suit, rank), copy: copy)
     }
 
+    /// The card with the given `id` (0...107, see `id`), or nil if out of range. This is the card
+    /// wire format of online play.
+    public init?(id: Int) {
+        guard (0..<108).contains(id), let face = Face(index: id % 54) else { return nil }
+        self.init(face, copy: id / 54)
+    }
+
     public static func smallJoker(copy: Int = 0) -> Card { Card(.smallJoker, copy: copy) }
     public static func bigJoker(copy: Int = 0) -> Card { Card(.bigJoker, copy: copy) }
 

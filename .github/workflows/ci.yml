@@ -31,6 +31,54 @@ jobs:
         working-directory: ShengjiCore
         run: swift test
 
+  server-engine:
+    name: Server engine (TypeScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Includes the replay of every Swift parity vector in server/test/vectors.
+      - name: Tests
+        run: npm test
+
+  vectors-in-sync:
+    name: Vectors in sync
+    runs-on: ubuntu-latest
+    container: swift:6.1-noble
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # The TypeScript engine is only proven identical to the Swift engine if the committed
+      # vectors are exactly what the Swift engine generates today.
+      - name: Regenerate the vectors and compare
+        run: |
+          out="$(mktemp -d)"
+          (cd ShengjiCore && swift run ShengjiVectors "$out")
+          if ! diff -r -q "$out" server/test/vectors; then
+            echo "First differences:"
+            diff -r "$out" server/test/vectors | cut -c 1-400 | head -n 40 || true
+            echo "::error::server/test/vectors is out of date with the Swift engine. Regenerate with: cd ShengjiCore && swift run ShengjiVectors ../server/test/vectors"
+            exit 1
+          fi
+          echo "server/test/vectors matches the Swift engine."
+
   ios-build:
     name: iOS build
     runs-on: macos-latest
