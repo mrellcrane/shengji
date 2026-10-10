@@ -6,6 +6,9 @@ import Foundation
 /// 3. declarers with many trumps draw trumps (top pairs, else low singles);
 /// 4. a suit the partner is out of, so the partner can ruff;
 /// 5. a low non-point card (or low pair) from a short plain suit; last resort, the lowest trump.
+/// A point card that something unseen can beat is never led while a lead without points exists
+/// (leading into the partner's void aside). Reasons for plain-suit winners say "only a trump can
+/// beat it" rather than promising the trick: someone may be out of the suit without having shown it.
 struct StandardLead {
     let table: BotTable
 
@@ -55,10 +58,13 @@ struct StandardLead {
         }
         guard let pick = best else { return nil }
         let names = BotText.cards(pick.cards, trump)
+        let suits = BotText.plural(pick.group)
+        // A plain-suit throw can still be trumped by someone who is out of the suit without having
+        // shown it, so the reason says what is certain and no more.
         return BotDecision(
             cards: pick.cards,
-            reason: "Nobody can beat any part of \(names) in \(BotText.plural(pick.group)), "
-                + "so throw them together and win the trick.",
+            reason: "No \(BotText.singular(pick.group)) still out can beat any part of \(names), "
+                + "so throw them together. Only a player out of \(suits) could trump them.",
             concept: "Throw",
             nudge: "Look for a suit where nobody else can beat any of your cards.",
             principle: "If nobody can beat any part of a group of cards in one suit, lead them all at once as a throw.")
@@ -114,15 +120,19 @@ struct StandardLead {
         let cards = pick.component.cards
         let names = BotText.cards(cards, trump)
         let suitWord = BotText.singular(pick.component.group)
-        let reason: String
+        // Plain suits only: someone out of the suit could still trump it, so promise no more than that.
+        var reason: String
         switch pick.component.shape {
         case .single:
-            let keep = cards.points > 0 ? " and keeps its \(BotText.points(cards.points)) safe" : ""
-            reason = "\(names) is the highest \(suitWord) still out, so it wins this trick for sure\(keep)."
+            reason = "\(names) is the highest \(suitWord) still out, so only a trump can beat it."
         case .pair:
-            reason = "Nobody can hold a higher \(suitWord) pair than \(names), so lead it and win the trick."
+            reason = "Nobody can hold a higher \(suitWord) pair than \(names), so only a pair of trumps can beat it."
         case .tractor:
-            reason = "Nobody can beat your tractor \(names), so lead it and win the trick."
+            reason = "No \(suitWord) tractor still out can beat \(names), so only trumps can beat it."
+        }
+        if cards.points > 0 {
+            reason += " Cash its \(BotText.points(cards.points)) now, before someone runs out of "
+                + "\(BotText.plural(pick.component.group))."
         }
         return BotDecision(
             cards: cards, reason: reason, concept: "Sure winner",
@@ -250,14 +260,25 @@ struct StandardLead {
                 principle: "Leading a trump pair nobody can beat wins the trick and makes everyone spend two trumps.")
         }
         let loose = table.trumps.filter { !table.pairFaces.contains($0.face) }
-        if let card = BotPick.cheapest(loose, 1, costs).first {
-            let reason = onlyTrumps
-                ? "You only have trumps left, so lead \(card), the one you can best spare."
-                : "Your other cards are worth points or too good to waste, so lead a low trump, \(card)."
-            return BotDecision(cards: [card], reason: reason, concept: "Lead trumps", nudge: nudge,
-                               principle: trumpPrinciple)
-        }
         let trumpPairs = BotPick.cheapestFirst(Combos.pairs(in: table.trumps, trump: trump), costs)
+        // Never lead a point card that can be beaten while a lead without points is possible:
+        // first a loose trump without points (or one nobody can beat), then a pair without points.
+        let safeLoose = loose.filter { $0.points == 0 || table.isTopUnseen($0) }
+        let safePairs = trumpPairs.filter { $0.points == 0 }
+        if let card = BotPick.cheapest(safeLoose, 1, costs).first {
+            return looseTrumpLead(card, onlyTrumps: onlyTrumps, nudge: nudge, principle: trumpPrinciple)
+        }
+        if let pair = safePairs.first {
+            let names = BotText.cards(pair, trump)
+            return BotDecision(
+                cards: pair,
+                reason: "Lead your pair \(names): it gives away no points, and others must spend a pair to beat it.",
+                concept: "Keep pairs", nudge: nudge,
+                principle: "Lead a low pair rather than splitting it. Others must then spend a pair too.")
+        }
+        if let card = BotPick.cheapest(loose, 1, costs).first {
+            return looseTrumpLead(card, onlyTrumps: onlyTrumps, nudge: nudge, principle: trumpPrinciple)
+        }
         if let pair = trumpPairs.first {
             let names = BotText.cards(pair, trump)
             return BotDecision(
@@ -273,6 +294,31 @@ struct StandardLead {
                 + "the one that risks the least.",
             concept: "Lead low", nudge: nudge,
             principle: "When every lead costs something, give up the card you will miss least.")
+    }
+
+    /// Leading one loose trump. Only an ordinary trump-suit card is called "low": jokers and
+    /// trump-rank cards are among the highest trumps.
+    private func looseTrumpLead(_ card: Card, onlyTrumps: Bool, nudge: String, principle: String) -> BotDecision {
+        if table.isTopUnseen(card) {
+            return BotDecision(
+                cards: [card],
+                reason: "Nobody can beat \(card), so lead it: you win the trick, and everyone who still has "
+                    + "trumps must play one.",
+                concept: "Sure winner",
+                nudge: "Count the high trumps that are already gone.",
+                principle: "Leading a trump nobody can beat wins the trick for sure, and everyone who still has "
+                    + "trumps must follow with one.")
+        }
+        let isLow = !card.isJoker && card.rank != trump.rank
+        let reason: String
+        if onlyTrumps {
+            reason = "You only have trumps left, so lead \(card), the one you can best spare."
+        } else if isLow {
+            reason = "Your other cards are worth points or too good to waste, so lead a low trump, \(card)."
+        } else {
+            reason = "Your other cards are worth points or too good to waste, so lead \(card), the trump you can best spare."
+        }
+        return BotDecision(cards: [card], reason: reason, concept: "Lead trumps", nudge: nudge, principle: principle)
     }
 
     /// A trump pair or tractor nobody can beat (longest first, then the lowest such).

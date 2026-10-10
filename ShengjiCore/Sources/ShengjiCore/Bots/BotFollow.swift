@@ -69,6 +69,11 @@ struct TrickJudge {
 ///  - Partner winning but beatable: overtake with a sure winner if points are at risk, else duck low.
 ///  - Opponent winning: win cheaply when it is worth it, ruff when out of the suit and points are
 ///    at stake (high enough when a later opponent may overruff), otherwise duck low.
+///  - Third seat: the last player is an opponent, so a trick left to them is worth more than the
+///    points on the table (they win it or feed their partner). A suit the partner led into this
+///    seat's known void is trumped for the same reason.
+/// Reasons only promise a result when nothing still out can change it (trumps nobody can beat, or
+/// the last play); a plain-suit winner is described as "only a trump can beat it".
 struct StandardFollow {
     let table: BotTable
     private let builder: FollowBuilder
@@ -83,6 +88,8 @@ struct StandardFollow {
     private let laterOpponents: [Int]
     private let partnerLater: Bool
     private let isLast: Bool
+    /// Third seat only: the points the last player is expected to add if the trick is left to them.
+    private let lastPlayerThreat: Int
 
     init(table: BotTable) {
         self.table = table
@@ -110,6 +117,7 @@ struct StandardFollow {
         self.laterOpponents = later.filter { table.isOpponent($0) }
         self.partnerLater = later.contains(table.partner)
         self.isLast = position >= 3
+        self.lastPlayerThreat = position == 2 ? table.tuning.lastPlayerThreat : 0
     }
 
     private var trump: Trump { table.trump }
@@ -150,6 +158,25 @@ struct StandardFollow {
         return group.isTrump || !ruffThreat
     }
 
+    /// True if nothing still out can beat `play`: nobody plays after this seat, or it is a trump play
+    /// with no higher trump unseen. A plain-suit play can always be trumped by someone who is out of
+    /// the suit without having shown it, so it is never certain before the last play.
+    private func isCertain(_ play: [Card]) -> Bool {
+        guard !laterOpponents.isEmpty else { return true }
+        guard let group = Combos.group(of: play, trump: trump), group.isTrump,
+              let key = judge.key(of: play) else { return false }
+        if judge.isThrowLead && play == lead { return true }
+        return !table.unseenCanBeat(leadShape, group: .trump, strength: key)
+    }
+
+    /// How sure a winning play is, in words: "nobody can beat", "only a trump can beat" (plain suit)
+    /// or "only a higher trump can beat" (a trump that something unseen could still top).
+    private func beatPhrase(_ play: [Card]) -> String {
+        if isCertain(play) { return "nobody can beat" }
+        if Combos.group(of: play, trump: trump)?.isTrump == true { return "only a higher trump can beat" }
+        return "only a trump can beat"
+    }
+
     private struct Candidate {
         let cards: [Card]
         /// Value of the cards given up (points ignored).
@@ -182,6 +209,17 @@ struct StandardFollow {
         return scored.map { $0.candidate }
     }
 
+    /// The first candidate (cheapest first) that passes `test` and costs at most `limit` more than
+    /// ducking. Every candidate is considered: the cheapest one in "win" order counts the points it
+    /// brings back, so it can cost more cards than a later one that is still worth playing.
+    private func firstAffordable(_ candidates: [Candidate], dumpCost: Int, limit: Int,
+                                 where test: (Candidate) -> Bool) -> Candidate? {
+        for candidate in candidates where test(candidate) && candidate.cost - dumpCost <= limit {
+            return candidate
+        }
+        return nil
+    }
+
     /// Defenders chase points; declarers fight hardest for points late in the round.
     private func worthContesting(_ stake: Int) -> Bool {
         let tuning = table.tuning
@@ -199,16 +237,23 @@ struct StandardFollow {
         return stake >= tuning.defenderRuffStake
     }
 
+    /// The player after this seat when it plays third (the last player), by name.
+    private var lastPlayerName: String { BotText.name((seat + 1) % 4, from: seat) }
+
     // MARK: Partner winning
 
     private func partnerWinning() -> BotDecision {
         if isLast || holds(winningCards) { return feed() }
         let dump = builder.build(CostModel(table: table, mode: .guarded))
-        // Points at risk: the trick so far plus any points this seat would have to throw in.
-        let stake = onTable + dump.points
-        if stake >= 10, let sure = winningPlays().first(where: { $0.sure }) {
-            let extra = sure.cost - CostModel(table: table, mode: .keep).cost(of: dump)
-            if extra <= 20 + 4 * stake { return overtake(sure, stake: stake) }
+        // Points at risk: the trick so far, any points this seat would have to throw in, and what the
+        // last player adds if they take the trick.
+        let stake = onTable + dump.points + lastPlayerThreat
+        if stake >= 10 {
+            let dumpCost = CostModel(table: table, mode: .keep).cost(of: dump)
+            if let sure = firstAffordable(winningPlays(), dumpCost: dumpCost, limit: 20 + 4 * stake,
+                                          where: { $0.sure }) {
+                return overtake(sure)
+            }
         }
         return duckForPartner(dump)
     }
@@ -216,11 +261,21 @@ struct StandardFollow {
     private func feed() -> BotDecision {
         let play = builder.build(CostModel(table: table, mode: .feed))
         let names = BotText.cards(play, trump)
-        let partnerCards = "your partner's \(BotText.cards(winningCards, trump))"
-        let why = isLast ? "You play last and \(partnerCards) is winning" : "Nobody after you can beat \(partnerCards)"
+        let theirs = BotText.cards(winningCards, trump)
+        let certain = isLast || isCertain(winningCards)
+        let why: String
+        if isLast {
+            why = "You play last and your partner's \(theirs) is winning"
+        } else if certain {
+            why = "Nobody after you can beat your partner's \(theirs)"
+        } else if Combos.group(of: winningCards, trump: trump)?.isTrump == true {
+            why = "Only a higher trump from someone out of \(BotText.plural(ledGroup)) can beat your partner's \(theirs)"
+        } else {
+            why = "Only a trump can beat your partner's \(theirs)"
+        }
         let nudge = "Look at who is winning this trick and whether anyone after you can still beat it."
         let principle = "When your partner is sure to win the trick, give them your point cards: fives, tens and kings."
-        if play.points > 0 && wouldWin(play) {
+        if play.points > 0 && wouldWin(play) && certain {
             return BotDecision(
                 cards: play,
                 reason: "\(why), so add \(names) for \(BotText.points(play.points)). Your side takes the trick either way.",
@@ -237,17 +292,20 @@ struct StandardFollow {
             principle: "When your partner is sure to win, add points if you can. If you can't, play your cheapest cards.")
     }
 
-    private func overtake(_ candidate: Candidate, stake: Int) -> BotDecision {
+    private func overtake(_ candidate: Candidate) -> BotDecision {
         let names = BotText.cards(candidate.cards, trump)
         let theirs = BotText.cards(winningCards, trump)
-        let safe = max(stake, onTable + candidate.cards.points)
+        let threat = BotText.list(laterOpponents.map { BotText.name($0, from: seat) })
+        let points = onTable + candidate.cards.points
+        let protect = points > 0 ? ", and protect \(BotText.points(points))" : ""
         return BotDecision(
             cards: candidate.cards,
-            reason: "Your partner's \(theirs) could still be beaten, so take the trick yourself with \(names), "
-                + "which nobody can beat, and keep \(BotText.points(safe)) safe.",
+            reason: "Your partner's \(theirs) could still be beaten by \(threat), so beat it yourself with "
+                + "\(names), which \(beatPhrase(candidate.cards))\(protect).",
             concept: "Sure winner",
             nudge: "Look at who is winning, who still plays after you, and how many points are at risk.",
-            principle: "When points are at risk, win the trick yourself with a card nobody can beat.")
+            principle: "When your partner's card could still be beaten, win the trick yourself with a card nobody "
+                + "else can beat.")
     }
 
     private func duckForPartner(_ play: [Card]) -> BotDecision {
@@ -272,45 +330,51 @@ struct StandardFollow {
 
     private func opponentWinning() -> BotDecision {
         let dump = builder.build(CostModel(table: table, mode: .dump))
-        let keep = CostModel(table: table, mode: .keep)
-        let dumpCost = keep.cost(of: dump)
+        let dumpCost = CostModel(table: table, mode: .keep).cost(of: dump)
         let candidates = winningPlays()
-        let stake = onTable + dump.points
+        let stake = onTable + dump.points + lastPlayerThreat
 
         if builder.held.isEmpty && !ledGroup.isTrump {
             if let ruff = chooseRuff(candidates, stake: stake, dumpCost: dumpCost) { return ruffDecision(ruff) }
             return dumpDecision(dump, canWin: !candidates.isEmpty)
         }
         if isLast {
-            if let best = candidates.first {
-                let extra = best.cost - dumpCost
-                let limit = stake > 0 ? 10 + 4 * stake : 10
-                if extra <= limit { return winCheaply(best) }
+            let limit = stake > 0 ? 10 + 4 * stake : 10
+            if let best = firstAffordable(candidates, dumpCost: dumpCost, limit: limit, where: { _ in true }) {
+                return winCheaply(best)
             }
             return dumpDecision(dump, canWin: !candidates.isEmpty)
         }
-        if let sure = candidates.first(where: { $0.sure }) {
-            let extra = sure.cost - dumpCost
-            var limit = stake > 0 ? 20 + 4 * stake : 10
-            if partnerLater { limit += 20 }
-            if extra <= limit { return sureWin(sure) }
+        var sureLimit = stake > 0 ? 20 + 4 * stake : 10
+        if partnerLater { sureLimit += 20 }
+        if let sure = firstAffordable(candidates, dumpCost: dumpCost, limit: sureLimit, where: { $0.sure }) {
+            return sureWin(sure)
         }
-        if worthContesting(stake), let best = candidates.first(where: { $0.cards.points == 0 }) {
-            if best.cost - dumpCost <= 10 + 2 * stake { return contest(best, stake: stake) }
+        if worthContesting(stake),
+           let best = firstAffordable(candidates, dumpCost: dumpCost, limit: 10 + 2 * stake,
+                                      where: { $0.cards.points == 0 }) {
+            return contest(best)
         }
         return dumpDecision(dump, canWin: !candidates.isEmpty)
     }
 
     private func chooseRuff(_ candidates: [Candidate], stake: Int, dumpCost: Int) -> Candidate? {
-        guard let cheapest = candidates.first, worthRuffing(stake) else { return nil }
-        let affordable = cheapest.cost - dumpCost <= 20 + 4 * stake
+        guard worthRuffing(stake) else { return nil }
+        let limit = 20 + 4 * stake
         let threatened = !isLast && (laterOpponents.contains(where: { table.mayRuff($0, ledGroup) })
             || table.isRunningOut(ledGroup, count: count, players: laterOpponents.count))
-        if !threatened { return affordable ? cheapest : nil }
-        if let sure = candidates.first(where: { $0.sure }), sure.cost - dumpCost <= 40 + 4 * stake { return sure }
-        let high = candidates.first(where: { $0.key >= Trump.topPlainStrength - 1 })
-        if let high = high, high.cost - dumpCost <= 30 + 4 * stake { return high }
-        return stake >= 15 && affordable ? cheapest : nil
+        if !threatened {
+            return firstAffordable(candidates, dumpCost: dumpCost, limit: limit, where: { _ in true })
+        }
+        if let sure = firstAffordable(candidates, dumpCost: dumpCost, limit: 40 + 4 * stake, where: { $0.sure }) {
+            return sure
+        }
+        if let high = firstAffordable(candidates, dumpCost: dumpCost, limit: 30 + 4 * stake,
+                                      where: { $0.key >= Trump.topPlainStrength - 1 }) {
+            return high
+        }
+        guard stake >= 15 else { return nil }
+        return firstAffordable(candidates, dumpCost: dumpCost, limit: limit, where: { _ in true })
     }
 
     private func winCheaply(_ candidate: Candidate) -> BotDecision {
@@ -328,31 +392,47 @@ struct StandardFollow {
     private func sureWin(_ candidate: Candidate) -> BotDecision {
         let names = BotText.cards(candidate.cards, trump)
         let total = onTable + candidate.cards.points
-        let opening = candidate.cards.count == 1
-            ? "\(names) is the highest \(BotText.singular(ledGroup)) still out, so it wins this trick for sure"
-            : "Nobody can beat \(names), so it wins this trick for sure"
-        let ending: String
-        if total > 0 {
-            ending = " and takes \(BotText.points(total))."
-        } else if partnerLater {
-            ending = ", and your partner can add points after you."
+        let certain = isCertain(candidate.cards)
+        var reason: String
+        if candidate.cards.count == 1 {
+            let top = "\(names) is the highest \(BotText.singular(ledGroup)) still out"
+            reason = certain ? top + ", so it wins this trick for sure" : top + ", so only a trump can beat it"
+        } else if certain {
+            reason = "Nobody can beat \(names), so it wins this trick for sure"
         } else {
-            ending = "."
+            reason = "No \(BotText.plural(ledGroup)) still out can beat \(names), so only trumps can beat it"
+        }
+        if total > 0 {
+            reason += certain ? " and takes \(BotText.points(total))." : ". Play it now to collect \(BotText.points(total))."
+        } else if lastPlayerThreat > 0 {
+            reason += ". Win it now, before \(lastPlayerName) can add points for their side."
+        } else if partnerLater {
+            reason += ", and your partner can add points after you."
+        } else {
+            reason += "."
         }
         return BotDecision(
-            cards: candidate.cards, reason: opening + ending, concept: "Sure winner",
+            cards: candidate.cards, reason: reason, concept: "Sure winner",
             nudge: "Look at what is still out in \(BotText.plural(ledGroup)) and who plays after you.",
             principle: "Win with a card nobody can beat when there are points to take or your partner can add more.")
     }
 
-    private func contest(_ candidate: Candidate, stake: Int) -> BotDecision {
+    private func contest(_ candidate: Candidate) -> BotDecision {
         let names = BotText.cards(candidate.cards, trump)
         let principle = table.isDeclarer
             ? "As a declarer, don't let the defenders collect tricks full of points."
             : "As a defender, fight for tricks that hold points."
+        let opening: String
+        if onTable > 0 {
+            opening = "This trick holds \(BotText.points(onTable))"
+        } else if lastPlayerThreat > 0 {
+            opening = "If \(winnerPhrase) stays on top, \(lastPlayerName) can add points after you"
+        } else {
+            opening = "You would have to give up points to duck this trick"
+        }
         return BotDecision(
             cards: candidate.cards,
-            reason: "This trick holds \(BotText.points(stake)), so try to win it with \(names), which beats \(winnerPhrase).",
+            reason: "\(opening), so try to win it with \(names), which beats \(winnerPhrase).",
             concept: table.isDeclarer ? "Protect points" : "Chase points",
             nudge: "Count the points in this trick and see whether you can beat the card that is winning.",
             principle: principle)
@@ -361,27 +441,38 @@ struct StandardFollow {
     private func ruffDecision(_ candidate: Candidate) -> BotDecision {
         let names = BotText.cards(candidate.cards, trump)
         let total = onTable + candidate.cards.points
-        let prize = total > 0 ? "take \(BotText.points(total))" : "take this trick"
+        let prize = total > 0 ? "to take \(BotText.points(total))" : "to win this trick"
         let suits = BotText.plural(ledGroup)
         let overruff = Combos.group(of: winningCards, trump: trump)?.isTrump == true
+        // The partner led a suit this seat has already shown out of: they want it trumped.
+        let partnerLedVoid = trick.first?.player == table.partner && table.knowledge.isVoid(seat, in: ledGroup)
         var reason: String
         if overruff {
             let who = BotText.capitalized(BotText.name(winner, from: seat))
-            reason = "\(who) trumped with \(BotText.cards(winningCards, trump)), so beat it with \(names) and \(prize)."
+            reason = "\(who) trumped with \(BotText.cards(winningCards, trump)), so beat it with \(names) \(prize)."
+        } else if partnerLedVoid {
+            reason = "Your partner led \(suits) knowing you're out of them, so trump with \(names) \(prize)."
         } else {
-            reason = "You're out of \(suits), so trump with \(names) and \(prize)."
+            reason = "You're out of \(suits), so trump with \(names) \(prize)."
         }
         let threats = laterOpponents.filter { table.mayRuff($0, ledGroup) }
         if !isLast, !threats.isEmpty, candidate.key >= Trump.topPlainStrength - 1 {
             let threatNames = BotText.list(threats.map { BotText.name($0, from: seat) })
             reason += " Trump high, because \(threatNames) is out of \(suits) too and could trump over a low one."
         }
-        return BotDecision(
-            cards: candidate.cards, reason: reason, concept: overruff ? "Overruff" : "Ruff",
-            nudge: "You have no \(suits) left. Look at how many points are in this trick.",
-            principle: overruff
-                ? "If an opponent trumps a trick with points, beat their trump with a higher one if you can."
-                : "When you are out of the suit led and the trick holds points, win it with a trump.")
+        let nudge = partnerLedVoid
+            ? "You have no \(suits) left. Think about why your partner led them."
+            : "You have no \(suits) left. Look at how many points are in this trick."
+        let principle: String
+        if overruff {
+            principle = "If an opponent trumps a trick with points, beat their trump with a higher one if you can."
+        } else if partnerLedVoid {
+            principle = "When your partner leads a suit you are out of, trump it. That is why they led it."
+        } else {
+            principle = "When you are out of the suit led and the trick holds points, win it with a trump."
+        }
+        return BotDecision(cards: candidate.cards, reason: reason, concept: overruff ? "Overruff" : "Ruff",
+                           nudge: nudge, principle: principle)
     }
 
     private var winnerPhrase: String {
@@ -424,7 +515,13 @@ struct StandardFollow {
                 principle: "When a trick isn't worth a fight, play the cards you will miss least.")
         }
         if builder.held.isEmpty {
-            let excuse = canWin ? " and this trick isn't worth a trump" : ""
+            // Some discards include trumps (too few other cards, or every other card is worth more),
+            // so only say the trick isn't worth a trump when none is thrown away.
+            let throwsTrumps = play.contains { trump.isTrump($0) }
+            var excuse = ""
+            if canWin {
+                excuse = throwsTrumps ? " and winning this trick would cost too much" : " and this trick isn't worth a trump"
+            }
             let ending = play.points > 0 ? ", your cheapest choice." : " and give away no points."
             return BotDecision(
                 cards: play, reason: "You're out of \(suits)\(excuse), so throw away \(names)\(ending)",
@@ -443,7 +540,8 @@ struct StandardFollow {
         }
         let reason: String
         if canWin && partnerLater {
-            reason = "Your partner still plays after you, so play \(names), the cards you will miss least, "
+            let which = play.count == 1 ? "the card" : "the cards"
+            reason = "Your partner still plays after you, so play \(names), \(which) you will miss least, "
                 + "and save your strength."
         } else if canWin {
             reason = "Beating \(winnerPhrase) would cost more than this trick is worth, so play \(names) "

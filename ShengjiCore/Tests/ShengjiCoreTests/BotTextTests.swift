@@ -64,6 +64,77 @@ final class BotTextTests: XCTestCase {
         XCTAssertGreaterThan(concepts.count, 12, "\(concepts.sorted())")
     }
 
+    /// Who a reason promises will win the trick, if it promises anything.
+    private enum Promise { case seat, side }
+
+    private static func promise(in reason: String) -> Promise? {
+        let side = ["Nobody after you can beat your partner", "either way", "You play last and your partner"]
+        if side.contains(where: { reason.contains($0) }) { return .side }
+        let seat = ["for sure", "Nobody can beat", "nobody can beat", "win the trick", "wins the trick",
+                    "wins this trick", "is enough to win", "is enough to beat"]
+        if seat.contains(where: { reason.contains($0) }) { return .seat }
+        return nil
+    }
+
+    /// A reason may only promise the result of a trick ("wins this trick for sure", "nobody can beat",
+    /// "nobody after you can beat your partner's...") when nothing still out can change it. A plain
+    /// suit can always be trumped by someone who is out of it without having shown it, so those
+    /// reasons must say "only a trump can beat it" instead. Every promise made must come true.
+    func testPromisedResultsComeTrue() {
+        var promises = 0, broken: [String] = []
+        for seed in UInt64(0)..<UInt64(120) {
+            var rng = SeededGenerator(seed: seed &* 31 &+ 5)
+            var round = Round(trumpRank: Rank.allCases[Int(seed % 13)], dealer: Int(seed % 4), rng: &rng)
+            let bots = (0..<4).map { Bot(seat: $0) }
+            var stats = BotRunStats()
+            BotHarness.deal(&round, bots: bots, stats: &stats)
+            BotHarness.bury(&round, bots: bots, stats: &stats)
+            var pending: [(seat: Int, reason: String)] = []
+            while round.phase == .playing, let seat = round.turn {
+                let decision = bots[seat].decide(in: round)
+                pending.append((seat, decision.reason))
+                guard (try? round.play(decision.cards, by: seat)) != nil else { return XCTFail("illegal play") }
+                guard round.currentTrick.isEmpty, let trick = round.tricks.last else { continue }
+                for (player, reason) in pending {
+                    guard let promise = BotTextTests.promise(in: reason) else { continue }
+                    promises += 1
+                    let kept = promise == .seat
+                        ? trick.winner == player
+                        : Seats.team(of: trick.winner) == Seats.team(of: player)
+                    if !kept {
+                        let plays = trick.plays.map { "\($0.player):\($0.cards.shortText)" }.joined(separator: " | ")
+                        broken.append("seed \(seed) seat \(player): \(reason) [\(plays), won by \(trick.winner)]")
+                    }
+                }
+                pending = []
+            }
+            XCTAssertEqual(stats.problems, [])
+        }
+        XCTAssertEqual(broken.count, 0, broken.prefix(5).joined(separator: "\n"))
+        XCTAssertGreaterThan(promises, 500)
+    }
+
+    /// Burial reasons say what the burial keeps; that must match the cards actually buried.
+    func testBurialReasonsOnlyClaimWhatTheyKeep() {
+        var checked = 0, claims = 0
+        for seed in UInt64(0)..<UInt64(400) {
+            var rng = SeededGenerator(seed: seed &* 17 &+ 3)
+            var round = Round(trumpRank: Rank.allCases[Int(seed % 13)], dealer: Int(seed % 4), rng: &rng)
+            var stats = BotRunStats()
+            BotHarness.deal(&round, bots: (0..<4).map { Bot(seat: $0) }, stats: &stats)
+            guard let dealer = round.dealer else { return XCTFail("no dealer") }
+            for level in BotLevel.allCases {
+                let decision = Bot(seat: dealer, level: level).cardsToBury(in: round)
+                let problems = BotHarness.burialClaimProblems(decision, hand: round.hands[dealer], trump: round.trump)
+                XCTAssertEqual(problems, [], "seed \(seed) \(level)")
+                if decision.reason.contains("keep your") { claims += 1 }
+                checked += 1
+            }
+        }
+        XCTAssertEqual(checked, 800)
+        XCTAssertGreaterThan(claims, 300)
+    }
+
     func testHintLadderWalksTheDecision() throws {
         var rng = SeededGenerator(seed: 21)
         var round = Round(trumpRank: .four, dealer: 0, rng: &rng)

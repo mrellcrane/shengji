@@ -20,4 +20,8 @@ struct BotTuning: Hashable, Sendable {
     /// Smallest trick value worth contesting with a card that might be beaten.
     var defenderContestStake = 10
     var declarerContestStake = 15
+    /// Points the third player expects the last player (an opponent) to add if the trick is left
+    /// to them: whoever wins it then usually collects their point cards too. Counted when an
+    /// opponent is winning or could still beat the partner.
+    var lastPlayerThreat = 10
 }

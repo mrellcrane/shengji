@@ -183,7 +183,79 @@ final class BotScenarioTests: XCTestCase {
         assertTexts(decision)
     }
 
+    func testRuffsAPointTrickWithTheCheapestPairThatIsWorthIt() throws {
+        // West leads K♠ K♠ (20 points). South, a defender out of spades, plays second and holds two
+        // trump pairs: K♥ K♥ and 8♥ 8♥. Counting the points they bring back, K♥ K♥ comes first, but it
+        // costs too much; 8♥ 8♥ is well worth 20 points. South must not give up the ruff altogether.
+        let south = botCards("K♥ K♥' 8♥ 8♥' 3♥ 4♥ 6♥ 3♣ 4♣ 6♣ 7♣ 8♣ 9♣ J♣ Q♣ A♣ 3♦ 4♦ 6♦ 7♦ 8♦ 9♦ J♦ Q♦ A♦")
+        let round = try table(dealer: 3, hands: [south, [], [], botCards("2♥ K♠ K♠'")], plays: [botCards("K♠ K♠'")])
+        XCTAssertEqual(round.turn, 0)
+        XCTAssertTrue(round.isDefender(0))
+        let decision = Bot(seat: 0).decide(in: round)
+        XCTAssertEqual(Set(decision.cards), Set(botCards("8♥ 8♥'")), "played \(decision.cards.shortText)")
+        XCTAssertEqual(decision.concept, "Ruff")
+        XCTAssertTrue(decision.reason.contains("20 points"), decision.reason)
+        assertTexts(decision)
+    }
+
+    func testTrumpsWhenPartnerLeadsIntoYourKnownVoid() throws {
+        // Trick 1: North leads A♠ and South shows out of spades. Trick 2: North leads 6♠ so that South
+        // can trump it. West's 7♠ is winning a trick with no points yet, but East plays last and would
+        // win it or add points to it, so South trumps.
+        let south = botCards("3♥ 4♥ 6♥ 7♥ 3♣ 4♣ 6♣ 7♣ 8♣ 9♣ J♣ Q♣ A♣ 3♦ 4♦ 6♦ 7♦ 8♦ 9♦ J♦ Q♦ A♦ 3♣' 4♣' 6♣'")
+        let round = try table(dealer: 2, hands: [south, botCards("3♠ 8♠"), botCards("2♥ A♠ 6♠"), botCards("4♠ 7♠")],
+                              plays: [botCards("A♠"), botCards("4♠"), botCards("3♣"), botCards("3♠"),
+                                      botCards("6♠"), botCards("7♠")])
+        XCTAssertEqual(round.turn, 0)
+        XCTAssertTrue(BotKnowledge(round: round, seat: 2).voids[0].contains(.plain(.spades)), "North knows")
+        XCTAssertEqual(round.currentTrick.reduce(0) { $0 + $1.cards.points }, 0)
+        let decision = Bot(seat: 0).decide(in: round)
+        XCTAssertEqual(decision.cards.count, 1)
+        XCTAssertTrue(decision.cards.allSatisfy { round.trump.isTrump($0) }, "played \(decision.cards.shortText)")
+        XCTAssertEqual(decision.concept, "Ruff")
+        XCTAssertTrue(decision.reason.contains("Your partner led spades"), decision.reason)
+        assertTexts(decision)
+    }
+
+    func testThirdHandWinsWithASureWinnerBeforeTheLastPlayerCanAddPoints() throws {
+        // Trick 1: North leads A♠ and everyone follows. Trick 2: North leads 3♠ and West plays Q♠.
+        // South holds the last A♠. No points are on the table yet, but East plays last and would feed
+        // points to West's Q♠, so South takes the trick now ("third hand high").
+        let south = botCards("A♠' 4♠ 7♠ 3♥ 4♥ 6♥ 7♥ 3♣ 4♣ 6♣ 7♣ 8♣ 9♣ J♣ Q♣ 3♦ 4♦ 6♦ 7♦ 8♦ 9♦ J♦ Q♦ A♣ A♦")
+        let round = try table(dealer: 2, hands: [south, botCards("6♠ 9♠"), botCards("2♥ A♠ 3♠"), botCards("8♠ Q♠")],
+                              plays: [botCards("A♠"), botCards("8♠"), botCards("7♠"), botCards("6♠"),
+                                      botCards("3♠"), botCards("Q♠")])
+        XCTAssertEqual(round.turn, 0)
+        let decision = Bot(seat: 0).decide(in: round)
+        XCTAssertEqual(decision.cards, botCards("A♠'"))
+        XCTAssertEqual(decision.concept, "Sure winner")
+        XCTAssertTrue(decision.reason.contains("only a trump can beat it"), decision.reason)
+        XCTAssertTrue(decision.reason.contains("East"), "names the last player: \(decision.reason)")
+        XCTAssertFalse(decision.reason.contains("for sure"), "a spade can still be trumped: \(decision.reason)")
+        assertTexts(decision)
+    }
+
     // MARK: Leading
+
+    func testDoesNotLeadABeatablePointTrumpWhileHoldingATrumpWithoutPoints() throws {
+        // South (a defender) wins trick 1 with A♠ and must lead. Every plain card is a point card and
+        // no lead is a sure winner. Of the loose trumps, 5♥ is the cheapest card but gives away 5
+        // points to anyone with a higher trump; the jokers give away nothing.
+        let south = botCards("""
+            A♠ K♣ K♣' 10♣ 10♣' 5♣ 5♣' K♦ K♦' 10♦ 10♦' 5♦ 5♦' K♠ 10♠ 10♠' 5♠ 5♠' K♥ K♥' 5♥ 10♥ 10♥' SJ BJ
+            """)
+        var round = try table(dealer: 1, hands: [south, botCards("2♥ 3♠"), botCards("4♠"), botCards("6♠")],
+                              plays: [botCards("3♠"), botCards("4♠"), botCards("6♠"), botCards("A♠")])
+        XCTAssertEqual(round.turn, 0)
+        XCTAssertTrue(round.isDefender(0))
+        let decision = Bot(seat: 0).decide(in: round)
+        XCTAssertEqual(decision.cards.count, 1)
+        XCTAssertEqual(decision.cards.points, 0, "led \(decision.cards.shortText)")
+        XCTAssertTrue(decision.cards[0].isJoker, "led \(decision.cards.shortText)")
+        XCTAssertFalse(decision.reason.contains("a low trump"), decision.reason)
+        assertTexts(decision)
+        XCTAssertEqual(try round.play(decision.cards, by: 0), .played)
+    }
 
     /// South deals and leads; `south` must be all 25 cards (South buries the kitty it picked up).
     private func southLeads(_ south: [Card], others: [[Card]] = [[], [], []]) throws -> Round {
@@ -454,5 +526,28 @@ final class BotScenarioTests: XCTestCase {
         XCTAssertEqual(Bot(seat: 1).cardsToBury(in: round).cards.count, 8)
         // Seats outside 0...3 are normalised rather than crashing.
         XCTAssertEqual(Bot(seat: 5).cardsToBury(in: round).cards.count, 8)
+
+        // During play only the seat whose turn it is gets cards; everyone else gets the waiting text.
+        try round.bury(Bot(seat: 1).cardsToBury(in: round).cards)
+        XCTAssertEqual(round.turn, 1)
+        for seat in [0, 2, 3] {
+            let waiting = Bot(seat: seat).decide(in: round)
+            XCTAssertEqual(waiting.cards, [])
+            XCTAssertEqual(BotHarness.textProblems(waiting), [])
+        }
+        XCTAssertNil(Bot(seat: 2).declaration(in: round))
+        XCTAssertEqual(Bot(seat: 1).cardsToBury(in: round).cards, [], "the kitty is already buried")
+
+        // After the last trick nobody has anything to play.
+        let bots = (0..<4).map { Bot(seat: $0) }
+        var stats = BotRunStats()
+        BotHarness.playOut(&round, bots: bots, stats: &stats)
+        XCTAssertEqual(stats.problems, [])
+        XCTAssertEqual(round.phase, .finished)
+        for seat in 0..<4 {
+            XCTAssertEqual(Bot(seat: seat).decide(in: round).cards, [])
+            XCTAssertEqual(Bot(seat: seat, level: .beginner).decide(in: round).cards, [])
+            XCTAssertEqual(Bot(seat: seat).cardsToBury(in: round).cards, [])
+        }
     }
 }

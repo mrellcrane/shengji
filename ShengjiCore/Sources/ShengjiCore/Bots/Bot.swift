@@ -49,7 +49,8 @@ public struct BotKnowledge: Sendable {
         }
         for play in round.currentTrick { mark(play.cards) }
         // Once the dealer has buried, the kitty holds exactly the cards they chose.
-        let buried = round.phase == .playing || round.phase == .finished
+        let phase: RoundPhase = round.phase
+        let buried: Bool = phase == RoundPhase.playing || phase == RoundPhase.finished
         if buried && round.dealer == me { mark(round.kitty) }
         var unseen: [Card] = []
         unseen.reserveCapacity(108)

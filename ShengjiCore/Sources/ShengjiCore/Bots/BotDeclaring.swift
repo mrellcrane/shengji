@@ -24,7 +24,8 @@ enum BotDeclaring {
         for card in hand where card.rank != rank {
             if let suit = card.suit { counts[suit.rawValue] += 1 }
         }
-        return Double(counts.max() ?? 0) / Double(hand.count)
+        let longest: Int = counts.max() ?? 0
+        return Double(longest) / Double(hand.count)
     }
 
     static func choose(for bot: Bot, in round: Round) -> Declaration? {
