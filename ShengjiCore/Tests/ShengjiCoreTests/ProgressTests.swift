@@ -447,6 +447,17 @@ final class ProgressTests: XCTestCase {
         XCTAssertEqual(p.schedules["skill.isTrump"]?.due, t0.addingTimeInterval(661))
     }
 
+    func testFastRightAnswerAfterAMissStillTakesTheNextStep() {
+        var p = F.progress(completing: [F.lesson3])
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        // Answered in 2 seconds once the 1-minute step is up: still learning, so no jump straight to 4 days.
+        p.record(itemID: "skill.isTrump", correct: true, seconds: 2, now: t0.addingTimeInterval(61),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(p.schedules["skill.isTrump"]?.learningStep, 1)
+        XCTAssertEqual(p.schedules["skill.isTrump"]?.due, t0.addingTimeInterval(661))
+    }
+
     // MARK: Mastery and difficulty
 
     func testMasteryIsZeroForUnknownItems() {

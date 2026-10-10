@@ -162,8 +162,13 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
         stats[itemID, default: SkillStats()].add(correct: correct)
         recordStudyDay(now, calendar: calendar)
         guard updateSchedule, var schedule = schedules[itemID] else { return }
-        let grade = Scheduler.grade(correct: correct, seconds: seconds,
-                                    expectedSeconds: Self.expectedSeconds(for: itemID))
+        let rawGrade = Scheduler.grade(correct: correct, seconds: seconds,
+                                       expectedSeconds: Self.expectedSeconds(for: itemID))
+        // Once an item has been answered in its (re)learning steps, a fast answer counts as good, never easy:
+        // speed on something just seen or just missed is short-term memory, so it still takes each step.
+        // (A fast first answer to a new item can still graduate it straight away.)
+        let midSteps = schedule.learningStep != nil && schedule.lastReviewed != nil
+        let grade = midSteps && rawGrade == .easy ? .good : rawGrade
         if grade != .again {
             // Not due yet: the retry of an item missed a moment ago.
             if schedule.due > now { return }
