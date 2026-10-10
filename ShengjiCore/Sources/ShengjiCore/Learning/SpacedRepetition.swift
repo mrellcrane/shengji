@@ -158,7 +158,7 @@ public struct Scheduler: Hashable, Sendable {
             let next = current + 1
             if next < steps.count {
                 r.learningStep = next
-                r.due = now.addingTimeInterval(steps[next])
+                r.due = now.addingTimeInterval(Self.delay(steps, at: next))
             } else {
                 graduate(&r, intervalDays: r.isRelearning ? keptInterval : graduatingIntervalDays, now: now)
             }
@@ -218,6 +218,7 @@ public struct Scheduler: Hashable, Sendable {
         min(maximumIntervalDays, max(0, days))
     }
 
+    /// The wait for step `index` (clamped into the list), never negative so nothing is scheduled in the past.
     private static func delay(_ steps: [TimeInterval], at index: Int) -> TimeInterval {
         guard !steps.isEmpty else { return 0 }
         return max(0, steps[min(max(index, 0), steps.count - 1)])

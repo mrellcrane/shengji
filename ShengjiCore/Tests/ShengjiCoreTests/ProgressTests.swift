@@ -316,6 +316,137 @@ final class ProgressTests: XCTestCase {
         XCTAssertEqual(p, before)
     }
 
+    /// A graduated skill last reviewed 2 days before `t0` with a 10-day interval (originally due at t0 + 8 days).
+    private func onTimeLegalFollow() -> ItemSchedule {
+        let last = t0.addingTimeInterval(-2 * day)
+        return ItemSchedule(itemID: "skill.legalFollow", due: last.addingTimeInterval(10 * day), intervalDays: 10,
+                            ease: 2.5, reps: 4, lapses: 0, learningStep: nil, lastReviewed: last)
+    }
+
+    func testRightAnswerAfterAGameMistakeKeepsTheOriginalSchedule() {
+        var p = F.progress(completing: [F.lesson6])
+        let original = onTimeLegalFollow()
+        p.schedules["skill.legalFollow"] = original
+        p.noteGameMistake(.legalFollow, now: t0)
+        XCTAssertTrue(p.dueItemIDs(now: t0).contains("skill.legalFollow"))
+        p.record(itemID: "skill.legalFollow", correct: true, seconds: 3, now: t0.addingTimeInterval(60),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        let s = p.schedules["skill.legalFollow"]
+        XCTAssertEqual(s?.intervalDays, 10, "Reviewing early must not grow the interval")
+        XCTAssertEqual(s?.due, original.due, "Back on its original date")
+        XCTAssertEqual(s?.ease, original.ease)
+        XCTAssertFalse(p.dueItemIDs(now: t0.addingTimeInterval(120)).contains("skill.legalFollow"))
+        XCTAssertEqual(p.stats["skill.legalFollow"]?.attempts, 1, "The answer still counts in the stats")
+    }
+
+    func testRepeatedGameMistakesNeverPushASkillFurtherAway() {
+        var p = F.progress(completing: [F.lesson6])
+        p.schedules["skill.legalFollow"] = onTimeLegalFollow()
+        var now = t0
+        for _ in 0..<6 {
+            p.noteGameMistake(.legalFollow, now: now)
+            now = now.addingTimeInterval(300)
+            p.record(itemID: "skill.legalFollow", correct: true, seconds: 3, now: now, updateSchedule: true,
+                     scheduler: Scheduler(), calendar: F.utc)
+            now = now.addingTimeInterval(3_600)
+        }
+        XCTAssertEqual(p.schedules["skill.legalFollow"]?.intervalDays, 10)
+        XCTAssertEqual(p.schedules["skill.legalFollow"]?.due, onTimeLegalFollow().due)
+    }
+
+    func testWrongAnswerAfterAGameMistakeIsALapse() {
+        var p = F.progress(completing: [F.lesson6])
+        p.schedules["skill.legalFollow"] = onTimeLegalFollow()
+        p.noteGameMistake(.legalFollow, now: t0)
+        p.record(itemID: "skill.legalFollow", correct: false, seconds: 3, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        let s = p.schedules["skill.legalFollow"]
+        XCTAssertEqual(s?.lapses, 1)
+        XCTAssertEqual(s?.intervalDays, 5)
+        XCTAssertEqual(s?.due, t0.addingTimeInterval(600))
+    }
+
+    func testGameMistakeOnALearningItemJustBringsItsStepForward() {
+        var p = F.progress(completing: [F.lesson6])
+        p.record(itemID: "skill.isPair", correct: true, seconds: 8, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(p.schedules["skill.isPair"]?.due, t0.addingTimeInterval(600))
+        let later = t0.addingTimeInterval(120)
+        p.noteGameMistake(.isPair, now: later)
+        XCTAssertEqual(p.schedules["skill.isPair"]?.due, later)
+        p.record(itemID: "skill.isPair", correct: true, seconds: 8, now: later.addingTimeInterval(30),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertNil(p.schedules["skill.isPair"]?.learningStep, "Learning steps carry on as usual")
+        XCTAssertEqual(p.schedules["skill.isPair"]?.intervalDays, 1)
+    }
+
+    func testOnTimeReviewOfAGraduatedItemStillGrows() {
+        var p = F.progress(completing: [F.lesson6])
+        let s = onTimeLegalFollow()
+        p.schedules["skill.legalFollow"] = s
+        p.record(itemID: "skill.legalFollow", correct: true, seconds: 8, now: s.due, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(p.schedules["skill.legalFollow"]?.intervalDays, 25)
+    }
+
+    // MARK: Answers before an item is due (in-session retries)
+
+    func testQuickRetryOfAMissedNewItemDoesNotGraduateIt() {
+        var p = F.progress(completing: [F.lesson3])
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        let missed = p.schedules["skill.isTrump"]
+        XCTAssertEqual(missed?.due, t0.addingTimeInterval(60))
+        // The retry comes back a few questions later, before the 1-minute step is up, and is answered fast.
+        p.record(itemID: "skill.isTrump", correct: true, seconds: 2, now: t0.addingTimeInterval(30),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(p.schedules["skill.isTrump"], missed, "A retry before the item is due moves nothing")
+        XCTAssertEqual(p.stats["skill.isTrump"]?.recent, [false, true])
+    }
+
+    func testQuickRetryAfterALapseCannotLengthenTheInterval() {
+        var p = F.progress(completing: [F.lesson3])
+        p.schedules["skill.isTrump"] = F.graduated("skill.isTrump", interval: 2, due: t0)
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        p.record(itemID: "skill.isTrump", correct: true, seconds: 1, now: t0.addingTimeInterval(40),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        let s = p.schedules["skill.isTrump"]
+        XCTAssertEqual(s?.isRelearning, true)
+        XCTAssertEqual(s?.due, t0.addingTimeInterval(600), "Still waits for the 10-minute relearning step")
+        // Once the relearning step is up, a right answer re-graduates to the reduced interval.
+        p.record(itemID: "skill.isTrump", correct: true, seconds: 9, now: t0.addingTimeInterval(600),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertNil(p.schedules["skill.isTrump"]?.learningStep)
+        XCTAssertEqual(p.schedules["skill.isTrump"]?.intervalDays ?? 0, 1, accuracy: 1e-9)
+        XCTAssertLessThanOrEqual(p.schedules["skill.isTrump"]?.intervalDays ?? 99, 2,
+                                 "A lapse never ends with a longer interval than before")
+    }
+
+    func testWrongAnswerBeforeDueStillCounts() {
+        var p = F.progress(completing: [F.lesson3])
+        p.schedules["skill.isTrump"] = F.graduated("skill.isTrump", interval: 6, due: t0)
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        let retry = t0.addingTimeInterval(45)
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: retry, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        let s = p.schedules["skill.isTrump"]
+        XCTAssertEqual(s?.due, retry.addingTimeInterval(600), "Missing it again restarts the relearning step")
+        XCTAssertEqual(s?.lapses, 1, "Still only one lapse")
+        XCTAssertEqual(s?.intervalDays ?? 0, 3, accuracy: 1e-9)
+    }
+
+    func testRetryAfterTheStepIsUpMovesTheItemOn() {
+        var p = F.progress(completing: [F.lesson3])
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        p.record(itemID: "skill.isTrump", correct: true, seconds: 9, now: t0.addingTimeInterval(61),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(p.schedules["skill.isTrump"]?.learningStep, 1)
+        XCTAssertEqual(p.schedules["skill.isTrump"]?.due, t0.addingTimeInterval(661))
+    }
+
     // MARK: Mastery and difficulty
 
     func testMasteryIsZeroForUnknownItems() {
@@ -465,6 +596,51 @@ final class ProgressTests: XCTestCase {
         XCTAssertEqual(p.streak(now: t0, calendar: F.utc), 2)
     }
 
+    func testDayKeysMustBeRealCalendarDays() {
+        for bad in ["2026-02-30", "2026-02-29", "2026-04-31", "2026-00-10", "2026-10-00", "2026-1-05", "26-10-10",
+                    "+026-10-10", "2026-10-1x", "2026-10-10 ", "0000-01-01"] {
+            XCTAssertNil(LearnerProgress.dayNumber(fromKey: bad), bad)
+        }
+        XCTAssertNotNil(LearnerProgress.dayNumber(fromKey: "2024-02-29"), "Leap day")
+        XCTAssertNotNil(LearnerProgress.dayNumber(fromKey: "2000-02-29"), "Leap year divisible by 400")
+        XCTAssertNil(LearnerProgress.dayNumber(fromKey: "1900-02-29"), "1900 was not a leap year")
+        XCTAssertEqual(LearnerProgress.dayNumber(fromKey: "1970-01-01"), 0)
+        XCTAssertEqual(LearnerProgress.dayNumber(fromKey: "2026-10-10"),
+                       LearnerProgress.dayNumber(for: t0, calendar: F.utc))
+        // 2026-02-31 must not quietly become 2026-03-03 and join a streak.
+        var p = LearnerProgress()
+        p.studyDays = ["2026-02-31", "2026-03-02"]
+        let march3 = Date(timeIntervalSince1970: 1_772_539_200) // 2026-03-03 12:00 UTC
+        XCTAssertEqual(LearnerProgress.dayKey(for: march3, calendar: F.utc), "2026-03-03")
+        XCTAssertEqual(p.streak(now: march3, calendar: F.utc), 1)
+    }
+
+    func testDayKeysRoundTripDayByDayAcrossLeapYears() {
+        // 2019-12-25 12:00 UTC, then every day for about 9 years.
+        let start = Date(timeIntervalSince1970: 1_577_275_200)
+        var previous: Int?
+        for i in 0..<3_300 {
+            let date = start.addingTimeInterval(Double(i) * day)
+            guard let key = LearnerProgress.dayKey(for: date, calendar: F.utc),
+                  let number = LearnerProgress.dayNumber(for: date, calendar: F.utc) else {
+                return XCTFail("No key for day \(i)")
+            }
+            XCTAssertEqual(LearnerProgress.dayNumber(fromKey: key), number, key)
+            if let previous { XCTAssertEqual(number, previous + 1, key) }
+            previous = number
+        }
+    }
+
+    func testAbsurdYearInSavedDataIsDroppedNotACrash() throws {
+        // A huge year used to overflow the day arithmetic and crash while loading.
+        let json = #"{"studyDays": ["1000000000000000000-01-01", "2026-10-10"]}"#
+        let p = try JSONDecoder().decode(LearnerProgress.self, from: Data(json.utf8))
+        XCTAssertEqual(p.studyDays, ["2026-10-10"])
+        var q = LearnerProgress()
+        q.studyDays = ["4000000000000000000-12-31", "2026-10-10"]
+        XCTAssertEqual(q.streak(now: t0, calendar: F.utc), 1)
+    }
+
     // MARK: Codable
 
     func testProgressRoundTripsThroughJSON() throws {
@@ -480,6 +656,18 @@ final class ProgressTests: XCTestCase {
         let decoded = try JSONDecoder().decode(LearnerProgress.self, from: data)
         XCTAssertEqual(decoded, p)
         XCTAssertEqual(decoded.unlockedItemIDs, p.unlockedItemIDs)
+    }
+
+    func testRelearningStateSurvivesSaving() throws {
+        var p = F.progress(completing: [F.lesson3])
+        p.schedules["skill.isTrump"] = F.graduated("skill.isTrump", interval: 8, due: t0)
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 5, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        var loaded = try JSONDecoder().decode(LearnerProgress.self, from: JSONEncoder().encode(p))
+        XCTAssertEqual(loaded.schedules["skill.isTrump"]?.isRelearning, true)
+        loaded.record(itemID: "skill.isTrump", correct: true, seconds: 9, now: t0.addingTimeInterval(600),
+                      updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(loaded.schedules["skill.isTrump"]?.intervalDays, 4, "Re-graduates to the kept half")
     }
 
     func testEncodedJSONIsStable() throws {
@@ -816,7 +1004,7 @@ final class PracticeSessionTests: XCTestCase {
         XCTAssertTrue(perfect.passed)
     }
 
-    func testFirstTryCountsEachItemOnceEvenWhenAskedTwice() throws {
+    func testRetriesDoNotCountButASkillsSecondPlannedQuestionDoes() throws {
         let progress = F.progress(completing: [F.lesson1, F.lesson2])
         var rng = SeededGenerator(seed: 5)
         var s = PracticeSession(kind: .lessonQuiz(lessonID: "lesson.3"), progress: progress, now: t0, rng: &rng)
@@ -824,10 +1012,92 @@ final class PracticeSessionTests: XCTestCase {
         // Miss the first isTrump question, get its second (planned) question and the retry right.
         let asked = run(&s, progress: progress) { id, first in !(id == "skill.isTrump" && first) }
         XCTAssertEqual(asked.filter { $0 == "skill.isTrump" }.count, 3)
-        XCTAssertEqual(s.firstTryTotal, 3, "isTrump plus two earlier items")
-        XCTAssertEqual(s.firstTryCorrect, 2)
+        XCTAssertEqual(s.firstTryTotal, 4, "Two planned isTrump questions plus two earlier items; not the retry")
+        XCTAssertEqual(s.firstTryCorrect, 3)
         XCTAssertEqual(s.answeredCount, asked.count)
         XCTAssertFalse(s.passed)
+    }
+
+    func testMissingASkillsSecondQuestionCostsTheQuizScore() {
+        // A skill is asked twice with two different questions. Getting the second one wrong is a real miss:
+        // the summary must not say "everything right first time".
+        let progress = F.progress(completing: [F.lesson1, F.lesson2])
+        for seed in 1...10 as ClosedRange<UInt64> {
+            var rng = SeededGenerator(seed: seed)
+            var s = PracticeSession(kind: .lessonQuiz(lessonID: "lesson.3"), progress: progress, now: t0, rng: &rng)
+            var isTrumpAsked = 0
+            var qrng = SeededGenerator(seed: seed)
+            while let q = s.next(progress: progress, rng: &qrng), s.answeredCount < 50 {
+                var correct = true
+                if q.itemID == "skill.isTrump" {
+                    isTrumpAsked += 1
+                    correct = isTrumpAsked != 2
+                }
+                s.answer(correct: correct)
+            }
+            XCTAssertEqual(isTrumpAsked, 3, "Two planned questions and one retry")
+            XCTAssertEqual(s.firstTryTotal, 4)
+            XCTAssertEqual(s.firstTryCorrect, 3)
+            XCTAssertEqual(s.score, 0.75, accuracy: 1e-9)
+            XCTAssertFalse(s.passed)
+        }
+    }
+
+    func testFirstTryTotalMatchesTheQuestionsPlannedWhenAllRight() {
+        let progress = F.progress(completing: [F.lesson1, F.lesson2, F.lesson3, F.lesson4])
+        var rng = SeededGenerator(seed: 21)
+        var s = PracticeSession(kind: .lessonQuiz(lessonID: "lesson.6"), progress: progress, now: t0, rng: &rng)
+        let planned = s.queue.count
+        let asked = run(&s, progress: progress)
+        XCTAssertEqual(asked.count, planned)
+        XCTAssertEqual(s.firstTryTotal, planned)
+        XCTAssertEqual(s.firstTryCorrect, planned)
+        XCTAssertTrue(s.passed)
+    }
+
+    func testRandomSessionsKeepTheirBookkeepingStraight() {
+        let progress = F.progress(completing: [F.lesson1, F.lesson2, F.lesson3, F.lesson4, F.lesson6])
+        let kinds: [PracticeSession.Kind] = [.review, .lessonQuiz(lessonID: "lesson.6"),
+                                             .lessonQuiz(lessonID: "lesson.9"), .freePractice(skills: []),
+                                             .freePractice(skills: [.isPair, .isTrump])]
+        var dice = SeededGenerator(seed: 99)
+        for round in 0..<300 {
+            let kind = kinds[round % kinds.count]
+            var rng = SeededGenerator(seed: UInt64(round))
+            var s = PracticeSession(kind: kind, progress: progress, now: t0, maxItems: Int.random(in: 0...12, using: &dice),
+                                    rng: &rng)
+            s.retryGap = Int.random(in: -1...5, using: &dice)
+            let planned = s.queue.count
+            var wrong = 0
+            var steps = 0
+            while let q = s.next(progress: progress, rng: &rng), steps < 1_000 {
+                XCTAssertEqual(s.current, q)
+                let ok = Int.random(in: 0..<10, using: &dice) < 6
+                if !ok { wrong += 1 }
+                s.answer(correct: ok)
+                steps += 1
+            }
+            XCTAssertTrue(s.isFinished, "\(kind)")
+            XCTAssertEqual(s.firstTryTotal, planned, "Every planned question counts once")
+            XCTAssertEqual(s.answeredCount, planned + wrong, "One retry per wrong answer")
+            XCTAssertLessThanOrEqual(s.firstTryCorrect, s.firstTryTotal)
+            XCTAssertTrue((0...1).contains(s.score))
+        }
+    }
+
+    func testFreePracticeScoresEveryFreshQuestion() {
+        let progress = F.progress(completing: [F.lesson3])
+        var rng = SeededGenerator(seed: 2)
+        var s = PracticeSession(kind: .freePractice(skills: [.isTrump]), progress: progress, now: t0, maxItems: 5,
+                                rng: &rng)
+        var n = 0
+        run(&s, progress: progress) { _, _ in
+            n += 1
+            return n != 2 && n != 4
+        }
+        XCTAssertEqual(s.answeredCount, 7)
+        XCTAssertEqual(s.firstTryTotal, 5)
+        XCTAssertEqual(s.firstTryCorrect, 3)
     }
 
     // MARK: Lesson quiz
@@ -1015,19 +1285,22 @@ final class PracticeSessionTests: XCTestCase {
 
     // MARK: End to end
 
-    func testReviewSessionDrivesTheSchedule() {
+    func testReviewSessionDrivesTheSchedule() throws {
         var progress = F.progress(completing: [F.lesson1, F.lesson2, F.lesson3])
         var rng = SeededGenerator(seed: 77)
         var s = PracticeSession(kind: .review, progress: progress, now: t0, rng: &rng)
         XCTAssertEqual(Set(s.queue), Set(progress.unlockedItemIDs))
         XCTAssertEqual(adjacentRepeats(s.queue), 0)
         var now = t0
-        var missedGoal = false
+        var missedGoalAt: Date?
+        var retriedGoalAt: Date?
         while let q = s.next(progress: progress, rng: &rng), s.answeredCount < 50 {
             now = now.addingTimeInterval(10)
             // The learner misses fact.goal once, then gets it right when it comes back.
-            let correct = q.itemID != "fact.goal" || missedGoal
-            if q.itemID == "fact.goal" { missedGoal = true }
+            let correct = q.itemID != "fact.goal" || missedGoalAt != nil
+            if q.itemID == "fact.goal" {
+                if missedGoalAt == nil { missedGoalAt = now } else { retriedGoalAt = now }
+            }
             progress.record(itemID: q.itemID, correct: correct, seconds: 7, now: now,
                             updateSchedule: s.updatesSchedule, scheduler: Scheduler(), calendar: F.utc)
             s.answer(correct: correct)
@@ -1036,9 +1309,17 @@ final class PracticeSessionTests: XCTestCase {
         XCTAssertEqual(s.answeredCount, 7)
         XCTAssertEqual(s.firstTryTotal, 6)
         XCTAssertEqual(s.firstTryCorrect, 5)
-        XCTAssertTrue(progress.dueItemIDs(now: now).isEmpty, "Everything answered moved past now")
-        XCTAssertEqual(progress.schedules["skill.isTrump"]?.learningStep, 1)
-        XCTAssertEqual(progress.schedules["fact.goal"]?.learningStep, 1, "Missed, then right on the retry")
+        let missed = try XCTUnwrap(missedGoalAt)
+        for id in progress.unlockedItemIDs where id != "fact.goal" {
+            XCTAssertEqual(progress.schedules[id]?.learningStep, 1, id)
+            XCTAssertGreaterThan(progress.schedules[id]?.due ?? .distantPast, now, id)
+        }
+        // The retry came back a few questions after the miss, before the 1-minute step was up: it doesn't
+        // promote the item, so a quick answer to a question you just saw explained can't inflate its interval.
+        XCTAssertLessThan(try XCTUnwrap(retriedGoalAt).timeIntervalSince(missed), 60)
+        XCTAssertEqual(progress.schedules["fact.goal"]?.learningStep, 0)
+        XCTAssertEqual(progress.schedules["fact.goal"]?.due, missed.addingTimeInterval(60))
         XCTAssertEqual(progress.stats["fact.goal"]?.recent, [false, true])
+        XCTAssertEqual(progress.dueItemIDs(now: missed.addingTimeInterval(60)), ["fact.goal"])
     }
 }

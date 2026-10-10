@@ -144,6 +144,13 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
 
     /// Records an answer: updates stats and study days, and (when `updateSchedule` is true and the
     /// item is scheduled) its spaced-repetition schedule, graded by `Scheduler.grade`.
+    ///
+    /// A wrong answer always counts. A right answer only moves the item on once its time has come, because
+    /// reviewing before that would distort the intervals:
+    /// - The in-session retry of a question you just missed (the item is not due yet) leaves the schedule alone,
+    ///   so a quick answer to a question you saw explained a moment ago can't graduate it or lengthen its interval.
+    /// - A graduated item brought forward by `noteGameMistake` goes back to its original due date instead of
+    ///   growing its interval early.
     public mutating func record(itemID: String, correct: Bool, seconds: Double, now: Date,
                                 updateSchedule: Bool = true, scheduler: Scheduler = Scheduler()) {
         record(itemID: itemID, correct: correct, seconds: seconds, now: now,
@@ -154,10 +161,28 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
                          updateSchedule: Bool, scheduler: Scheduler, calendar: Calendar) {
         stats[itemID, default: SkillStats()].add(correct: correct)
         recordStudyDay(now, calendar: calendar)
-        guard updateSchedule, let schedule = schedules[itemID] else { return }
+        guard updateSchedule, var schedule = schedules[itemID] else { return }
         let grade = Scheduler.grade(correct: correct, seconds: seconds,
                                     expectedSeconds: Self.expectedSeconds(for: itemID))
+        if grade != .again {
+            // Not due yet: the retry of an item missed a moment ago.
+            if schedule.due > now { return }
+            // Brought forward early (a game mistake): a right answer restores the original date.
+            if let original = Self.originalDue(of: schedule), now.addingTimeInterval(1) < original {
+                schedule.due = original
+                schedules[itemID] = schedule
+                return
+            }
+        }
         schedules[itemID] = scheduler.review(schedule, grade: grade, now: now)
+    }
+
+    /// When a graduated item was due before anything moved it: last review + interval. Nil while (re)learning
+    /// or if it has never been reviewed.
+    static func originalDue(of schedule: ItemSchedule) -> Date? {
+        guard schedule.learningStep == nil, let last = schedule.lastReviewed,
+              schedule.intervalDays.isFinite, schedule.intervalDays > 0 else { return nil }
+        return last.addingTimeInterval(schedule.intervalDays * Scheduler.secondsPerDay)
     }
 
     /// Item ids the learner has unlocked (scheduled), in lesson order.
@@ -175,6 +200,8 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
     /// A mistake made during real play (e.g. an illegal follow): makes that skill due now
     /// so it gets retrieval practice soon. No-op if the skill isn't scheduled yet.
     /// Ease and interval are untouched; an item that is already overdue keeps its earlier due date.
+    /// In review, a wrong answer then counts as a lapse, while a right one puts a graduated item back on
+    /// its original date (see `record`), so mistakes at the table never push a skill further away.
     public mutating func noteGameMistake(_ skill: SkillID, now: Date) {
         guard var schedule = schedules[skill.itemID] else { return }
         schedule.due = min(schedule.due, now)
@@ -276,12 +303,25 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
         return daysFromCivil(year: y, month: m, day: d)
     }
 
-    /// Days since 1970-01-01 for a "yyyy-MM-dd" key; nil if the key is malformed.
+    /// Days since 1970-01-01 for a "yyyy-MM-dd" key; nil unless the key is exactly that shape and names a real
+    /// Gregorian day (so "2026-02-31" can't pose as March 3, and a huge year can't overflow the arithmetic).
     static func dayNumber(fromKey key: String) -> Int? {
         let parts = key.split(separator: "-", omittingEmptySubsequences: false)
-        guard parts.count == 3, let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]),
-              (1...12).contains(m), (1...31).contains(d) else { return nil }
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              parts.allSatisfy({ $0.unicodeScalars.allSatisfy { $0 >= "0" && $0 <= "9" } }),
+              let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]),
+              y >= 1, (1...12).contains(m), d >= 1, d <= daysInMonth(year: y, month: m) else { return nil }
         return daysFromCivil(year: y, month: m, day: d)
+    }
+
+    private static func daysInMonth(year: Int, month: Int) -> Int {
+        switch month {
+        case 2:
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+            return leap ? 29 : 28
+        case 4, 6, 9, 11: return 30
+        default: return 31
+        }
     }
 
     /// Proleptic Gregorian date to a day count (Howard Hinnant's days_from_civil).
@@ -401,8 +441,9 @@ public struct PracticeSession: Sendable {
     /// Item ids still to ask, front first.
     public private(set) var queue: [String]
     public private(set) var current: Question?
-    /// Items answered correctly on the first try / items asked for the first time.
-    /// Each item id counts once per session: retries and repeat questions on the same item do not count.
+    /// Questions answered correctly on the first try / questions asked for the first time.
+    /// Every planned question counts (a skill asked twice in a lesson quiz gets two different questions);
+    /// the retries of a missed question do not.
     public private(set) var firstTryCorrect: Int
     public private(set) var firstTryTotal: Int
     public private(set) var answeredCount: Int
@@ -410,8 +451,10 @@ public struct PracticeSession: Sendable {
 
     /// Item id of `current` (as queued).
     private var currentItemID: String?
-    /// Item ids already answered at least once in this session.
-    private var answeredItemIDs: Set<String>
+    /// Whether `current` is the retry of a question missed earlier in this session.
+    private var currentIsRetry: Bool
+    /// Parallel to `queue`: true for entries that are retries of a missed question.
+    private var queueRetries: [Bool]
 
     /// Questions in a lesson quiz drawn from the lesson itself.
     static let lessonQuizCoreLimit = 8
@@ -446,7 +489,8 @@ public struct PracticeSession: Sendable {
         answeredCount = 0
         retryGap = 3
         currentItemID = nil
-        answeredItemIDs = []
+        currentIsRetry = false
+        queueRetries = Array(repeating: false, count: items.count)
     }
 
     /// Pops the next item and generates its question (difficulty from `progress`). Nil when done.
@@ -456,10 +500,12 @@ public struct PracticeSession: Sendable {
         if let current { return current }
         while !queue.isEmpty {
             let itemID = queue.removeFirst()
+            let isRetry = queueRetries.isEmpty ? false : queueRetries.removeFirst()
             let seed = rng.next()
             if let question = Self.questionProvider(itemID, progress.difficulty(for: itemID), seed) {
                 current = question
                 currentItemID = itemID
+                currentIsRetry = isRetry
                 return question
             }
         }
@@ -472,15 +518,18 @@ public struct PracticeSession: Sendable {
     public mutating func answer(correct: Bool) {
         guard current != nil, let itemID = currentItemID else { return }
         answeredCount += 1
-        if answeredItemIDs.insert(itemID).inserted {
+        if !currentIsRetry {
             firstTryTotal += 1
             if correct { firstTryCorrect += 1 }
         }
         if !correct {
-            queue.insert(itemID, at: Self.retryPosition(for: itemID, in: queue, gap: retryGap))
+            let position = Self.retryPosition(for: itemID, in: queue, gap: retryGap)
+            queue.insert(itemID, at: position)
+            queueRetries.insert(true, at: min(position, queueRetries.count))
         }
         current = nil
         currentItemID = nil
+        currentIsRetry = false
     }
 
     public var isFinished: Bool { current == nil && queue.isEmpty }

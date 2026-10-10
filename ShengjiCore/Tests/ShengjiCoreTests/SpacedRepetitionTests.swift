@@ -135,6 +135,18 @@ final class SpacedRepetitionTests: XCTestCase {
         XCTAssertEqual(scheduler.review(s, grade: .good, now: t0).learningStep, 1)
     }
 
+    func testNegativeStepDelaysNeverScheduleInThePast() {
+        let sch = Scheduler(learningSteps: [60, -600], relearningSteps: [-5, -10])
+        let s = sch.review(sch.newSchedule(itemID: "a", now: t0), grade: .good, now: t0)
+        XCTAssertEqual(s.learningStep, 1)
+        XCTAssertGreaterThanOrEqual(s.due, t0)
+        let lapsed = sch.review(graduated(interval: 4), grade: .again, now: t0)
+        XCTAssertEqual(lapsed.due, t0)
+        let relearned = sch.review(lapsed, grade: .good, now: t0)
+        XCTAssertEqual(relearned.learningStep, 1)
+        XCTAssertGreaterThanOrEqual(relearned.due, t0)
+    }
+
     // MARK: Graduated reviews
 
     func testGraduatedGoodMultipliesByEase() {
@@ -298,6 +310,66 @@ final class SpacedRepetitionTests: XCTestCase {
         let fresh = scheduler.newSchedule(itemID: "a", now: t0)
         let dues = Grade.allCases.map { scheduler.review(fresh, grade: $0, now: t0).due }
         XCTAssertEqual(dues, dues.sorted())
+    }
+
+    func testEaseOnlyChangesForGraduatedItems() {
+        // Relearning answers (again, hard, good, easy) leave ease alone; only the lapse itself lowered it.
+        let lapsed = scheduler.review(graduated(interval: 12), grade: .again, now: t0)
+        XCTAssertEqual(lapsed.ease, 2.3, accuracy: 1e-9)
+        for grade in Grade.allCases {
+            XCTAssertEqual(scheduler.review(lapsed, grade: grade, now: t0).ease, 2.3, accuracy: 1e-9, "\(grade)")
+        }
+    }
+
+    func testRelearningEasyIsNeverShorterThanRelearningGood() {
+        for interval in [1.0, 2, 3, 5, 8, 20, 60, 179, 180] {
+            let lapsed = scheduler.review(graduated(interval: interval), grade: .again, now: t0)
+            let good = scheduler.review(lapsed, grade: .good, now: t0)
+            let easy = scheduler.review(lapsed, grade: .easy, now: t0)
+            XCTAssertGreaterThanOrEqual(easy.intervalDays, good.intervalDays, "\(interval)")
+            XCTAssertLessThanOrEqual(easy.intervalDays, 180)
+            XCTAssertLessThanOrEqual(good.intervalDays, interval, "Good after a lapse never beats the old interval")
+        }
+    }
+
+    func testLapseAtTheCapKeepsHalfOfIt() {
+        var s = scheduler.review(graduated(interval: 180), grade: .again, now: t0)
+        XCTAssertEqual(s.intervalDays, 90, accuracy: 1e-9)
+        s = scheduler.review(s, grade: .good, now: t0.addingTimeInterval(600))
+        XCTAssertEqual(s.intervalDays, 90, accuracy: 1e-9)
+        s = scheduler.review(s, grade: .good, now: s.due)
+        XCTAssertEqual(s.intervalDays, 180, accuracy: 1e-9, "90 × 2.3 = 207, capped")
+    }
+
+    func testFullLifeCycle() {
+        var now = t0
+        var s = scheduler.newSchedule(itemID: "skill.isPair", now: now)
+        var log: [String] = []
+        func step(_ grade: Grade) {
+            s = scheduler.review(s, grade: grade, now: now)
+            let state = s.learningStep.map { (s.isRelearning ? "relearn" : "learn") + "\($0)" } ?? "grad"
+            log.append("\(grade):\(state):\(Int((s.due.timeIntervalSince(now)).rounded()))")
+            now = s.due
+        }
+        step(.good)   // learn step 1, 10 min
+        step(.good)   // graduate, 1 day
+        step(.good)   // 2.5 days
+        step(.again)  // lapse: relearn 10 min, keeps 1.25 days
+        step(.hard)   // relearn again 10 min
+        step(.good)   // graduate back to 1.25 days
+        step(.easy)   // 1.25 × 2.3 × 1.3 = 3.7375 days
+        XCTAssertEqual(log, [
+            "good:learn1:600",
+            "good:grad:86400",
+            "good:grad:216000",
+            "again:relearn0:600",
+            "hard:relearn0:600",
+            "good:grad:108000",
+            "easy:grad:322920",
+        ])
+        XCTAssertEqual(s.lapses, 1)
+        XCTAssertEqual(s.reps, 3)
+        XCTAssertEqual(s.ease, 2.45, accuracy: 1e-9)
     }
 
     func testReviewIsDeterministicAndSetsLastReviewed() {
