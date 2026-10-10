@@ -4,7 +4,8 @@ name: CI
 # screenshots of every demo scene (downloadable as the "screenshots" artifact).
 on:
   push:
-    branches: ["**"]
+    # ci-screenshots only holds published screenshots (see the screenshots job).
+    branches-ignore: [ci-screenshots]
   workflow_dispatch:
 
 concurrency:
@@ -77,6 +78,8 @@ jobs:
     needs: ios-build
     runs-on: macos-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
     env:
       BUNDLE_ID: com.mrellcrane.shengji
       APP_PATH: build/dd/Build/Products/Debug-iphonesimulator/Shengji.app
@@ -189,3 +192,23 @@ jobs:
           name: screenshots
           path: screenshots/
           if-no-files-found: warn
+
+      # Also publish the latest screenshots as a single-commit branch, so they can be fetched with plain git.
+      - name: Publish screenshots to the ci-screenshots branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -d screenshots ] || exit 0
+          PUB="$RUNNER_TEMP/pub"
+          rm -rf "$PUB"; mkdir -p "$PUB/latest"
+          cp -R screenshots/. "$PUB/latest/"
+          echo "$GITHUB_SHA" > "$PUB/latest/COMMIT"
+          cd "$PUB"
+          git init -q -b ci-screenshots
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Screenshots for ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-screenshots
