@@ -4,9 +4,13 @@ import ShengjiCore
 @main
 @MainActor
 struct ShengjiApp: App {
+    /// Push notifications for online games (device token, notification taps).
+    @UIApplicationDelegateAdaptor(ShengjiAppDelegate.self) private var appDelegate
     /// Demo / screenshot scenes use ephemeral stores, so they never touch saved progress.
     @State private var store: LearningStore
     @State private var achievements: AchievementStore
+    /// Online play: the real server, or the in-memory demo server in screenshot scenes.
+    @State private var online: OnlineSession
 
     init() {
         let scene = DemoScene.current
@@ -25,6 +29,7 @@ struct ShengjiApp: App {
         }
         _store = State(initialValue: store)
         _achievements = State(initialValue: achievements)
+        _online = State(initialValue: OnlineSession.forLaunch(scene: scene))
     }
 
     var body: some Scene {
@@ -32,6 +37,8 @@ struct ShengjiApp: App {
             RootView()
                 .environment(store)
                 .environment(achievements)
+                .environment(online)
+                .task { await online.launch() }
         }
     }
 }
