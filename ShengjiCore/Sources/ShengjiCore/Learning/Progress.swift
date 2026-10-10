@@ -164,11 +164,13 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
         guard updateSchedule, var schedule = schedules[itemID] else { return }
         let rawGrade = Scheduler.grade(correct: correct, seconds: seconds,
                                        expectedSeconds: Self.expectedSeconds(for: itemID))
-        // Once an item has been answered in its (re)learning steps, a fast answer counts as good, never easy:
-        // speed on something just seen or just missed is short-term memory, so it still takes each step.
-        // (A fast first answer to a new item can still graduate it straight away.)
-        let midSteps = schedule.learningStep != nil && schedule.lastReviewed != nil
-        let grade = midSteps && rawGrade == .easy ? .good : rawGrade
+        // In the (re)learning steps a right answer always takes exactly one step, however long it took:
+        // - Fast is not easy. The item was just seen (every new item is asked in the lesson quiz, a relearning
+        //   one was just missed), so speed is short-term memory and it still takes each step.
+        // - Slow is not hard. Repeating the step would bring back a slow but right learner (VoiceOver reads
+        //   every card out) every minute, forever. Speed shapes the intervals once the item has graduated.
+        let inSteps = schedule.learningStep != nil
+        let grade = inSteps && rawGrade != .again ? .good : rawGrade
         if grade != .again {
             // Not due yet: the retry of an item missed a moment ago.
             if schedule.due > now { return }

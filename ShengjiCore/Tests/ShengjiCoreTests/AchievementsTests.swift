@@ -155,13 +155,13 @@ final class AchievementsTests: XCTestCase {
         XCTAssertEqual(first, [TierUp(achievement: ruff, tier: .bronze)])
         XCTAssertEqual(progress.tier(for: ruff), .bronze)
         XCTAssertEqual(progress.nextThreshold(for: ruff), 5)
-        XCTAssertEqual(progress.fractionToNextTier(for: ruff), 0)
+        XCTAssertEqual(progress.fractionToNextTier(for: ruff), 0.2, accuracy: 1e-9)
         XCTAssertEqual(progress.earnedDate(for: ruff, tier: .bronze), now)
         XCTAssertEqual(progress.earnedAt["move.ruff#1"], now)
 
         XCTAssertEqual(progress.record([event(.ruff), event(.ruff)], now: now.addingTimeInterval(60)), [])
         XCTAssertEqual(progress.count(for: ruff), 3)
-        XCTAssertEqual(progress.fractionToNextTier(for: ruff), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(progress.fractionToNextTier(for: ruff), 0.6, accuracy: 1e-9)
 
         let later = now.addingTimeInterval(3_600)
         XCTAssertEqual(progress.record([event(.ruff), event(.ruff)], now: later), [TierUp(achievement: ruff, tier: .silver)])
@@ -175,6 +175,20 @@ final class AchievementsTests: XCTestCase {
         XCTAssertEqual(progress.fractionToNextTier(for: ruff), 1)
         XCTAssertEqual(progress.record([event(.ruff)], now: later), [], "nothing past gold")
         XCTAssertEqual(progress.count(for: ruff), 36)
+    }
+
+    /// The bar under a badge fills to match its "count / next" label: "1 / 5" is a fifth full, not empty,
+    /// and "6 / 25" is about a quarter.
+    func testFractionToNextTierMatchesTheCountOverNextLabel() throws {
+        var progress = AchievementProgress()
+        let ruff = try definition("move.ruff")
+        _ = progress.record([event(.ruff)], now: now)
+        XCTAssertEqual(progress.nextThreshold(for: ruff), 5)
+        XCTAssertEqual(progress.fractionToNextTier(for: ruff), 0.2, accuracy: 1e-9)
+        _ = progress.record(Array(repeating: event(.ruff), count: 5), now: now)
+        XCTAssertEqual(progress.count(for: ruff), 6)
+        XCTAssertEqual(progress.nextThreshold(for: ruff), 25)
+        XCTAssertEqual(progress.fractionToNextTier(for: ruff), 6.0 / 25.0, accuracy: 1e-9)
     }
 
     func testOneRecordCanReachSeveralTiersInOrder() throws {

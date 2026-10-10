@@ -138,7 +138,7 @@ final class ProgressTests: XCTestCase {
         p.record(itemID: "skill.isTrump", correct: true, seconds: 3, now: t0, updateSchedule: true,
                  scheduler: Scheduler(), calendar: F.utc)
         let before = p.schedules["skill.isTrump"]
-        XCTAssertNil(before?.learningStep)
+        XCTAssertEqual(before?.learningStep, 1)
         p.completeLesson(F.lesson3, now: t0.addingTimeInterval(day), scheduler: Scheduler(), calendar: F.utc)
         XCTAssertEqual(p.schedules["skill.isTrump"], before)
         XCTAssertEqual(p.unlockedItemIDs, ["skill.isTrump"])
@@ -213,25 +213,31 @@ final class ProgressTests: XCTestCase {
     }
 
     func testRecordGradesSkillsAgainstTwelveSecondsAndFactsAgainstEight() {
-        var p = F.progress(completing: [F.lesson6])
-        // 5 s: under half of 12 (easy, graduates to 4 days) but not under half of 8 (good, next step).
+        // Speed only grades graduated items (in the learning steps a right answer is always good).
+        func graduatedSix() -> LearnerProgress {
+            var p = F.progress(completing: [F.lesson6])
+            for id in ["skill.isPair", "skill.legalFollow", "fact.pairRule"] {
+                p.schedules[id] = F.graduated(id, interval: 10, due: t0)
+            }
+            return p
+        }
+        var p = graduatedSix()
+        // 5 s: under half of 12 (easy: 10 × 2.5 × 1.3) but not under half of 8 (good: 10 × 2.5).
         p.record(itemID: "skill.isPair", correct: true, seconds: 5, now: t0, updateSchedule: true,
                  scheduler: Scheduler(), calendar: F.utc)
         p.record(itemID: "fact.pairRule", correct: true, seconds: 5, now: t0, updateSchedule: true,
                  scheduler: Scheduler(), calendar: F.utc)
-        XCTAssertNil(p.schedules["skill.isPair"]?.learningStep)
-        XCTAssertEqual(p.schedules["skill.isPair"]?.intervalDays, 4)
-        XCTAssertEqual(p.schedules["fact.pairRule"]?.learningStep, 1)
+        XCTAssertEqual(p.schedules["skill.isPair"]?.intervalDays ?? 0, 32.5, accuracy: 1e-9)
+        XCTAssertEqual(p.schedules["fact.pairRule"]?.intervalDays ?? 0, 25, accuracy: 1e-9)
 
-        // 17 s: slow for a fact (over 16, hard) but fine for a skill (good).
-        var q = F.progress(completing: [F.lesson6])
+        // 17 s: slow for a fact (over 16, hard: 10 × 1.2) but fine for a skill (good).
+        var q = graduatedSix()
         q.record(itemID: "skill.legalFollow", correct: true, seconds: 17, now: t0, updateSchedule: true,
                  scheduler: Scheduler(), calendar: F.utc)
         q.record(itemID: "fact.pairRule", correct: true, seconds: 17, now: t0, updateSchedule: true,
                  scheduler: Scheduler(), calendar: F.utc)
-        XCTAssertEqual(q.schedules["skill.legalFollow"]?.learningStep, 1)
-        XCTAssertEqual(q.schedules["fact.pairRule"]?.learningStep, 0)
-        XCTAssertEqual(q.schedules["fact.pairRule"]?.due, t0.addingTimeInterval(60))
+        XCTAssertEqual(q.schedules["skill.legalFollow"]?.intervalDays ?? 0, 25, accuracy: 1e-9)
+        XCTAssertEqual(q.schedules["fact.pairRule"]?.intervalDays ?? 0, 12, accuracy: 1e-9)
     }
 
     func testWrongAnswerMakesGraduatedItemLapse() {
@@ -456,6 +462,53 @@ final class ProgressTests: XCTestCase {
                  updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
         XCTAssertEqual(p.schedules["skill.isTrump"]?.learningStep, 1)
         XCTAssertEqual(p.schedules["skill.isTrump"]?.due, t0.addingTimeInterval(661))
+    }
+
+    // MARK: Speed in the learning steps
+
+    /// Always right but slow (VoiceOver reads every card out): over 24 s on a skill and 16 s on a fact.
+    /// The items still take each step and graduate, instead of coming back every minute forever.
+    func testSlowRightAnswersStillTakeEachStepAndGraduate() {
+        var p = F.progress(completing: [F.lesson6])
+        for id in ["skill.isPair", "fact.pairRule"] {
+            p.record(itemID: id, correct: true, seconds: 40, now: t0, updateSchedule: true,
+                     scheduler: Scheduler(), calendar: F.utc)
+            XCTAssertEqual(p.schedules[id]?.learningStep, 1, id)
+            XCTAssertEqual(p.schedules[id]?.due, t0.addingTimeInterval(600), id)
+            p.record(itemID: id, correct: true, seconds: 40, now: t0.addingTimeInterval(600), updateSchedule: true,
+                     scheduler: Scheduler(), calendar: F.utc)
+            XCTAssertNil(p.schedules[id]?.learningStep, id)
+            XCTAssertEqual(p.schedules[id]?.intervalDays, 1, id)
+        }
+        // Once graduated, a slow answer still counts as hard: a smaller step up and a little less ease.
+        p.record(itemID: "skill.isPair", correct: true, seconds: 40, now: t0.addingTimeInterval(600 + day),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertEqual(p.schedules["skill.isPair"]?.intervalDays ?? 0, 1.2, accuracy: 1e-9)
+        XCTAssertEqual(p.schedules["skill.isPair"]?.ease ?? 0, 2.35, accuracy: 1e-9)
+    }
+
+    func testSlowRightAnswerAfterALapseStillReGraduates() {
+        var p = F.progress(completing: [F.lesson3])
+        p.schedules["skill.isTrump"] = F.graduated("skill.isTrump", interval: 6, due: t0)
+        p.record(itemID: "skill.isTrump", correct: false, seconds: 9, now: t0, updateSchedule: true,
+                 scheduler: Scheduler(), calendar: F.utc)
+        p.record(itemID: "skill.isTrump", correct: true, seconds: 40, now: t0.addingTimeInterval(600),
+                 updateSchedule: true, scheduler: Scheduler(), calendar: F.utc)
+        XCTAssertNil(p.schedules["skill.isTrump"]?.learningStep)
+        XCTAssertEqual(p.schedules["skill.isTrump"]?.intervalDays ?? 0, 3, accuracy: 1e-9)
+    }
+
+    /// Every new item was just asked in the lesson quiz, so a quick answer at its first review is short-term
+    /// memory. It takes the 10-minute step, as "Lesson passed" promises, instead of jumping to 4 days.
+    func testFastFirstReviewRightAfterTheLessonStillTakesEachStep() {
+        var p = F.progress(completing: [F.lesson6])
+        let firstReview = t0.addingTimeInterval(30)
+        for id in ["skill.isPair", "fact.pairRule"] {
+            p.record(itemID: id, correct: true, seconds: 1, now: firstReview, updateSchedule: true,
+                     scheduler: Scheduler(), calendar: F.utc)
+            XCTAssertEqual(p.schedules[id]?.learningStep, 1, id)
+            XCTAssertEqual(p.schedules[id]?.due, firstReview.addingTimeInterval(600), id)
+        }
     }
 
     // MARK: Mastery and difficulty

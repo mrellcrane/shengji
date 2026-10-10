@@ -170,14 +170,12 @@ public struct AchievementProgress: Codable, Hashable, Sendable {
         return next > count ? next : nil
     }
 
-    /// 0...1 progress from the current tier's threshold to the next one (1 when gold).
+    /// 0...1 progress toward the next threshold, count / next (1 when gold), so a bar drawn from it matches
+    /// the "3 / 5" label next to it.
     public func fractionToNextTier(for definition: AchievementDefinition) -> Double {
         guard let next = nextThreshold(for: definition) else { return 1 }
-        let reached = tier(for: definition).rawValue
-        let floor = reached > 0 && definition.thresholds.indices.contains(reached - 1) ? definition.thresholds[reached - 1] : 0
-        let span = next - floor
-        guard span > 0 else { return 1 }
-        let fraction = Double(count(for: definition) - floor) / Double(span)
+        guard next > 0 else { return 1 }
+        let fraction = Double(count(for: definition)) / Double(next)
         return min(1, max(0, fraction))
     }
 

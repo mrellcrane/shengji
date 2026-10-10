@@ -29,6 +29,11 @@ struct RootView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { router.now = .now }
             }
+            // A passed lesson (or a game mistake) makes items due at the real now, which can be up to a
+            // minute after `router.now`: catch up, so they count as due straight away.
+            .onChange(of: store.progress.schedules) { _, _ in
+                router.now = .now
+            }
             // A tapped notification for an online game opens it in the Play tab.
             .modifier(OnlineShowsPlayTab {
                 if router.selectedTab != .play { router.show(.play) }
