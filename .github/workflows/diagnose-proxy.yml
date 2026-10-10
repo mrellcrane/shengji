@@ -1,0 +1,61 @@
+name: Diagnose coach proxy
+
+# Sends test requests to the deployed coach Worker while streaming its live logs (wrangler tail),
+# so failures show the Worker's own exceptions and console output.
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: proxy
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      URL: https://shengji-coach.ellcrane.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: proxy/package-lock.json
+      - run: npm ci
+      - name: Requests with live logs
+        run: |
+          npx wrangler tail shengji-coach --format json > tail.log 2> tail.err &
+          TAIL=$!
+          sleep 12
+          echo "=== GET /health"
+          curl -sS -i "$URL/health"; echo
+          echo "=== GET /nope"
+          curl -sS -i "$URL/nope"; echo
+          echo "=== POST /coach (bad body)"
+          curl -sS -i -X POST "$URL/coach" -H 'content-type: application/json' -d '{"deviceId":"x","turns":[]}'; echo
+          echo "=== POST /coach (real question)"
+          curl -sS -i -N --max-time 60 -X POST "$URL/coach" -H 'content-type: application/json' \
+            -d '{"deviceId":"github-diagnose-1","turns":[{"role":"user","text":"In one short sentence: what is a tractor in Shengji?"}]}'; echo
+          sleep 8
+          kill $TAIL || true
+          echo "=== tail stderr"; cat tail.err || true
+          echo "=== tail events"
+          python3 - <<'PY'
+          import json
+          raw = open("tail.log").read()
+          dec = json.JSONDecoder(); i = 0
+          while i < len(raw):
+              while i < len(raw) and raw[i] in " \n\r\t": i += 1
+              if i >= len(raw): break
+              try:
+                  obj, i = dec.raw_decode(raw, i)
+              except Exception:
+                  print(raw[i:i+2000]); break
+              ev = obj.get("event") or {}
+              req = (ev.get("request") or {})
+              print("--", obj.get("outcome"), req.get("method"), req.get("url"), (ev.get("response") or {}).get("status"))
+              for l in obj.get("logs", []): print("   log:", l.get("level"), l.get("message"))
+              for e in obj.get("exceptions", []): print("   EXC:", e.get("name"), e.get("message"))
+          PY
