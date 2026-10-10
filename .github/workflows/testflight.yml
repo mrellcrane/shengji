@@ -103,6 +103,64 @@ jobs:
         if: failure()
         run: grep -E "error|Error" export.log | sort -u | head -150 || true
 
+      - name: Ensure an internal testing group with the account holder
+        if: success()
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: com.mrellcrane.shengji
+        run: |
+          python3 -m pip install --quiet --break-system-packages "pyjwt[crypto]==2.9.0" || python3 -m pip install --quiet "pyjwt[crypto]==2.9.0"
+          python3 - <<'PY'
+          import json, os, time, urllib.parse, urllib.request, urllib.error
+          import jwt
+          key_id, issuer, p8 = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"], os.environ["ASC_KEY_P8"]
+          now = int(time.time())
+          token = jwt.encode({"iss": issuer, "iat": now, "exp": now + 900, "aud": "appstoreconnect-v1"},
+                             p8, algorithm="ES256", headers={"kid": key_id, "typ": "JWT"})
+          def call(method, path, body=None, params=None):
+              url = "https://api.appstoreconnect.apple.com" + path + ("?" + urllib.parse.urlencode(params) if params else "")
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(url, data=data, method=method,
+                                           headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      raw = r.read()
+                      return r.status, (json.loads(raw) if raw else {})
+              except urllib.error.HTTPError as e:
+                  raw = e.read()
+                  try:
+                      return e.code, json.loads(raw)
+                  except Exception:
+                      return e.code, {"raw": raw.decode(errors="replace")}
+          status, apps = call("GET", "/v1/apps", params={"filter[bundleId]": os.environ["BUNDLE_ID"]})
+          app_id = apps["data"][0]["id"]
+          status, groups = call("GET", f"/v1/apps/{app_id}/betaGroups", params={"limit": 50})
+          group = next((g for g in groups.get("data", []) if g["attributes"].get("isInternalGroup")), None)
+          if group is None:
+              status, created = call("POST", "/v1/betaGroups", {"data": {"type": "betaGroups",
+                  "attributes": {"name": "Internal testers", "isInternalGroup": True, "hasAccessToAllBuilds": True},
+                  "relationships": {"app": {"data": {"type": "apps", "id": app_id}}}}})
+              print("create group:", status)
+              group = created.get("data")
+          if not group:
+              print("::warning::Could not find or create an internal testing group"); raise SystemExit(0)
+          print("internal group:", group["attributes"].get("name"))
+          status, users = call("GET", "/v1/users", params={"limit": 200})
+          holders = [u for u in users.get("data", []) if "ACCOUNT_HOLDER" in (u["attributes"].get("roles") or [])]
+          people = holders or users.get("data", [])[:1]
+          status, testers = call("GET", f"/v1/betaGroups/{group['id']}/betaTesters", params={"limit": 200})
+          existing = {t["attributes"].get("email", "").lower() for t in testers.get("data", [])}
+          for u in people:
+              a = u["attributes"]
+              email = (a.get("username") or a.get("email") or "").lower()
+              if not email or email in existing:
+                  print("tester already in group"); continue
+              status, body = call("POST", "/v1/betaTesters", {"data": {"type": "betaTesters",
+                  "attributes": {"email": email, "firstName": a.get("firstName") or "", "lastName": a.get("lastName") or ""},
+                  "relationships": {"betaGroups": {"data": [{"type": "betaGroups", "id": group["id"]}]}}}})
+              print("add tester:", status, "" if status < 300 else json.dumps(body)[:400])
+          PY
+
       - name: Remove API key
         if: always()
         run: rm -rf "$RUNNER_TEMP/keys"
