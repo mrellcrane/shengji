@@ -46,6 +46,10 @@ struct GameActionBar: View {
         switch controller.primaryAction {
         case .none:
             EmptyView()
+        case .resumeDeal:
+            GamePrimaryButton(title: "Deal on", systemImage: "play.fill", enabled: true) {
+                controller.resumeAutoplay()
+            }
         case .continueDeal:
             GamePrimaryButton(title: "Continue", systemImage: "arrow.right", enabled: true) {
                 controller.continueAfterDeal()
@@ -214,10 +218,14 @@ struct GamePredictionPanel: View {
                     Button {
                         onAnswer(seat)
                     } label: {
+                        // Four buttons share a 375 pt row, so let "Partner" shrink rather than truncate.
                         Text(Seats.name(seat))
                             .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .frame(maxWidth: .infinity)
                     }
+                    .accessibilityLabel(answerLabel(seat))
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.teamColor(Seats.team(of: seat)))
                 }
@@ -233,5 +241,9 @@ struct GamePredictionPanel: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Theme.gold, lineWidth: 1.5)
         )
+    }
+
+    private func answerLabel(_ seat: Int) -> String {
+        seat == Seats.human ? "You win it" : "\(Seats.name(seat)) wins it"
     }
 }

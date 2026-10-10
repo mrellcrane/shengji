@@ -166,6 +166,8 @@ struct GameSeatInfo: Equatable, Sendable {
 /// The main button in the action bar.
 enum GamePrimaryAction: Equatable, Sendable {
     case none
+    /// Dealing was paused (the dealing demo): carry on dealing.
+    case resumeDeal
     /// Close the declaring window.
     case continueDeal
     case bury(count: Int, enabled: Bool)

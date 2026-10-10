@@ -113,10 +113,21 @@ enum GameCoachText {
         return "\(b.title) with \(b.detail)"
     }
 
-    /// Guided/coached nudge when you first could declare. If someone else holds the declaration,
-    /// it keeps their line on screen and adds that you can beat it.
+    /// Guided/coached nudge when you first could declare. If an opponent holds the declaration,
+    /// it keeps their line on screen and adds that you can beat it; if it's your partner's, it says
+    /// there's no need; if it's yours, it suggests strengthening it to a pair.
     static func canDeclareNudge(_ options: [Declaration], current: Declaration?, coach: CoachLevel) -> String? {
         guard coach != .solo, let first = options.first else { return nil }
+        if let current, current.player == Seats.human {
+            // You already hold the declaration: the only option is turning your single into a pair.
+            guard coach == .guided, let card = first.cards.first else { return "You can strengthen your declaration." }
+            return "You now have a pair of \(card.description). Strengthen your declaration so it's harder to beat."
+        }
+        if let current, current.player == Seats.partner(of: Seats.human) {
+            // Beating your partner is allowed but rarely wise: their declaration already helps your team.
+            return join([declarationLine(current),
+                         coach == .guided ? "That's your partner, so it helps your team too. You don't need to beat it." : nil])
+        }
         if let current, current.player != Seats.human {
             return join([declarationLine(current),
                          coach == .guided ? "You can beat it: tap a Declare button below." : "You can beat it."])
@@ -151,6 +162,13 @@ enum GameCoachText {
         }
         if round.declaration == nil, let kitty = kittyTrumpLine(round: round) { text += " " + kitty }
         return "\(text) \(declarers)"
+    }
+
+    /// "East picks up the kitty and buries 8 cards." / "You pick up the kitty and bury 8 cards."
+    static func kittyPickupLine(dealer: Int?) -> String {
+        guard let dealer else { return "The dealer picks up the kitty and buries \(Round.kittySize) cards." }
+        let bury = dealer == Seats.human ? "bury" : "buries"
+        return "\(subject(dealer, "pick", "picks")) up the kitty and \(bury) \(Round.kittySize) cards."
     }
 
     /// A shorter reason used in your bury prompt (the prompt itself says you're the dealer).
@@ -321,7 +339,8 @@ enum GameCoachText {
                 return ("\(subject(winnerSeat, "win", "wins")) with \(what): nobody could match it with a higher \(groupWord)\(shapeWord).", concept)
             }
         }
-        return ("\(subject(winnerSeat, "win", "wins")) with \(what), the highest \(groupWord)\(shapeWord).", concept)
+        // "played": the winning card is the best in this trick, not necessarily the best in the deck.
+        return ("\(subject(winnerSeat, "win", "wins")) with \(what), the highest \(groupWord)\(shapeWord) played.", concept)
     }
 
     static func topStrength(_ cards: [Card], trump: Trump) -> Int {

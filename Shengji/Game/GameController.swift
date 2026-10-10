@@ -143,7 +143,9 @@ final class GameController: Identifiable {
                 buryPromptPrefix = GameCoachText.shortDealerReason(round: round, game: game)
                 refreshBuryPrompt()
             } else {
-                banner = GameCoachMessage(GameCoachText.dealerExplanation(round: round, game: game), concept: "The kitty")
+                banner = GameCoachMessage(GameCoachText.join([GameCoachText.dealerExplanation(round: round, game: game),
+                                                              GameCoachText.kittyPickupLine(dealer: round.dealer)]),
+                                          concept: "The kitty")
             }
         case .playing:
             if round.tricks.isEmpty && round.currentTrick.isEmpty {
@@ -192,7 +194,16 @@ final class GameController: Identifiable {
     /// False while dealing before anyone has declared (the suit is still open).
     var isTrumpSet: Bool { !(round.phase == .dealing && round.declaration == nil) }
 
-    var defenderPoints: Int { round.defenderTrickPoints }
+    /// Defenders' points so far. While you are asked who won the trick on the table, its points are
+    /// left out so the score in the top bar doesn't give the answer away.
+    var defenderPoints: Int {
+        let total = round.defenderTrickPoints
+        guard stage == .predicting, let trick = round.tricks.last, round.isDefender(trick.winner) else { return total }
+        return max(0, total - trick.points)
+    }
+
+    /// The previous trick can be reviewed (not while you are predicting its winner).
+    var canReviewLastTrick: Bool { !round.tricks.isEmpty && stage != .predicting }
 
     var isHumanTurn: Bool {
         stage == .playing && round.turn == Seats.human && !isBot(Seats.human)
@@ -287,7 +298,8 @@ final class GameController: Identifiable {
 
     var primaryAction: GamePrimaryAction {
         switch stage {
-        case .dealing, .botsRespond, .predicting: return .none
+        case .dealing: return autoplayPaused && !isBot(Seats.human) ? .resumeDeal : .none
+        case .botsRespond, .predicting: return .none
         case .declareWindow: return isBot(Seats.human) ? .none : .continueDeal
         case .burying: return isHumanBurying ? .bury(count: selection.count, enabled: canBury) : .none
         case .playing: return isHumanTurn ? .play(enabled: canPlay) : .none
@@ -386,6 +398,13 @@ final class GameController: Identifiable {
 
     /// Holds the bots while a sheet is open over the table; `start()` resumes.
     func pause() { tearDown() }
+
+    /// Lets the bots and the dealer carry on after `autoplayPaused` (the dealing demo stops mid-deal).
+    func resumeAutoplay() {
+        guard autoplayPaused else { return }
+        autoplayPaused = false
+        restartDriver()
+    }
 
     /// Stops the bots. Call when the table goes away.
     func tearDown() {
@@ -567,8 +586,7 @@ final class GameController: Identifiable {
             refreshBuryPrompt()
         } else {
             let why = GameCoachText.dealerExplanation(round: round, game: game)
-            let dealerName = round.dealer.map(Seats.name) ?? "The dealer"
-            banner = GameCoachMessage(GameCoachText.join([prefix, why, "\(dealerName) picks up the kitty and buries 8 cards."]),
+            banner = GameCoachMessage(GameCoachText.join([prefix, why, GameCoachText.kittyPickupLine(dealer: round.dealer)]),
                                       concept: "The kitty")
         }
         save()

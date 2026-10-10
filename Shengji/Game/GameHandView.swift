@@ -23,7 +23,11 @@ struct GameHandView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .frame(height: CGFloat(layout.height))
+        // The ZStack is only one card tall (cards are placed with offsets), so pin it to the top:
+        // centred, the second row would hang about 25 pt below the hand area.
+        .frame(height: CGFloat(GameHandLayout.reservedHeight(count: hand.count, width: Double(width),
+                                                             fullHand: Round.handSize)),
+               alignment: .top)
         .background(widthReader)
         .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.8), value: controller.selection)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: hand.map(\.id))
@@ -85,7 +89,7 @@ struct GameHandCard: View {
             .offset(x: CGFloat(origin.x), y: CGFloat(origin.y - lift))
             .zIndex(Double(index))
             .onTapGesture(perform: onTap)
-            .onLongPressGesture(minimumDuration: 0.35, perform: onLongPress)
+            .onLongPressGesture(minimumDuration: 0.35) { onLongPress() }
             .accessibilityAddTraits(.isButton)
             .accessibilityValue(accessibilityValue(selected: selected))
             .accessibilityHint(hintText)

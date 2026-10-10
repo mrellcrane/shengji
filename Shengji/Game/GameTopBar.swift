@@ -54,6 +54,7 @@ struct GameTopBar: View {
                 .foregroundStyle(points >= Scoring.takeoverThreshold ? Theme.gold : Color.white)
         }
         .lineLimit(1)
+        .minimumScaleFactor(0.75)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Defenders have \(points) points. They need \(Scoring.takeoverThreshold).")
     }
@@ -107,7 +108,8 @@ struct GameTopBar: View {
             Button(action: onShowLastTrick) {
                 Label("Last trick", systemImage: "clock.arrow.circlepath")
             }
-            .disabled(controller.round.tricks.isEmpty)
+            // Not while you are guessing who won the trick on the table (the review would show the answer).
+            .disabled(!controller.canReviewLastTrick)
             Picker(selection: $coachLevel) {
                 ForEach(CoachLevel.allCases, id: \.self) { level in
                     Text(level.title).tag(level)
@@ -148,6 +150,8 @@ struct GameTeamLevelChip: View {
             }
             Text("\(title) \(level.label)")
                 .font(.subheadline.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .foregroundStyle(Theme.teamColor(team))
         .padding(.horizontal, 8)
@@ -155,6 +159,12 @@ struct GameTeamLevelChip: View {
         .background(Capsule().fill(Color.black.opacity(0.3)))
         .overlay(Capsule().strokeBorder(isDeclaring ? Theme.teamColor(team) : Color.clear, lineWidth: 1.5))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(team == 0 ? "Your team" : "Their team"), level \(level.label)\(isDeclaring ? ", declaring" : "")")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        let who = team == 0 ? "Your team" : "Their team"
+        let declaring = isDeclaring ? ", declaring" : ""
+        return "\(who), level \(level.label)\(declaring)"
     }
 }

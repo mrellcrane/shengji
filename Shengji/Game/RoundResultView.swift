@@ -75,9 +75,16 @@ struct RoundResultView: View {
 
     private var declarersSection: some View {
         RoundResultSection(title: "Declarers") {
-            Text("\(GameCoachText.teamName(result.declarerTeam, capitalized: true)) declared. \(Seats.name(result.dealer)) dealt.")
+            Text(declarersLine)
             TrumpBadge(trump: result.trump)
         }
+    }
+
+    /// "You and Partner were the declarers. You dealt." (In later rounds nobody has to declare,
+    /// so this names the dealer's team rather than saying who declared.)
+    private var declarersLine: String {
+        let team = GameCoachText.teamName(result.declarerTeam, capitalized: true)
+        return "\(team) were the declarers. \(Seats.name(result.dealer)) dealt."
     }
 
     private var pointsSection: some View {

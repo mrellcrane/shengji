@@ -18,7 +18,7 @@ struct GameTableView: View {
     @Environment(LearningStore.self) private var learning
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var sheet: GameTableSheet?
+    @State private var sheet: GameTableSheet? = nil
 
     var body: some View {
         ZStack {

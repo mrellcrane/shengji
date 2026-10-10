@@ -17,12 +17,15 @@ struct PlayHomeView: View {
     @AppStorage("play.predictWinner") private var predictionsOn: Bool = true
     @AppStorage("play.gameLength") private var gameLength: GameLengthOption = .toAce
 
-    @State private var activeGame: GameController?
-    @State private var savedGame: SavedGame?
+    @State private var activeGame: GameController? = nil
+    @State private var savedGame: SavedGame? = nil
     @State private var confirmingNewGame = false
     @State private var demoOpened = false
 
-    private var store: SavedGameStore { SavedGameStore.standard }
+    /// Screenshot scenes never read or write the real saved game (games started there live in memory).
+    private var isDemoMode: Bool { demoScene != nil }
+
+    private var store: SavedGameStore? { isDemoMode ? nil : SavedGameStore.standard }
 
     var body: some View {
         NavigationStack {
@@ -122,7 +125,7 @@ struct PlayHomeView: View {
     // MARK: Actions
 
     private func refreshSavedGame() {
-        savedGame = store.load()
+        savedGame = store?.load()
     }
 
     private func configure(_ controller: GameController) {
@@ -134,7 +137,7 @@ struct PlayHomeView: View {
     private func startNewGame() {
         let settings = GameSettings(startRank: .two, targetRank: gameLength.targetRank)
         let controller = GameController.newGame(settings: settings, seed: UInt64.random(in: UInt64.min...UInt64.max),
-                                                persistence: store, coachLevel: learning.coachLevel)
+                                                persistence: store, isDemo: isDemoMode, coachLevel: learning.coachLevel)
         configure(controller)
         savedGame = nil
         activeGame = controller

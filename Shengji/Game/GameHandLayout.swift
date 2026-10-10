@@ -53,6 +53,12 @@ struct GameHandLayout: Equatable, Sendable {
         GameHandLayout.raise + cardHeight + (rowCount == 2 ? rowOffset : 0) + 2
     }
 
+    /// Height to reserve for the hand: never less than a full 25-card hand needs at this width, so the
+    /// table above doesn't jump when the hand grows past one row while dealing or shrinks to one row in play.
+    static func reservedHeight(count: Int, width: Double, fullHand: Int = 25) -> Double {
+        max(GameHandLayout(count: count, width: width).height, GameHandLayout(count: fullHand, width: width).height)
+    }
+
     func row(of index: Int) -> Int {
         rowCount == 2 && index >= perRow ? 1 : 0
     }

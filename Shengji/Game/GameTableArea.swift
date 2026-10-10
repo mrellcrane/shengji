@@ -23,7 +23,10 @@ struct GameTableArea: View {
     }
 
     private func tableContent(size: CGSize, snapshot: GameTableSnapshot) -> some View {
-        let cardWidth = min(44, max(28, (size.height - 150) / 4.4))
+        // Fixed parts: two seat labels (about 44 pt each) and the stack spacing (about 24 pt), plus margin.
+        // The three play slots are 1.4 x card width + 12 each, so cards shrink until everything fits
+        // (an iPhone SE with a long coach message and the declare buttons still fits).
+        let cardWidth = min(44, max(18, (size.height - 150) / 4.2))
         let sideWidth = max(80, min(150, size.width * 0.36))
         return VStack(spacing: 4) {
             GameSeatLabel(info: snapshot.seats[2])
@@ -259,11 +262,11 @@ struct GameTableCenter: View {
             Text("Kitty")
         case .playing, .trickPause, .predicting:
             Text("Trick")
-            Text("\(min(controller.round.tricks.count + (controller.stage == .playing ? 1 : 0), Round.handSize))")
+            Text(trickNumberText)
                 .font(.headline)
                 .monospacedDigit()
-            if controller.trickDisplay.points > 0 {
-                Text("+\(controller.trickDisplay.points)")
+            if pointsOnTable > 0 {
+                Text("+\(pointsOnTable)")
                     .foregroundStyle(Theme.gold)
             }
         case .roundOver:
@@ -272,4 +275,13 @@ struct GameTableCenter: View {
             Text("Done")
         }
     }
+
+    /// The trick in progress (or the one just finished during the pause), 1-based.
+    private var trickNumberText: String {
+        let finished = controller.round.tricks.count
+        let number = controller.stage == .playing ? finished + 1 : finished
+        return String(max(1, number))
+    }
+
+    private var pointsOnTable: Int { controller.trickDisplay.points }
 }
