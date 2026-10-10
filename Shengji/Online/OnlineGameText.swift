@@ -167,6 +167,11 @@ enum OnlineGameText {
             if actingSeat(view) == Seats.human {
                 let hasOptions = !(view.bidding?.available.isEmpty ?? true)
                 parts.append(hasOptions ? "Your turn: declare a trump suit, or pass." : "Your turn. You have nothing to declare, so pass.")
+                // Lesson 9 teaches declaring as the cards arrive; online bidding works differently.
+                let firstBid = !(view.bidding?.history.contains { $0.player == Seats.human } ?? false)
+                if hasOptions, firstBid {
+                    parts.append("Online, bids go round in turns after the deal and you can't reinforce later, so a pair is the stronger bid.")
+                }
             }
         case .burying:
             if actingSeat(view) == Seats.human {
