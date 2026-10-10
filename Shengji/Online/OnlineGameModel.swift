@@ -91,8 +91,8 @@ final class OnlineGameModel: Identifiable {
     private(set) var lastNudge: Date?
     var coachLevel: CoachLevel = .guided
 
-    /// Hints for your play or bury from a seat view (nil: no Hint button). A follow-up plugs in bots
-    /// that read a `SeatView`.
+    /// Hints for your play or bury from a seat view (nil: no Hint button). `OnlineSession.makeTable`
+    /// plugs in `Bot(seat: 0).decide(view:)`.
     @ObservationIgnored var hintProvider: ((SeatView) -> BotDecision?)?
 
     // Hooks (wired by the view; nil in demo tables and checks).

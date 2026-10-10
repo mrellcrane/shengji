@@ -422,8 +422,12 @@ final class OnlineSession {
 
     /// The table for a game (live updates, achievements, the coach).
     func makeTable(gameID: String) -> OnlineGameModel {
-        OnlineGameModel(gameID: gameID, api: api, summary: game(id: gameID), liveConnector: liveConnector,
-                        ledger: ledger)
+        let model = OnlineGameModel(gameID: gameID, api: api, summary: game(id: gameID), liveConnector: liveConnector,
+                                    ledger: ledger)
+        // The same bot that plays offline, reading only what you can see (you are always seat 0).
+        let bot = Bot(seat: 0)
+        model.hintProvider = { bot.decide(view: $0) }
+        return model
     }
 
     /// The table reports the latest summary so the list stays current without a refetch.
