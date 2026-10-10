@@ -31,12 +31,19 @@ You need a Mac with **Xcode 16 or later**. The app runs on iOS 17 and later.
 2. Choose the **Shengji** scheme and an iPhone simulator in the toolbar.
 3. Press **Run** (⌘R).
 
-Xcode resolves the local `ShengjiCore` package by itself; there are no third-party dependencies.
+Xcode resolves the local `ShengjiCore` package by itself; the app has no third-party dependencies.
 
 **On your own iPhone:** select the project in the navigator, then the **Shengji** target, then
 **Signing & Capabilities**, and pick your **Team**. If Xcode says the bundle identifier is not
 available, change `com.mrellcrane.shengji` to something unique, such as `com.yourname.shengji`.
-Then pick your iPhone as the run destination and press Run.
+Then connect your iPhone, pick it as the run destination and press Run.
+
+- The first time, turn on **Developer Mode** on the iPhone: Settings > Privacy & Security > Developer
+  Mode (it shows up once the iPhone has been connected to Xcode). Let the iPhone restart, confirm
+  Developer Mode when it asks, then press Run again.
+- If the app won't open because of an "Untrusted Developer", go to Settings > General > VPN & Device
+  Management, tap your account under **Developer App** and trust it. This happens with a free Apple
+  Account, and apps signed that way stop opening after 7 days until you run them from Xcode again.
 
 **Demo scenes:** launching with `-ScreenshotScene <name>` opens a fixed scene without touching your
 saved progress. Names: `learn`, `lesson`, `predict`, `review`, `quiz`, `game`, `dealing`, `result`,
@@ -59,7 +66,8 @@ ShengjiCore/               Swift package with all game and learning logic (no UI
     Bots/                  Bot players (they also power hints)
     Learning/              Spaced repetition, progress, drills, curriculum
   Tests/ShengjiCoreTests/  Unit tests
-.github/workflows/         CI, TestFlight upload, signing check
+proxy/                     Cloudflare Worker between the in-app coach and Claude (keeps the API key off the phone)
+.github/workflows/         CI, TestFlight upload, signing check, coach proxy deploy
 DESIGN.md                  Rules we implement, learning design, UI and architecture
 ```
 
@@ -82,12 +90,15 @@ You can also open `ShengjiCore/Package.swift` in Xcode and press ⌘U.
 `.github/workflows/ci.yml` runs on every push:
 
 - **core-tests:** `swift test` on Linux (Swift 6.1).
-- **ios-build:** builds the app for the iOS Simulator with the newest Xcode on the runner.
+- **ios-build:** builds the app for the iOS Simulator with the newest Xcode on the runner that has
+  its simulator runtime installed.
 - **screenshots:** installs the app in an iPhone simulator, opens every demo scene and uploads the
   pictures as the `screenshots` artifact on the run's summary page.
 
 `testflight.yml` (run it by hand from the Actions tab) archives the app and uploads it to TestFlight,
-and `check-signing.yml` checks the App Store Connect secrets it needs.
+and `check-signing.yml` checks the App Store Connect secrets it needs. `deploy-proxy.yml` tests the
+coach proxy and deploys it to Cloudflare, and `diagnose-proxy.yml` sends it test requests while
+showing its live logs.
 
 ## Rules and design
 
