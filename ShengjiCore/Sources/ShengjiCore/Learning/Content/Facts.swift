@@ -8,11 +8,11 @@ extension Curriculum {
 
     private static let lesson1Facts: [Fact] = [
         Fact(id: "fact.teams", lessonID: "lesson.1",
-             prompt: "Who is your partner in Shengji?",
+             prompt: "In 4-player Shengji, who is your partner?",
              choices: ["The player sitting opposite you", "The player on your left",
                        "Whoever wins the bidding", "Nobody: everyone plays alone"],
              correctChoice: 0,
-             explanation: "Four players form two fixed teams, and partners sit **opposite** each other. You and your partner win or lose every round together."),
+             explanation: "The four players form two fixed teams, and partners sit **opposite** each other. You and your partner win or lose every round together."),
         Fact(id: "fact.declarers", lessonID: "lesson.1",
              prompt: "Which players are the declarers in a round?",
              choices: ["The dealer and the dealer's partner", "The two players with the most trumps",
@@ -47,13 +47,13 @@ extension Curriculum {
 
     private static let lesson2to4Facts: [Fact] = [
         Fact(id: "fact.deckSize", lessonID: "lesson.2",
-             prompt: "How many cards does Shengji use?",
+             prompt: "How many cards does 4-player Shengji use?",
              choices: ["108: two decks with jokers", "54: one deck with jokers",
                        "104: two decks without jokers", "52: one deck"],
              correctChoice: 0,
-             explanation: "Shengji uses **two** full decks with all four jokers: 108 cards. Every card appears twice, which is what makes pairs possible."),
+             explanation: "Four players use **two** full decks with all four jokers: 108 cards. Every card appears twice, which is what makes pairs possible. Bigger groups add a deck: 6 players use 3."),
         Fact(id: "fact.totalPoints", lessonID: "lesson.2",
-             prompt: "How many points are in all the cards together?",
+             prompt: "In a 2-deck game, how many points are in all the cards together?",
              choices: ["200", "100", "120", "240"],
              correctChoice: 0,
              explanation: "Each deck has four 5s, four 10s and four Kings: 20 + 40 + 40 = 100 points. Two decks hold **200**."),
@@ -139,7 +139,7 @@ extension Curriculum {
 
     private static let lesson9Facts: [Fact] = [
         Fact(id: "fact.kittySize", lessonID: "lesson.9",
-             prompt: "How many cards go into the kitty, 底牌 (dǐpái)?",
+             prompt: "In the 4-player game, how many cards go into the kitty, 底牌 (dǐpái)?",
              choices: ["8", "6", "4", "12"],
              correctChoice: 0,
              explanation: "Each player gets **25** cards and the last **8** form the kitty. The dealer picks them up, then buries 8 cards."),

@@ -3,9 +3,10 @@
 An iPhone and iPad app that teaches **Shengji** (升级 shēngjí, "Level Up"), the Chinese trick-taking
 card game also known as **Tractor** (拖拉机 tuōlājī), and lets you practise against bots.
 
-Four players, two decks, fixed partners, a trump suit and a trump rank that change every round: Shengji
-has a lot of rules to hold in your head at once. The app teaches them one small idea at a time and then
-lets you play real games while a coach explains what is happening.
+Fixed partners, a trump suit and a trump rank that change every round, pairs and tractors: Shengji
+has a lot of rules to hold in your head at once. The app teaches the classic game for four players and two decks
+(bigger groups add a deck: six players use three) one small idea at a time, then lets you play real games while
+a coach explains what is happening.
 
 ## How it teaches
 

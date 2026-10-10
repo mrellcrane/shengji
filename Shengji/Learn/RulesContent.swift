@@ -97,13 +97,14 @@ enum RulesContent {
 
         return [
             RuleSection(id: "goal", title: "Goal & teams", shortTitle: "Goal", symbol: "person.2.fill", blocks: [
-                .text("Four players play in **two teams**. Your **partner** sits opposite you, so you and your partner play against East and West."),
+                .text("This app plays the classic game: **4 players** in **two teams**. Your **partner** sits opposite you, so you and your partner play against East and West."),
                 .text("Each team has a **level**. Both start at 2 and climb 2, 3, 4 … 10, J, Q, K, A. The level of the dealer's team is this round's **trump rank**."),
                 .text("The dealer's team are the **declarers**; the other team are the **defenders**. The defenders try to win **80 points** or more in tricks. The declarers try to stop them."),
                 .text("Win a round as declarers while your team is at **A** and you win the game. That's where the name comes from: 升级 (shēngjí) means \"level up\"."),
             ]),
             RuleSection(id: "points", title: "Cards & points", shortTitle: "Points", symbol: "suit.heart.fill", blocks: [
                 .text("Two full decks with jokers: **108 cards**. Everyone gets 25 cards and the last 8 form the kitty."),
+                .text("**Bigger groups** add a deck: 6 players use 3 decks, with a few rule changes. Everything here is for 4 players and 2 decks."),
                 .text("Only three ranks score: **5s** are worth 5, **10s** and **Kings** are worth 10. That's 200 points in all."),
                 .cards(caption: "5 + 10 + 10 = 25 points", cards: [card(.five, .hearts), card(.ten, .spades), card(.king, .clubs)], trump: nil),
                 .cards(caption: "No points: aces and jokers win tricks but score nothing.", cards: [card(.ace, .spades), .bigJoker()], trump: nil),

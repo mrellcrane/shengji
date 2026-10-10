@@ -47,14 +47,19 @@ struct GameTopBar: View {
 
     private var defenderPoints: some View {
         let points = controller.defenderPoints
-        return HStack(spacing: 4) {
-            Text("Defenders")
-                .font(.caption)
-                .foregroundStyle(Color.white.opacity(0.8))
-            Text("\(points) / \(Scoring.takeoverThreshold)")
-                .font(.subheadline.weight(.bold))
-                .monospacedDigit()
-                .foregroundStyle(points >= Scoring.takeoverThreshold ? Theme.gold : Color.white)
+        let score = Text("\(points) / \(Scoring.takeoverThreshold)")
+            .font(.subheadline.weight(.bold))
+            .monospacedDigit()
+            .foregroundStyle(points >= Scoring.takeoverThreshold ? Theme.gold : Color.white)
+        // On narrow screens the word "Defenders" goes first, so the level chips always fit.
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) {
+                Text("Defenders")
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.8))
+                score
+            }
+            score
         }
         .lineLimit(1)
         .minimumScaleFactor(0.75)
@@ -180,6 +185,8 @@ struct GameTeamLevelChip: View {
         .padding(.vertical, 4)
         .background(Capsule().fill(Color.black.opacity(0.3)))
         .overlay(Capsule().strokeBorder(isDeclaring ? Theme.teamColor(team) : Color.clear, lineWidth: 1.5))
+        // Never squeezed into "The...": the points label beside it gives way instead.
+        .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
     }

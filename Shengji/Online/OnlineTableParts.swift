@@ -52,14 +52,19 @@ struct OnlineTopBar: View {
 
     private var defenderPoints: some View {
         let points = model.defenderPoints
-        return HStack(spacing: 4) {
-            Text("Defenders")
-                .font(.caption)
-                .foregroundStyle(Color.white.opacity(0.8))
-            Text("\(points) / \(Scoring.takeoverThreshold)")
-                .font(.subheadline.weight(.bold))
-                .monospacedDigit()
-                .foregroundStyle(points >= Scoring.takeoverThreshold ? Theme.gold : Color.white)
+        let score = Text("\(points) / \(Scoring.takeoverThreshold)")
+            .font(.subheadline.weight(.bold))
+            .monospacedDigit()
+            .foregroundStyle(points >= Scoring.takeoverThreshold ? Theme.gold : Color.white)
+        // On narrow screens the word "Defenders" goes first, so the level chips always fit.
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) {
+                Text("Defenders")
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.8))
+                score
+            }
+            score
         }
         .lineLimit(1)
         .minimumScaleFactor(0.7)

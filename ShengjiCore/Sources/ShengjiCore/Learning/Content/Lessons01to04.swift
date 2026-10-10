@@ -17,10 +17,10 @@ extension Curriculum {
     private static let lesson1Pages: [LessonPage] = [
         .text(
             title: "Welcome to Shengji",
-            body: "**Shengji** 升级 (shēngjí) means **level up**. It is a four-player trick-taking game from China, played with two decks. Many people call it **Tractor** 拖拉机 (tuōlājī), after its signature combination: two or more pairs in a row, like 5 5 6 6. You will meet it in lesson 7."),
+            body: "**Shengji** 升级 (shēngjí) means **level up**. It is a trick-taking game from China for four or more players. Many people call it **Tractor** 拖拉机 (tuōlājī), after its signature combination: two or more pairs in a row, like 5 5 6 6. You will meet it in lesson 7."),
         .text(
             title: "Partners sit opposite",
-            body: "Four players form **two fixed teams**. Your **partner sits opposite** you; East and West are the other team. Play moves counter-clockwise: You, East, Partner, West. Partners win and lose together, so every card you play is also about helping your partner."),
+            body: "This app teaches the classic game for **4 players**, who form **two fixed teams**. Your **partner sits opposite** you; East and West are the other team. Play moves counter-clockwise: You, East, Partner, West. Partners win and lose together, so every card you play is also about helping your partner."),
         .cards(
             title: "Levels are your score",
             body: "Each team has a **level** 级 (jí). Both start at **2** and climb through 3, 4 and so on, then 10, J, Q, K, up to **A**. Good rounds move your team up the ladder. To win the game, reach A, then win a round there as the declaring team.",
@@ -74,7 +74,7 @@ extension Curriculum {
             body: "Every round is a fight over **points**, 分 (fēn). The defenders need 80 to take over the deal. Knowing which cards score tells you when a trick is worth fighting for, and when to let it go cheaply."),
         .cards(
             title: "Two decks, 108 cards",
-            body: "Shengji uses **two full decks plus all four jokers**: 108 cards. Every card exists **twice**, so you can hold two identical cards, like these two A♠. There are two small jokers and two big jokers.",
+            body: "Four players use **two full decks plus all four jokers**: 108 cards. Every card exists **twice**, so you can hold two identical cards, like these two A♠. There are two small jokers and two big jokers. Bigger groups add a deck: 6 players use 3.",
             cards: pair(.ace, .spades) + [smallJoker0, smallJoker1, bigJoker0, bigJoker1],
             trump: nil),
         predict(2, 1,
@@ -110,7 +110,7 @@ extension Curriculum {
             title: "Only the defenders count",
             body: "At the end of a round, only the points the **defenders** captured are counted. The declarers never score points; they win by keeping points away. So when you declare, every point you capture is a point the defenders can't have."),
         .recap(points: [
-            "Two decks plus four jokers: 108 cards, every card twice.",
+            "Four players use two decks plus four jokers: 108 cards, every card twice.",
             "5s are worth 5; 10s and Kings are worth 10. Nothing else scores.",
             "The whole deck holds 200 points.",
             "Only the points the defenders capture are counted.",
