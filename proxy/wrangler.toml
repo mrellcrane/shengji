@@ -1,0 +1,32 @@
+# Cloudflare Worker that proxies the in-app coach chat to Claude.
+# The Anthropic key is a Worker secret (ANTHROPIC_API_KEY), set by the deploy workflow.
+name = "shengji-coach"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+
+[observability]
+enabled = true
+
+[vars]
+MODEL = "claude-haiku-5-5"
+
+# Per-device limit (key = the app's random install id).
+[[ratelimits]]
+name = "DEVICE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 8
+  period = 60
+
+# Per-IP limit, so rotating install ids doesn't get around the device limit.
+[[ratelimits]]
+name = "IP_LIMITER"
+namespace_id = "1002"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60

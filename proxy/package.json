@@ -1,0 +1,21 @@
+{
+  "name": "shengji-coach-proxy",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloudflare Worker that lets the Shengji app talk to Claude without shipping the API key in the app.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "wrangler types && tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.128.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "wrangler": "4.144.0",
+    "@types/node": "22.18.0"
+  }
+}

@@ -1,0 +1,118 @@
+name: Deploy coach proxy
+
+# Tests the Cloudflare Worker in proxy/ and deploys it with your Anthropic key as a Worker secret.
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN    API token from the "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID   Your Cloudflare account ID
+#   ANTHROPIC_API_KEY       Claude API key (ideally in its own workspace with a spend limit)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, claude/epic-einstein-25elio]
+    paths:
+      - proxy/**
+      - .github/workflows/deploy-proxy.yml
+
+concurrency:
+  group: deploy-proxy
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: proxy
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: proxy/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: proxy/package-lock.json
+
+      - name: Check secrets
+        id: secrets
+        run: |
+          missing=""
+          for v in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ANTHROPIC_API_KEY; do
+            if [ -z "${!v}" ]; then missing="$missing $v"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice::Skipping deploy: missing repository secrets:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm ci
+        if: steps.secrets.outputs.ready == 'true'
+
+      - name: Deploy Worker
+        id: deploy
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          set -o pipefail
+          npx wrangler deploy 2>&1 | tee deploy.log
+          url=$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          if [ -z "$url" ]; then
+            echo "::error::Could not find the workers.dev URL in the deploy output. If this is a new Cloudflare account, open Workers & Pages in the dashboard once to pick a workers.dev subdomain."
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Set Anthropic key as a Worker secret
+        if: steps.secrets.outputs.ready == 'true'
+        run: printf '%s' "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY
+
+      - name: Smoke test
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          for i in $(seq 1 12); do
+            health=$(curl -s "$URL/health" || true)
+            echo "health: $health"
+            case "$health" in *'"keyConfigured":true'*) break;; esac
+            sleep 5
+          done
+          case "$health" in *'"keyConfigured":true'*) ;; *) echo "::error::Worker never reported the key as configured"; exit 1;; esac
+          reply=$(curl -sN --max-time 60 -X POST "$URL/coach" -H 'content-type: application/json' \
+            -d '{"deviceId":"github-smoke-test","turns":[{"role":"user","text":"In one short sentence: what is a tractor in Shengji?"}]}')
+          echo "$reply"
+          if ! printf '%s' "$reply" | grep -q '"type":"done"'; then
+            echo "::error::The coach did not answer. See the reply above (an error event names the cause)."
+            exit 1
+          fi
+          {
+            echo "### Coach proxy deployed"
+            echo ""
+            echo "URL: $URL"
+            echo ""
+            echo "Smoke test answer:"
+            echo ""
+            printf '%s' "$reply" | sed -n 's/^data: {"type":"text","text":"\(.*\)"}$/\1/p' | tr -d '\n'
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
