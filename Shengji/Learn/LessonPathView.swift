@@ -30,6 +30,9 @@ struct LessonPathView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -108,6 +111,9 @@ private struct LearnHeader: View {
     let onStart: (Lesson) -> Void
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         let due = store.dueCount(now: now)
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
@@ -204,6 +210,9 @@ private struct LessonPath: View {
     let onSelect: (Lesson, LessonState) -> Void
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         let lessons = Curriculum.lessons
         VStack(spacing: 0) {
             ForEach(Array(lessons.enumerated()), id: \.element.id) { index, lesson in
@@ -232,6 +241,9 @@ private struct LessonPathRow: View {
     let action: () -> Void
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         HStack(alignment: .top, spacing: 12) {
             PathNode(number: lesson.number, state: state, isFirst: isFirst, isLast: isLast)
             Button(action: action) {
@@ -263,6 +275,9 @@ private struct PathNode: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         VStack(spacing: 0) {
             Rectangle()
                 .fill(isFirst ? Color.clear : lineColor)
@@ -310,6 +325,9 @@ private struct LessonCard: View {
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 16, style: .continuous) }
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text("Lesson \(lesson.number)")

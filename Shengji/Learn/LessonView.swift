@@ -16,6 +16,9 @@ struct LessonView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         VStack(spacing: 0) {
             LearnFlowTopBar(title: flow.lesson.title, subtitle: "Lesson \(flow.lesson.number)",
                             progress: flow.progress, detail: topDetail) {
@@ -61,6 +64,9 @@ private struct LessonPagesStage: View {
     let flow: LessonFlowModel
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         ScrollViewReader { proxy in
             ScrollView {
                 if let page = flow.page {
@@ -115,6 +121,9 @@ private struct LessonPageView: View {
     let flow: LessonFlowModel
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         switch page {
         case let .text(title, text):
             TextLessonPage(title: title, text: text)
@@ -138,6 +147,9 @@ private struct TextLessonPage: View {
     let text: String
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         VStack(alignment: .leading, spacing: 14) {
             Text(title)
                 .font(.title2.weight(.bold))
@@ -169,6 +181,9 @@ private struct CardsLessonPage: View {
     private var spacing: CGFloat { cards.count <= 5 ? 8 : -12 }
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         VStack(alignment: .leading, spacing: 16) {
             Text(title)
                 .font(.title2.weight(.bold))
@@ -203,6 +218,9 @@ private struct TrickLessonPage: View {
     let winner: Int
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         VStack(alignment: .leading, spacing: 16) {
             Text(title)
                 .font(.title2.weight(.bold))
@@ -223,6 +241,9 @@ private struct RecapLessonPage: View {
     let points: [String]
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         VStack(alignment: .leading, spacing: 16) {
             Text("Key points")
                 .font(.title2.weight(.bold))

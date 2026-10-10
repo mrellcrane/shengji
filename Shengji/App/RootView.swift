@@ -12,6 +12,9 @@ struct RootView: View {
     private let scene = DemoScene.current
 
     var body: some View {
+        #if DEBUG
+        let _ = DebugRender.enabled ? Self._printChanges() : ()
+        #endif
         // Re-evaluated every minute so the Review badge picks up items as they fall due.
         TimelineView(.everyMinute) { context in
             tabs(dueCount: store.dueCount(now: context.date))

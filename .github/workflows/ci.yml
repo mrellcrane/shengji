@@ -279,7 +279,12 @@ jobs:
           sleep 8
           for scene in learn lesson predict review quiz game dealing result rules; do
             echo "Scene: $scene"
-            xcrun simctl launch --terminate-running-process "$SIM_UDID" "$BUNDLE_ID" -ScreenshotScene "$scene" || true
+            mkdir -p screenshots/diagnostics
+            # Debug builds print why views re-render when launched with -DebugPrintChanges YES.
+            xcrun simctl launch --terminate-running-process \
+              --stdout="$PWD/screenshots/diagnostics/$scene-stdout.txt" \
+              --stderr="$PWD/screenshots/diagnostics/$scene-stderr.txt" \
+              "$SIM_UDID" "$BUNDLE_ID" -ScreenshotScene "$scene" -DebugPrintChanges YES || true
             sleep 6
             xcrun simctl io "$SIM_UDID" screenshot "screenshots/$scene.png" || true
             # Diagnostics: a stack sample of the running app (shows where it is stuck if the screen
