@@ -188,14 +188,23 @@ struct RichText: View {
     init(_ text: String) { self.text = text }
 
     var body: some View {
-        if let attributed = try? AttributedString(
+        Text(Self.styled(text))
+    }
+
+    /// Markdown (bold/italic) plus red hearts and diamonds, so suits in prose read like the cards.
+    static func styled(_ text: String) -> AttributedString {
+        var attributed = (try? AttributedString(
             markdown: text,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            Text(attributed)
-        } else {
-            Text(text)
+        )) ?? AttributedString(text)
+        for symbol in ["\u{2665}", "\u{2666}"] {
+            var searchRange = attributed.startIndex..<attributed.endIndex
+            while let found = attributed[searchRange].range(of: symbol) {
+                attributed[found].foregroundColor = Theme.cardRed
+                searchRange = found.upperBound..<attributed.endIndex
+            }
         }
+        return attributed
     }
 }
 
