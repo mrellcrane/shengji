@@ -122,6 +122,7 @@ export function makeCloud(options: CloudOptions = {}): Cloud {
         hub: hubApi,
         broadcast: () => broadcasts.set(gameId, (broadcasts.get(gameId) ?? 0) + 1),
         closeAll: () => closed.add(gameId),
+        log: (message) => logs.push(message),
       });
       rooms.set(gameId, host);
     }

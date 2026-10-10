@@ -20,8 +20,10 @@ All bodies are JSON (`content-type: application/json`). Errors are
   `lastRoundSummary.explanation` is written from the viewer's side ("Your team", "East and West", "Partner deals
   next"), exactly as Swift's `RoundSummary.rotated(by:target:)`. While bidding, `phase` is `"bidding"`, `turn` is
   `null` and `bidding.turn` says who bids; `bidding.available` is non-empty only on the viewer's own turn.
-- **Versions**: each game has a `version` that grows with every change (each move, including every bot move, and
-  each new deal). Send the `version` of the newest view you have; the server answers `409 stale` otherwise.
+- **Versions**: each game has a `version` that grows with every change (each move, including every bot move,
+  each new deal, and a player's new display name). Two messages with the same `version` hold the same game, so
+  keeping only newer versions is safe. Send the `version` of the newest view you have; the server answers
+  `409 stale` otherwise.
 - **Auth**: every endpoint except `/v1/auth/*` and `/health` needs `Authorization: Bearer <session token>`.
 
 ## Auth
@@ -31,13 +33,14 @@ All bodies are JSON (`content-type: application/json`). Errors are
 The server verifies the JWT against Apple's JWKS (`https://appleid.apple.com/auth/keys`): RS256 signature, `iss` =
 `https://appleid.apple.com`, `aud` = `com.mrellcrane.shengji`, not expired. Identity key `apple:<sub>`. A new user is
 created on first sign-in (display name from the request, else "Player 1234"). Sessions last 180 days.
-A `displayName` longer than 24 characters is shortened. For an existing user it only replaces a default
-"Player 1234" name (a name chosen with `PATCH /v1/me` is kept). A token that fails the checks is
-`401 invalid_token`; if Apple's keys cannot be fetched, `503 unavailable` (try again).
+A `displayName` longer than 24 characters is shortened, and one that breaks the other name rules (see
+`PATCH /v1/me`) is ignored. For an existing user it only replaces a default "Player 1234" name (a name chosen
+with `PATCH /v1/me` is kept). A token that fails the checks is `401 invalid_token`; if Apple's keys cannot be
+fetched, `503 unavailable` (try again).
 
 `POST /v1/auth/dev` `{"secret": "...", "name": "Test A"}` → same response. Enabled only when the Worker has a
 `DEV_AUTH_SECRET` secret (the deploy workflow sets a random one per deploy for its own smoke tests).
-Otherwise it answers `404`. The same name always signs in as the same (dev) user.
+Otherwise it answers `404` (whatever the method or body). The same name always signs in as the same (dev) user.
 
 `User` = `{"id": "u_...", "displayName": "Mei"}`.
 
@@ -46,7 +49,9 @@ Otherwise it answers `404`. The same name always signs in as the same (dev) user
 - `GET /v1/me` → `{"user": User, "clubs": [Club]}`
 - `PATCH /v1/me` `{"displayName": "Mei"}` (1 to 24 characters) → `{"user": User}`
   (spaces are trimmed and runs of spaces collapsed; control and invisible formatting characters are refused;
-  emoji are fine). The new name also shows in the player's active games.
+  emoji are fine). The new name also shows in the player's active games. A name needs at least one visible
+  character, and text that is not valid Unicode (a lone UTF-16 surrogate, which JSON would carry as `"\ud800"`
+  and `JSONDecoder` rejects) is refused; the same rules apply to club names and dev sign-in names.
 - `POST /v1/devices` `{"platform": "ios", "token": "<hex APNs token>", "environment": "sandbox" | "production"}` → `204`
   (a token registered again moves to the caller; at most 10 devices per user, the oldest are dropped)
 - `DELETE /v1/devices/<token>` → `204` (also when it was not registered)
@@ -61,8 +66,8 @@ Push may be disabled on the server (no APNs key yet); devices are still stored.
 - `POST /v1/clubs/join` `{"inviteCode": "ABCD-EFGH"}` → `{"club": Club}` (case- and dash-insensitive; spaces are
   ignored too; joining a club you are in is fine; an unknown code is `404`)
 - `GET /v1/clubs/<id>` → `{"club": Club, "games": [GameSummary]}` (members only; `404` for anyone else).
-  `games` holds the club's games (your-turn first, then active, then finished; newest first). For a game you are not
-  seated in, the summary is seen from absolute seat 0, nobody is "You", and `yourTurn` is `false`.
+  `games` holds the club's games, at most 50 (your-turn first, then active, then finished; newest first). For a
+  game you are not seated in, the summary is seen from absolute seat 0, nobody is "You", and `yourTurn` is `false`.
 - `POST /v1/clubs/<id>/leave` → `204` (when the last member leaves, the club is deleted; its games go on)
 
 Members are listed in the order they joined. A user can be in 20 clubs; a club holds 50 members.
@@ -93,7 +98,8 @@ Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon 
   `Seat` = `{"userId": "u_..."}` or `{"bot": "standard" | "beginner"}`, in absolute seat order (teams 0+2 and 1+3).
   The creator must hold a seat; every human must be a club member. → `{"game": GameSummary}` (from the creator's view).
   The first round deals immediately; bidding starts at the creator's seat.
-  `targetRank` defaults to 14. Each person sits once. At most 30 active games per player.
+  `targetRank` defaults to 14. Each person sits once. At most 30 active games per player: if anyone at the
+  table already has 30, the answer is `409 too_many_games` (its `message` names who).
 - `GET /v1/games` → `{"games": [GameSummary]}` (the caller's active games first, then up to 20 finished)
   (games where it is your turn come first; newest first within each group).
 - `GET /v1/games/<id>` → `{"game": GameSummary, "view": SeatView, "version": n}`
@@ -121,9 +127,13 @@ Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon 
   The session token may instead be sent as `Authorization: Bearer <token>`. Before upgrading, a bad session is `401`,
   someone not seated `403`, a deleted game `404`, and a plain (non-WebSocket) request `426`. The client never needs to
   send anything; a text message `ping` is answered with `pong` (keep-alive). When the game is deleted the server
-  closes the socket with code `4004`. After any other close, reconnect (the first message is the current state).
+  closes the socket with code `4004`. Each person keeps at most 4 live sockets per game: opening a fifth closes
+  their oldest with code `4001` (usually one a phone left behind when its network dropped). A close from the
+  client is answered at once (with its code, or `1000` when it sent none). After any other close, reconnect if you
+  still need updates (the first message is the current state).
 - `POST /v1/games/<id>/nudge` → `204` (reminds the player whose turn it is; at most once per 10 minutes per game).
-  Too soon is `429 too_soon`; when it is your own turn or the game is over, `400 cannot_nudge`.
+  Too soon is `429 too_soon` with `retry-after` set to the seconds until the next nudge is allowed; when it is your
+  own turn or the game is over, `400 cannot_nudge`.
 - `DELETE /v1/games/<id>` → `204` (creator only; ends the game for everyone).
   Others get `403 forbidden`. The game disappears from every list, and open WebSockets close with `4004`.
 
@@ -143,7 +153,7 @@ Exactly: `{"aps": {"alert": {"title", "body"}, "badge": n, "sound": "default", "
 - game over: title "Game over", body "Your team won the game in Friday Tractor!" or
   "Mei and Lin won the game in Friday Tractor.";
 - nudge: title "Your turn", body "Lin is waiting for you in Friday Tractor."
-Devices that APNs reports as gone (410, `BadDeviceToken`) are forgotten.
+Devices that APNs reports as gone (410, `BadDeviceToken`, `Unregistered`, `DeviceTokenNotForTopic`) are forgotten.
 
 ## Health
 
@@ -169,7 +179,7 @@ Devices that APNs reports as gone (410, `BadDeviceToken`) are forgotten.
 | 413 | `too_large` | the body is over 16 KB |
 | 426 | `upgrade_required` | the live address without a WebSocket upgrade |
 | 429 | `rate_limited` | too many requests (`retry-after: 60`) |
-| 429 | `too_soon` | a nudge within 10 minutes of the last one |
+| 429 | `too_soon` | a nudge within 10 minutes of the last one (`retry-after`: seconds until the next is allowed) |
 | 500 | `internal` | a server bug (try again) |
 | 503 | `unavailable` | Apple's sign-in keys could not be fetched (try again) |
 

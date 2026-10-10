@@ -405,6 +405,102 @@ test("club pages list club games for members; renames reach the seats; only the 
   assert.equal((await cloud.call("DELETE", `/v1/games/${gameId}`, { token: mei.token })).status, 404);
 });
 
+test("a rename is a change like any other: the version grows, so clients that keep only newer versions see it", async () => {
+  // The app keeps an update only when its version is newer than the one it has (HTTP replies and
+  // WebSocket updates can arrive in any order), so a new name under the same version never shows.
+  const cloud = makeCloud({ seed: 12 });
+  const [mei, lin] = [await cloud.signIn("Mei"), await cloud.signIn("Lin")];
+  const clubId = await clubOf(cloud, mei, [lin]);
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, { bot: "standard" }, { userId: lin.id }, { bot: "standard" }]);
+  const before = await read(cloud, mei, gameId);
+  const broadcasts = cloud.broadcasts.get(gameId) ?? 0;
+  assert.equal((await cloud.call("PATCH", "/v1/me", { token: lin.token, body: { displayName: "Lin Wei" } })).status, 200);
+  await cloud.settle();
+  const after = await read(cloud, mei, gameId);
+  assert.equal(after.view.players[2].name, "Lin Wei");
+  assert.ok(after.version > before.version, `version ${after.version} after the rename, ${before.version} before`);
+  assert.equal(cloud.broadcasts.get(gameId), broadcasts + 1, "connected players get the new name");
+  const listed = (await cloud.call("GET", "/v1/games", { token: mei.token })).body.games[0] as GameSummary;
+  assert.equal(listed.players[2].name, "Lin Wei");
+  const log = cloud.rooms.get(gameId)!.service.log();
+  assert.equal(log.at(-1)?.version, after.version);
+  assert.equal(log.at(-1)?.kind, "rename");
+  // The old version is stale now; the same name again changes nothing.
+  const stale = await cloud.call("POST", `/v1/games/${gameId}/actions`, {
+    token: mei.token,
+    body: { version: before.version, action: moveFrom(before.view) },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal((await cloud.call("PATCH", "/v1/me", { token: lin.token, body: { displayName: "Lin Wei" } })).status, 200);
+  await cloud.settle();
+  assert.equal((await read(cloud, mei, gameId)).version, after.version);
+});
+
+test("an accepted move is answered and pushed even when the games index can't be updated right then", async () => {
+  const cloud = makeCloud({ seed: 13 });
+  const [mei, lin] = [await cloud.signIn("Mei"), await cloud.signIn("Lin")];
+  const clubId = await clubOf(cloud, mei, [lin]);
+  await cloud.call("POST", "/v1/devices", { token: lin.token, body: { platform: "ios", token: "bb".repeat(32), environment: "sandbox" } });
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, { userId: lin.id }, { bot: "standard" }, { bot: "standard" }]);
+  const original = cloud.hub.gameChanged.bind(cloud.hub);
+  let failures = 0;
+  cloud.hub.gameChanged = async () => {
+    failures++;
+    throw new Error("Durable Object reset because its code was updated");
+  };
+  const t = await read(cloud, mei, gameId);
+  const reply = await cloud.call("POST", `/v1/games/${gameId}/actions`, { token: mei.token, body: { version: t.version, action: { type: "pass" } } });
+  assert.equal(reply.status, 200, "the move was made; the reply says so");
+  assert.ok(failures >= 1);
+  await cloud.settle();
+  assert.equal(cloud.push.sent.length, 1, "Lin still hears it is her turn");
+  assert.equal(cloud.push.sent[0].title, "Your turn");
+  assert.ok(cloud.logs.some((line) => line.includes("games index")), "the failure is logged");
+  // The index catches up with the next change.
+  cloud.hub.gameChanged = original;
+  const linTable = await read(cloud, lin, gameId);
+  const next = await cloud.call("POST", `/v1/games/${gameId}/actions`, {
+    token: lin.token,
+    body: { version: linTable.version, action: { type: "pass" } },
+  });
+  assert.equal(next.status, 200);
+  const listed = (await cloud.call("GET", "/v1/games", { token: mei.token })).body.games as GameSummary[];
+  const current = await read(cloud, mei, gameId);
+  assert.deepEqual(listed, [current.game]);
+});
+
+test("deleting a game while the Hub can't be reached leaves no ghost in anyone's list", async () => {
+  const cloud = makeCloud({ seed: 14 });
+  const [mei, lin] = [await cloud.signIn("Mei"), await cloud.signIn("Lin")];
+  const clubId = await clubOf(cloud, mei, [lin]);
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, { userId: lin.id }, { bot: "standard" }, { bot: "standard" }]);
+  const original = cloud.hub.gameDeleted.bind(cloud.hub);
+  cloud.hub.gameDeleted = async () => {
+    throw new Error("Hub overloaded");
+  };
+  const failed = await cloud.call("DELETE", `/v1/games/${gameId}`, { token: mei.token });
+  assert.equal(failed.status, 500);
+  assert.equal((await cloud.call("GET", `/v1/games/${gameId}`, { token: lin.token })).status, 200, "nothing was deleted");
+  assert.ok(!cloud.closed.has(gameId));
+  cloud.hub.gameDeleted = original;
+  assert.equal((await cloud.call("DELETE", `/v1/games/${gameId}`, { token: mei.token })).status, 204, "trying again works");
+  assert.deepEqual((await cloud.call("GET", "/v1/games", { token: lin.token })).body.games, []);
+  assert.equal((await cloud.call("GET", `/v1/games/${gameId}`, { token: lin.token })).status, 404);
+});
+
+test("a nudge refused as too soon says when the next one is allowed (retry-after)", async () => {
+  const cloud = makeCloud({ seed: 15 });
+  const [mei, lin] = [await cloud.signIn("Mei"), await cloud.signIn("Lin")];
+  const clubId = await clubOf(cloud, mei, [lin]);
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, { userId: lin.id }, { bot: "standard" }, { bot: "standard" }]);
+  assert.equal((await cloud.call("POST", `/v1/games/${gameId}/nudge`, { token: lin.token })).status, 204);
+  const soon = await cloud.call("POST", `/v1/games/${gameId}/nudge`, { token: lin.token });
+  assert.deepEqual([soon.status, soon.body.error, soon.headers.get("retry-after")], [429, "too_soon", "600"]);
+  cloud.clock.now += 7 * 60 * 1000 + 500;
+  const later = await cloud.call("POST", `/v1/games/${gameId}/nudge`, { token: lin.token });
+  assert.deepEqual([later.status, later.headers.get("retry-after")], [429, "180"]);
+});
+
 test("bot turns left over by an interrupted request run on the next read", async () => {
   const cloud = makeCloud({ seed: 5 });
   const mei = await cloud.signIn("Mei");

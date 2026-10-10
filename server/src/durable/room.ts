@@ -8,6 +8,7 @@ import { RoomHost } from "../room/host.ts";
 import type { RoomApi } from "../room/host.ts";
 import { RoomService } from "../room/service.ts";
 import type { ActionRequest, CreateRoomInput } from "../room/service.ts";
+import { CLOSE_REPLACED, closeReplyCode, socketsToReplace } from "../room/sockets.ts";
 import type { WorkerEnv } from "../env.ts";
 import { durableSql } from "./sql.ts";
 
@@ -15,25 +16,28 @@ import { durableSql } from "./sql.ts";
 export const USER_HEADER = "x-shengji-user";
 /** Close code sent when the game is deleted. */
 export const CLOSE_GAME_DELETED = 4004;
-const MAX_SOCKETS = 40;
 
 interface Attachment {
   userId: string;
   seat: number;
+  /** Unix ms when it connected (the oldest of a person's sockets is replaced first). */
+  connectedAt?: number;
 }
 
 export class GameRoom extends DurableObject<WorkerEnv> implements RoomApi {
   private readonly service: RoomService;
   private readonly host: RoomHost;
+  private readonly hub: HubApi;
 
   constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
     this.service = new RoomService(durableSql(ctx.storage), { deck: () => shuffledDeck(), now: () => new Date() });
-    const hub = env.HUB.get(env.HUB.idFromName("hub")) as unknown as HubApi;
+    this.hub = env.HUB.get(env.HUB.idFromName("hub")) as unknown as HubApi;
     this.host = new RoomHost(this.service, {
-      hub,
+      hub: this.hub,
       broadcast: () => this.broadcast(),
       closeAll: () => this.closeAll(),
+      log: (message) => console.error(message),
     });
     // Keep-alive pings are answered without waking the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
@@ -71,21 +75,42 @@ export class GameRoom extends DurableObject<WorkerEnv> implements RoomApi {
     if (userId === null || (request.headers.get("upgrade") ?? "").toLowerCase() !== "websocket") {
       return Response.json({ error: "bad_request", message: "Expected a WebSocket upgrade." }, { status: 400 });
     }
-    await this.host.read(userId); // runs any overdue bot turns first
-    if (this.service.load() === null) {
-      return Response.json({ error: "not_found", message: "That game doesn't exist any more." }, { status: 404 });
+    // Overdue bot turns run first; their pushes go out from here (the Worker only relays the upgrade).
+    const connected = await this.host.connect(userId);
+    if (connected.notifications.length > 0) {
+      this.ctx.waitUntil(
+        this.hub.notify(connected.notifications).then(
+          () => undefined,
+          (e: unknown) => console.error(`push delivery failed: ${String(e)}`),
+        ),
+      );
     }
-    const seat = this.service.seatOfUser(userId);
-    if (seat === null) {
-      return Response.json({ error: "not_seated", message: "You're not playing in this game." }, { status: 403 });
+    if (!connected.result.ok) {
+      const { status, code, message } = connected.result;
+      return Response.json({ error: code, message }, { status });
     }
-    if (this.ctx.getWebSockets().length >= MAX_SOCKETS) {
+    const seat = connected.result.value.seat;
+    // Make room: this person's oldest sockets (often ones a phone left behind) give way.
+    const sockets = this.ctx.getWebSockets();
+    const open = sockets.map((ws) => {
+      const attachment = ws.deserializeAttachment() as Attachment | null;
+      return { userId: attachment?.userId ?? "", connectedAt: attachment?.connectedAt ?? 0 };
+    });
+    const replace = socketsToReplace(open, userId);
+    if (replace === null) {
       return Response.json({ error: "rate_limited", message: "Too many connections to this game." }, { status: 429 });
+    }
+    for (const index of replace) {
+      try {
+        sockets[index].close(CLOSE_REPLACED, "replaced by a newer connection");
+      } catch {
+        // Already closed.
+      }
     }
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server, [userId]);
-    const attachment: Attachment = { userId, seat };
+    const attachment: Attachment = { userId, seat, connectedAt: Date.now() };
     server.serializeAttachment(attachment);
     const update = this.service.update(seat);
     if (update !== null) server.send(JSON.stringify(update));
@@ -129,7 +154,7 @@ export class GameRoom extends DurableObject<WorkerEnv> implements RoomApi {
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     try {
-      ws.close(code, reason);
+      ws.close(closeReplyCode(code), reason);
     } catch {
       // Already closed.
     }

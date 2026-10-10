@@ -47,7 +47,8 @@ function noContent(): Response {
 }
 
 export function errorResponse(failure: Failure): Response {
-  const headers: Record<string, string> = failure.status === 429 ? { "retry-after": "60" } : {};
+  const headers: Record<string, string> =
+    failure.status === 429 ? { "retry-after": String(Math.max(1, Math.ceil(failure.retryAfter ?? 60))) } : {};
   return json({ error: failure.code, message: failure.message, ...(failure.details ?? {}) }, failure.status, headers);
 }
 
@@ -162,6 +163,10 @@ async function route(request: Request, services: Services): Promise<Response> {
     if (parts.length !== 2 || (parts[1] !== "apple" && parts[1] !== "dev")) {
       return error(404, "not_found", "There is nothing here.");
     }
+    // Dev sign-in exists only on a Worker with a DEV_AUTH_SECRET (the deploy's smoke test);
+    // anywhere else it is not there at all, whatever the method or body.
+    const devSecret = services.devAuthSecret ?? "";
+    if (parts[1] === "dev" && devSecret.length === 0) return error(404, "not_found", "There is nothing here.");
     if (method !== "POST") return methodNotAllowed("POST");
     if (!(await services.limiters.auth.limit({ key: `auth:${ip}` })).success) return RATE_LIMITED();
     const read = await readBody(request);
@@ -188,16 +193,13 @@ async function route(request: Request, services: Services): Promise<Response> {
       }
       return json(await services.hub.signIn({ provider: "apple", subject: verified.identity.subject }, name));
     }
-    // Dev sign-in: only when the Worker has a DEV_AUTH_SECRET (the deploy's smoke test).
-    if (services.devAuthSecret === null || services.devAuthSecret.length === 0) {
-      return error(404, "not_found", "There is nothing here.");
-    }
+    // Dev sign-in (only reached when it is enabled, see above).
     const secret = body.secret;
     const name = cleanName(body.name, LIMITS.displayName);
     if (typeof secret !== "string" || secret.length > LIMITS.devSecret || name === null) {
       return error(400, "bad_request", "Send {\"secret\", \"name\"} (a name of 1 to 24 characters).");
     }
-    if (!(await constantTimeEqual(secret, services.devAuthSecret))) {
+    if (!(await constantTimeEqual(secret, devSecret))) {
       return error(401, "unauthorized", "That secret is wrong.");
     }
     return json(await services.hub.signIn({ provider: "dev", subject: name }, name));

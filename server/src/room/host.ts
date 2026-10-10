@@ -2,8 +2,14 @@
 // in this order: live updates to the connected sockets, then the Hub's games index (awaited, so
 // lists are current when the response arrives). Pushes are returned to the caller, which sends
 // them without holding up the response (ctx.waitUntil in the Worker).
+//
+// A change is saved before it is published, so a Hub that cannot be reached must not turn an
+// accepted move into an error (the player would see a failure for a move that was made, and the
+// next player's push would be lost): the index update is tried twice and then logged, and the
+// next change brings the index up to date. Deleting is the other way round: the Hub first, so a
+// failure leaves the game whole (and trying again works) rather than a ghost in every list.
 
-import { ok } from "../api/result.ts";
+import { NOT_FOUND_GAME, NOT_SEATED, ok } from "../api/result.ts";
 import type { Result } from "../api/result.ts";
 import type { Notification } from "../game/online.ts";
 import type { GameSnapshot, GameSummary } from "../game/summary.ts";
@@ -31,7 +37,10 @@ export interface RoomSurroundings {
   broadcast(): void;
   /** Closes every connected socket (the game was deleted). */
   closeAll(): void;
+  log(message: string): void;
 }
+
+const INDEX_ATTEMPTS = 2;
 
 export class RoomHost implements RoomApi {
   readonly service: RoomService;
@@ -45,8 +54,21 @@ export class RoomHost implements RoomApi {
   private async publish(change: Change | null): Promise<Notification[]> {
     if (change === null) return [];
     this.around.broadcast();
-    await this.around.hub.gameChanged(change.snapshot);
+    await this.updateIndex(change.snapshot);
     return change.notifications;
+  }
+
+  private async updateIndex(snapshot: GameSnapshot): Promise<void> {
+    for (let attempt = 1; attempt <= INDEX_ATTEMPTS; attempt++) {
+      try {
+        await this.around.hub.gameChanged(snapshot);
+        return;
+      } catch (e) {
+        if (attempt === INDEX_ATTEMPTS) {
+          this.around.log(`games index not updated for ${snapshot.id} (version ${snapshot.version}): ${String(e)}`);
+        }
+      }
+    }
   }
 
   /** Bot turns left over from an interrupted batch run before anything else. */
@@ -66,6 +88,18 @@ export class RoomHost implements RoomApi {
     return { result: this.service.read(userId), notifications };
   }
 
+  /**
+   * A live connection: overdue bot turns run first (their pushes are returned, for the caller to
+   * send), then the seat whose updates the socket gets, or why it may not connect.
+   */
+  async connect(userId: string): Promise<RoomReply<{ seat: number }>> {
+    const notifications = await this.repair();
+    if (this.service.load() === null) return { result: NOT_FOUND_GAME(), notifications };
+    const seat = this.service.seatOfUser(userId);
+    if (seat === null) return { result: NOT_SEATED(), notifications };
+    return { result: ok({ seat }), notifications };
+  }
+
   async act(userId: string, request: ActionRequest): Promise<RoomReply<ActResponse>> {
     const notifications = await this.repair();
     const result = this.service.act(userId, request);
@@ -81,11 +115,13 @@ export class RoomHost implements RoomApi {
   }
 
   async remove(userId: string): Promise<Result<null>> {
-    const id = this.service.load()?.id ?? null;
+    const allowed = this.service.removable(userId);
+    if (!allowed.ok) return allowed;
+    // The Hub first (it also stops late index updates from bringing the game back): if it cannot
+    // be reached, this throws and nothing is deleted.
+    await this.around.hub.gameDeleted(allowed.value);
     const result = this.service.remove(userId);
-    if (!result.ok || id === null) return result;
-    this.around.closeAll();
-    await this.around.hub.gameDeleted(id);
+    if (result.ok) this.around.closeAll();
     return result;
   }
 

@@ -17,9 +17,12 @@ export class Hub extends DurableObject<WorkerEnv> implements HubApi {
   constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
     const credentials = apnsCredentials(env);
+    const service = new HubService(durableSql(ctx.storage), { now: () => new Date() });
     this.host = new HubHost(
-      new HubService(durableSql(ctx.storage), { now: () => new Date() }),
-      credentials === null ? null : createApnsClient(credentials),
+      service,
+      // The provider token is stored, so a Hub that restarts keeps using it (APNs refuses tokens
+      // renewed more often than every 20 minutes).
+      credentials === null ? null : createApnsClient(credentials, { store: service.providerTokenStore() }),
       (message) => console.error(message),
     );
   }

@@ -4,7 +4,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sessionTokenHash, newSessionToken } from "../src/auth/crypto.ts";
-import { HubService, MAX_CLUB_MEMBERS, MAX_DEVICES_PER_USER, MAX_SESSIONS_PER_USER } from "../src/hub/service.ts";
+import {
+  HubService,
+  MAX_ACTIVE_GAMES_PER_USER,
+  MAX_CLUB_MEMBERS,
+  MAX_DEVICES_PER_USER,
+  MAX_SESSIONS_PER_USER,
+} from "../src/hub/service.ts";
 import type { GameSnapshot } from "../src/game/summary.ts";
 import { memorySql } from "./sqlite.ts";
 
@@ -234,4 +240,40 @@ test("the games index: newer versions win, lists put your turn first, badges cou
   // An update that was still on its way when the game was deleted does not bring it back.
   service.gameChanged(snapshot("g1", "c1", players, { version: 9, turn: 0 }));
   assert.deepEqual(service.listGames(mei).map((g) => g.id), ["g2", "g3"]);
+});
+
+test("at most 30 active games for everyone at the table, not only the person starting it", async () => {
+  // Otherwise friends could seat someone in more games than their game list shows (it lists 60
+  // active games), and games where it is their turn would never appear.
+  const { service } = hub();
+  const mei = (await session(service, "mei", "Mei")).user;
+  const lin = (await session(service, "lin", "Lin")).user;
+  const sam = (await session(service, "sam", "Sam")).user;
+  const created = service.createClub(mei.id, "Club");
+  assert.ok(created.ok);
+  const clubId = created.value.club.id;
+  for (const u of [lin, sam]) assert.ok(service.joinClub(u.id, created.value.club.inviteCode).ok);
+  for (let i = 0; i < MAX_ACTIVE_GAMES_PER_USER; i++) {
+    const creator = i % 2 === 0 ? mei.id : sam.id;
+    service.gameChanged(snapshot(`g${i}`, clubId, [creator, "bot", lin.id, "bot"]));
+  }
+  const seatLin = (creator: string) =>
+    service.prepareGame(creator, {
+      clubId,
+      seats: [{ userId: creator }, { bot: "standard" }, { userId: lin.id }, { bot: "standard" }],
+      targetRank: 14,
+    });
+  const refused = seatLin(mei.id);
+  assert.ok(!refused.ok);
+  assert.deepEqual([refused.status, refused.code], [409, "too_many_games"]);
+  assert.match(refused.message, new RegExp(`^Lin already has ${MAX_ACTIVE_GAMES_PER_USER} games going`));
+  // A game without Lin is fine, and so is Lin again once one of the games is over.
+  const withoutLin = service.prepareGame(mei.id, {
+    clubId,
+    seats: [{ userId: mei.id }, { bot: "standard" }, { userId: sam.id }, { bot: "standard" }],
+    targetRank: 14,
+  });
+  assert.ok(withoutLin.ok);
+  service.gameChanged(snapshot("g0", clubId, [mei.id, "bot", lin.id, "bot"], { version: 2, status: "finished", turn: null, winner: 0 }));
+  assert.ok(seatLin(sam.id).ok);
 });

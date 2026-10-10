@@ -9,7 +9,7 @@ import type { GameSnapshot, GameSummary } from "../game/summary.ts";
 import type { BotLevel } from "../game/bots.ts";
 import { botName } from "../game/online.ts";
 import type { Notification, SeatAssignment } from "../game/online.ts";
-import type { PushEnvironment, PushMessage } from "../push/apns.ts";
+import type { ProviderTokenStore, PushEnvironment, PushMessage, StoredProviderToken } from "../push/apns.ts";
 import { fail, ok } from "../api/result.ts";
 import type { Result } from "../api/result.ts";
 import { int, one, text } from "../storage/sql.ts";
@@ -134,7 +134,14 @@ const SCHEMA = [
      id TEXT PRIMARY KEY,
      deleted_at TEXT NOT NULL
    )`,
+  // Small server state that must outlive the Durable Object's restarts (the APNs provider token).
+  `CREATE TABLE IF NOT EXISTS settings (
+     key TEXT PRIMARY KEY,
+     value TEXT NOT NULL
+   )`,
 ];
+
+const PROVIDER_TOKEN_KEY = "apns_provider_token";
 
 const DEFAULT_NAME = /^Player \d{4}$/;
 
@@ -424,14 +431,25 @@ export class HubService {
       }
       seats.push({ userId: user.id, bot: null, name: user.displayName });
     }
-    const active = one(
-      this.sql,
-      `SELECT COUNT(*) AS n FROM game_players p JOIN games g ON g.id = p.game_id
-       WHERE p.user_id = ? AND g.status = 'active'`,
-      userId,
-    );
-    if (active !== null && int(active, "n") >= MAX_ACTIVE_GAMES_PER_USER) {
-      return fail(409, "too_many_games", `You can have at most ${MAX_ACTIVE_GAMES_PER_USER} games going at once.`);
+    // Everyone at the table, not only the creator: game lists show each person's active games
+    // only up to a limit, so nobody may be seated in more than this.
+    for (const seat of seats) {
+      if (seat.userId === null) continue;
+      const active = one(
+        this.sql,
+        `SELECT COUNT(*) AS n FROM game_players p JOIN games g ON g.id = p.game_id
+         WHERE p.user_id = ? AND g.status = 'active'`,
+        seat.userId,
+      );
+      if (active !== null && int(active, "n") >= MAX_ACTIVE_GAMES_PER_USER) {
+        return fail(
+          409,
+          "too_many_games",
+          seat.userId === userId
+            ? `You can have at most ${MAX_ACTIVE_GAMES_PER_USER} games going at once.`
+            : `${seat.name} already has ${MAX_ACTIVE_GAMES_PER_USER} games going, the most at once. Try again when one of them ends.`,
+        );
+      }
     }
     return ok({
       id: newId("g"),
@@ -505,6 +523,35 @@ export class HubService {
   turnCount(userId: string): number {
     const row = one(this.sql, "SELECT COUNT(*) AS n FROM games WHERE turn_user = ? AND status = 'active'", userId);
     return row === null ? 0 : int(row, "n");
+  }
+
+  // MARK: Settings
+
+  private setting(key: string): string | null {
+    const row = one(this.sql, "SELECT value FROM settings WHERE key = ?", key);
+    return row === null ? null : text(row, "value");
+  }
+
+  private setSetting(key: string, value: string | null): void {
+    if (value === null) this.sql.exec("DELETE FROM settings WHERE key = ?", key);
+    else this.sql.exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value);
+  }
+
+  /** Keeps the APNs provider token across restarts of the Hub (see ProviderTokenStore). */
+  providerTokenStore(): ProviderTokenStore {
+    return {
+      load: () => {
+        const value = this.setting(PROVIDER_TOKEN_KEY);
+        if (value === null) return null;
+        try {
+          const parsed = JSON.parse(value) as StoredProviderToken;
+          return typeof parsed.token === "string" && typeof parsed.issuedAt === "number" ? parsed : null;
+        } catch {
+          return null;
+        }
+      },
+      save: (token) => this.setSetting(PROVIDER_TOKEN_KEY, token === null ? null : JSON.stringify(token)),
+    };
   }
 
   /** One push per device of each notified user, with their badge count. */

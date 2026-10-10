@@ -56,6 +56,14 @@ test("dev sign-in exists only with a DEV_AUTH_SECRET and checks it", async () =>
   assert.equal((await disabled.call("POST", "/v1/auth/dev", { body: { secret: "", name: "A" } })).status, 404);
   const empty = makeCloud({ devSecret: "" });
   assert.equal((await empty.call("POST", "/v1/auth/dev", { body: { secret: "", name: "A" } })).status, 404);
+  // Without a secret the address is not there at all: any method or body is 404, and it spends
+  // nothing from the sign-in rate limit.
+  disabled.limits.keys.length = 0;
+  for (const [method, raw] of [["GET", undefined], ["DELETE", undefined], ["POST", "not json"], ["POST", "[]"], ["POST", "{}"]]) {
+    const reply = await disabled.call(method as string, "/v1/auth/dev", { raw });
+    assert.deepEqual([reply.status, reply.body.error], [404, "not_found"], `${method} ${raw}`);
+  }
+  assert.ok(!disabled.limits.keys.some((key) => key.startsWith("auth:")), disabled.limits.keys.join(", "));
   const cloud = makeCloud({ devSecret: "s3cret" });
   assert.equal((await cloud.call("POST", "/v1/auth/dev", { body: { secret: "s3cre", name: "A" } })).status, 401);
   assert.equal((await cloud.call("POST", "/v1/auth/dev", { body: { secret: "s3cret", name: "" } })).status, 400);
@@ -121,6 +129,35 @@ test("me: names are 1 to 24 characters, trimmed, without control characters; emo
   assert.equal((await rename("👩‍👩‍👧 Team")).body.user.displayName, "👩‍👩‍👧 Team");
   assert.equal((await rename("x".repeat(24))).status, 200);
   assert.equal((await cloud.call("DELETE", "/v1/me", { token: user.token })).status, 405);
+});
+
+test("names that the app could not decode or that show as nothing are refused; emoji sequences are fine", async () => {
+  const cloud = makeCloud({
+    apple: (token) => ({ ok: true, identity: { subject: `apple.${token}` } }),
+  });
+  const user = await cloud.signIn("Mei");
+  const rename = (displayName: unknown) => cloud.call("PATCH", "/v1/me", { token: user.token, body: { displayName } });
+  // A lone UTF-16 surrogate travels as "\ud800" in JSON, which Swift's JSONDecoder rejects: one
+  // such name would break the game lists and tables of everyone who plays with that person.
+  // Names made only of invisible characters would show as blank seats.
+  const bad = ["Mei\ud800", "\udc00Lin", "\ud83d", "‍", "️️", "́", "ㅤ", "⠀", "ᅟᅠ", "\u{e0067}\u{e007f}"];
+  for (const name of bad) {
+    assert.equal((await rename(name)).status, 400, JSON.stringify(name));
+    assert.equal((await cloud.call("POST", "/v1/clubs", { token: user.token, body: { name } })).status, 400, JSON.stringify(name));
+    const dev = await cloud.call("POST", "/v1/auth/dev", { body: { secret: "test-secret", name } });
+    assert.equal(dev.status, 400, JSON.stringify(name));
+  }
+  // A name Apple passes on that is not usable is dropped (a default name instead), not stored.
+  const apple = await cloud.call("POST", "/v1/auth/apple", { body: { identityToken: "t1", displayName: "Kim\ud800" } });
+  assert.equal(apple.status, 200);
+  assert.match(apple.body.user.displayName, /^Player \d{4}$/);
+  // Accents written with combining marks, emoji with variation selectors or joiners, and flags
+  // written with tag characters are all fine.
+  for (const good of ["Réne", "❤️ Mei", "👩‍👩‍👧", "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f} Kim"]) {
+    const reply = await rename(good);
+    assert.equal(reply.status, 200, JSON.stringify(good));
+    assert.equal(reply.body.user.displayName, good);
+  }
 });
 
 test("devices: token, platform and environment are validated; removal is idempotent", async () => {
