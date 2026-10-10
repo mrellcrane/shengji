@@ -29,6 +29,10 @@ struct RootView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { router.now = .now }
             }
+            // Items scheduled just now (a lesson passed, a review answered) count at once, not after the next tick.
+            .onChange(of: store.progress.schedules) {
+                router.now = .now
+            }
             // A tapped notification for an online game opens it in the Play tab.
             .modifier(OnlineShowsPlayTab {
                 if router.selectedTab != .play { router.show(.play) }

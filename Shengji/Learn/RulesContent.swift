@@ -139,6 +139,7 @@ enum RulesContent {
                 .text("A new declaration must be **stronger** than the current one. If the current one is yours, you may only reinforce it: turn your single into a pair of the same suit."),
                 .text("In the first round, whoever wins the declaring becomes the **dealer** (庄家 zhuāngjiā). In later rounds the last round's result picks the dealer (see Scoring & levels)."),
                 .text("If nobody declares, the round goes ahead anyway (in the first round, you deal). The kitty is turned over card by card: the first trump-rank card or joker decides (a joker means no trump suit). If neither turns up, the suit of the highest kitty card is trump (the first one, if two tie)."),
+                .text("**Online games** declare in turns. All 25 cards are dealt first, then each player declares or passes, starting with the dealer (in the first round, with whoever started the game, who also deals if nobody declares). Once someone declares, three passes in a row end it, so you won't get another turn to reinforce a single: declare a pair straight away if you have one."),
             ]),
             RuleSection(id: "kitty", title: "The kitty", shortTitle: "Kitty", symbol: "tray.full.fill", blocks: [
                 .text("The **kitty** (底牌 dǐpái) is the 8 cards left after the deal. The dealer picks them up, then **buries** any 8 cards face down (扣底 kòu dǐ)."),

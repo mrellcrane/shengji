@@ -164,11 +164,7 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
         guard updateSchedule, var schedule = schedules[itemID] else { return }
         let rawGrade = Scheduler.grade(correct: correct, seconds: seconds,
                                        expectedSeconds: Self.expectedSeconds(for: itemID))
-        // Once an item has been answered in its (re)learning steps, a fast answer counts as good, never easy:
-        // speed on something just seen or just missed is short-term memory, so it still takes each step.
-        // (A fast first answer to a new item can still graduate it straight away.)
-        let midSteps = schedule.learningStep != nil && schedule.lastReviewed != nil
-        let grade = midSteps && rawGrade == .easy ? .good : rawGrade
+        let grade = schedule.learningStep == nil ? rawGrade : Self.learningStepGrade(rawGrade, of: schedule, now: now)
         if grade != .again {
             // Not due yet: the retry of an item missed a moment ago.
             if schedule.due > now { return }
@@ -180,6 +176,26 @@ public struct LearnerProgress: Codable, Hashable, Sendable {
             }
         }
         schedules[itemID] = scheduler.review(schedule, grade: grade, now: now)
+    }
+
+    /// The grade a right answer gets while the item is in its (re)learning steps: one step on, however fast or slow.
+    /// - Fast is not easy: speed on something just learned in a lesson or just missed is short-term memory, so the
+    ///   item still comes back in 10 minutes and then tomorrow. The one exception is a new item's first review a day
+    ///   or more after its lesson (a new item falls due when its lesson is passed): that fast answer can graduate
+    ///   it straight away.
+    /// - Slow is not hard: a slow right answer is still a successful recall. Hard would repeat the step, so a
+    ///   learner who reads slowly would see the item every minute and never graduate it.
+    static func learningStepGrade(_ grade: Grade, of schedule: ItemSchedule, now: Date) -> Grade {
+        switch grade {
+        case .again, .good:
+            return grade
+        case .hard:
+            return .good
+        case .easy:
+            let firstReviewAfterADay = schedule.lastReviewed == nil
+                && now.timeIntervalSince(schedule.due) >= Scheduler.secondsPerDay
+            return firstReviewAfterADay ? .easy : .good
+        }
     }
 
     /// When a graduated item was due before anything moved it: last review + interval. Nil while (re)learning
@@ -467,6 +483,8 @@ public struct PracticeSession: Sendable {
     static let lessonQuizEarlierLimit = 2
     /// Lesson quizzes pass at this first-try accuracy.
     static let passThreshold = 0.8
+    /// Questions in a session unless `maxItems` says otherwise (a review asks at most this many due items).
+    public static let defaultMaxItems = 15
 
     /// Review: up to `maxItems` due items, most overdue first, ordered so consecutive questions differ in kind
     /// (interleaving).
@@ -474,7 +492,8 @@ public struct PracticeSession: Sendable {
     /// shuffled and interleaved.
     /// Free practice: `maxItems` random picks from unlocked items (or the given skills). Facts appear at most once;
     /// skills (fresh questions every time) fill the remaining slots.
-    public init<G: RandomNumberGenerator>(kind: Kind, progress: LearnerProgress, now: Date, maxItems: Int = 15, rng: inout G) {
+    public init<G: RandomNumberGenerator>(kind: Kind, progress: LearnerProgress, now: Date,
+                                          maxItems: Int = PracticeSession.defaultMaxItems, rng: inout G) {
         let limit = max(0, maxItems)
         let items: [String]
         switch kind {
