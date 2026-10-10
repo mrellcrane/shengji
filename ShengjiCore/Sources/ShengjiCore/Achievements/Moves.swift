@@ -156,8 +156,11 @@ public struct MoveEvent: Hashable, Codable, Sendable {
 ///    (a play can only win one if it has a matching tractor too).
 ///  - cleanThrow: `player` led several components at once and the throw stood (a failed throw is recorded as
 ///    only the forced component, so it does not count). Winning the trick is not required.
-///  - topCard: `player` led a single, pair or tractor in a plain suit and won the trick (nobody beat it,
-///    so nobody ruffed it either).
+///  - topCard: `player` led a single, pair or tractor in a plain suit, won the trick (so nobody ruffed it), and
+///    it was a sure winner: from what `player` had seen when the trick began (their hand, the earlier tricks,
+///    the kitty they buried), no cards still out could make a higher single, pair or tractor of that suit.
+///    A card that only won because nobody happened to beat it, such as the forced part of a failed throw
+///    (it failed because someone could beat it), is not a top card.
 ///  - bigJoker: `player`'s play includes a big joker and won.
 ///  - bigTrick: `player`'s team won the trick and it held 30 or more points.
 ///  - kittyRaid: `player`'s team were the defenders and won the last trick (the kitty bonus applies,
@@ -177,22 +180,30 @@ public enum MoveDetector {
     public static let feedPoints = 5
 
     /// Moves in the completed trick `round.tricks[trickIndex]` (call right after the trick finishes; `round`
-    /// supplies trump, history and roles). E.g. ruff: player's play was all trump on a plain lead and won;
-    /// overruff: player won with trump after an opponent ruffed earlier in the trick; feedPartner: partner won and
-    /// player's play contained points (and was not forced: player had a non-point alternative, or simply had
-    /// point cards in the play while partner won; keep it simple and documented); tractor: player led a tractor
-    /// or won with one; cleanThrow: player led a multi-component lead that stood; topCard: player led a single,
-    /// pair or tractor in a plain suit, nobody ruffed, and it won; bigJoker: player won with a play containing a
-    /// big joker as the key card; bigTrick: player's team won 30+ points in the trick.
+    /// supplies trump, history, roles and what `player` had seen). E.g. ruff: player's play was all trump on a
+    /// plain lead and won; overruff: player won with trump after an opponent ruffed earlier in the trick;
+    /// feedPartner: partner won and player's play contained points (forced or not, see the rules above);
+    /// tractor: player led a tractor or won with one; cleanThrow: player led a multi-component lead that stood;
+    /// topCard: player led a single, pair or tractor in a plain suit that nobody could beat, nobody ruffed, and
+    /// it won; bigJoker: player won with a play containing a big joker; bigTrick: player's team won 30+ points
+    /// in the trick.
     public static func moves(inTrick trickIndex: Int, of round: Round, player: Int = Seats.human) -> [MoveEvent] {
         guard round.tricks.indices.contains(trickIndex) else { return [] }
-        return trickMoves(round.tricks[trickIndex], trump: round.trump, player: player)
+        let hand = round.hands.indices.contains(player) ? round.hands[player] : []
+        // Tricks only exist once the kitty is buried, so `round.kitty` is what the dealer buried.
+        let buried = round.dealer == player ? round.kitty : []
+        let seen = seenBefore(trickIndex, tricks: round.tricks, current: round.currentTrick, hand: hand,
+                              buried: buried, player: player)
+        return trickMoves(round.tricks[trickIndex], trump: round.trump, player: player, seen: seen)
     }
 
     /// Moves in a completed trick of a seat view (online play): the viewer is seat 0.
     public static func moves(inTrick trickIndex: Int, of view: SeatView) -> [MoveEvent] {
         guard view.tricks.indices.contains(trickIndex) else { return [] }
-        return trickMoves(view.tricks[trickIndex], trump: view.trump, player: Seats.human)
+        let buried = view.dealer == Seats.human ? (view.kitty ?? []) : []
+        let seen = seenBefore(trickIndex, tricks: view.tricks, current: view.currentTrick, hand: view.hand,
+                              buried: buried, player: Seats.human)
+        return trickMoves(view.tricks[trickIndex], trump: view.trump, player: Seats.human, seen: seen)
     }
 
     /// Moves when the round is finished (`round.result` set): kittyRaid, holdDeal, shutout, takeOver.
@@ -223,7 +234,34 @@ public enum MoveDetector {
 
     // MARK: - Tricks
 
-    static func trickMoves(_ trick: TrickRecord, trump: Trump, player: Int) -> [MoveEvent] {
+    /// Cards `player` knew the place of when trick `index` began: their hand at that moment (the hand now plus
+    /// everything they have played since), every card of the earlier tricks, and the kitty they buried.
+    static func seenBefore(_ index: Int, tricks: [TrickRecord], current: [Play], hand: [Card], buried: [Card],
+                           player: Int) -> [Card] {
+        var seen: [Card] = hand + buried
+        for (position, trick) in tricks.enumerated() {
+            for play in trick.plays where position < index || play.player == player {
+                seen += play.cards
+            }
+        }
+        for play in current where play.player == player {
+            seen += play.cards
+        }
+        return seen
+    }
+
+    /// True if no cards outside `seen` (and the component itself) could form a component of the same shape and
+    /// suit that beats `component`: a higher single, a higher pair, or a higher tractor of the same length.
+    static func isSureWinner(_ component: Component, seen: [Card], trump: Trump) -> Bool {
+        var known = Set(seen.map(\.id))
+        for card in component.cards { known.insert(card.id) }
+        let unseen: [Card] = Deck.double().filter { !known.contains($0.id) && trump.group($0) == component.group }
+        return !Rules.canBeat(component, with: unseen, trump: trump)
+    }
+
+    /// Moves `player` made in `trick`. `seen` is what they had seen when the trick began (see `seenBefore`);
+    /// only the top-card check uses it.
+    static func trickMoves(_ trick: TrickRecord, trump: Trump, player: Int, seen: [Card] = []) -> [MoveEvent] {
         let plays = trick.plays
         guard let leadPlay = plays.first, let firstCard = leadPlay.cards.first,
               let myIndex = plays.firstIndex(where: { $0.player == player }) else { return [] }
@@ -288,8 +326,9 @@ public enum MoveDetector {
             events.append(MoveEvent(kind: .cleanThrow, detail: detail, points: iWon ? wonPoints : 0))
         }
 
-        // A sure winner led in a plain suit.
-        if iLed, iWon, !ledGroup.isTrump, leadComponents.count == 1 {
+        // A sure winner led in a plain suit: it won, and from what you had seen nobody could have beaten it.
+        if iLed, iWon, !ledGroup.isTrump, leadComponents.count == 1, let component = leadComponents.first,
+           isSureWinner(component, seen: seen, trump: trump) {
             let detail = "Top card! Nobody could beat your \(trump.sorted(lead).shortText)"
                 + pointsTail(wonPoints, prefix: ", and it won ", bare: ", so you keep the lead") + "."
             events.append(MoveEvent(kind: .topCard, detail: detail, points: wonPoints))
@@ -324,7 +363,7 @@ public enum MoveDetector {
             if result.kittyPoints > 0 {
                 detail = "Kitty raid! Your team won the last trick, so the kitty's \(result.kittyPoints) points counted ×\(result.kittyMultiplier): \(bonus) bonus points."
             } else {
-                detail = "Kitty raid! Your team won the last trick. The kitty held no points this time, but the bonus was yours."
+                detail = "Kitty raid! Your team won the last trick and took the kitty, though it held no points this time."
             }
             events.append(MoveEvent(kind: .kittyRaid, detail: detail, points: bonus))
         }

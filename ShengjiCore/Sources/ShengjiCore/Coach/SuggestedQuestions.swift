@@ -126,7 +126,7 @@ public enum SuggestedQuestions {
             justTell = make("followUp.justTell", "Just tell me", "Just tell me what you would play here and why, in one or two sentences.")
         case "table.whatToLead"?:
             justTell = make("followUp.justTell", "Just tell me", "Just tell me what you would lead here and why, in one or two sentences.")
-        case "table.whatToBury"?:
+        case "table.whatToBury"?, "table.isBurySelectionGood"?:
             justTell = make("followUp.justTell", "Just tell me", "Just tell me which 8 cards you would bury and why, in a few sentences.")
         case "table.shouldDeclare"?:
             justTell = make("followUp.justTell", "Just tell me", "Just tell me: would you declare now, and with what?")
@@ -149,17 +149,18 @@ public enum SuggestedQuestions {
         case .nudge:
             let quoted = quote(text, room: 170)
             return make("hint.why", "Why is that the hint?",
-                        "My hint (step 1 of \(total), what to notice) says: \(quoted) Why does that matter here? Don't tell me the play yet.")
+                        "My hint (step 1 of \(total), what to notice) says: \(quoted) Why does that matter here? Don't tell me the answer yet.")
         case .principle:
             let quoted = quote(text, room: 170)
             return make("hint.why", "Why is that the hint?",
                         "My hint (step 2 of \(total), the principle) says: \(quoted) Why does that principle apply here?")
         case .show:
+            // The same chip sits under play, lead and bury hints, so the wording doesn't say what the cards are for.
             let cards = ladder.highlightedCards.shortText
             let quoted = quote(text, room: 150)
-            let named = cards.isEmpty ? "" : " to play \(CoachText.clip(cards, 60))"
+            let named = cards.isEmpty ? "says" : "points to \(CoachText.clip(cards, 60))"
             return make("hint.why", "Why is that the hint?",
-                        "My hint (step 3 of \(total)) suggests\(named): \(quoted) Why is that the best play here?")
+                        "My hint (step 3 of \(total)) \(named): \(quoted) Why is that the best choice here?")
         }
     }
 
@@ -218,16 +219,31 @@ struct TableChips {
 
     // MARK: Situations
 
+    /// The app reports rejected buries and declarations as illegal attempts too, so the chip names what you tried.
     func whyIllegal(_ attempt: IllegalAttempt) -> SuggestedQuestion {
         let cards = CoachText.owned(attempt.cards, from: view.hand + view.playedCards)
+        let kind = CoachText.Attempt(attempt.error, phase: view.phase)
+        let label: String
+        let instead: String
+        switch kind {
+        case .bury:
+            label = "Why can't I bury those?"
+            instead = "what should I bury instead?"
+        case .declare:
+            label = "Why can't I declare that?"
+            instead = "what could I declare instead?"
+        case .play:
+            label = "Why can't I play that?"
+            instead = "what can I play instead?"
+        }
         let prompt: String
         if cards.isEmpty {
             prompt = "My last move wasn't allowed. Why not, and what can I do instead?"
         } else {
             let text = CoachText.clip(trump.sorted(cards).shortText, 120)
-            prompt = "I tried to play \(text) but it wasn't allowed. Why not, and what can I play instead?"
+            prompt = "I tried to \(kind.verb) \(text) but it wasn't allowed. Why not, and \(instead)"
         }
-        return SuggestedQuestions.make("table.whyIllegal", "Why can't I play that?", prompt)
+        return SuggestedQuestions.make("table.whyIllegal", label, prompt)
     }
 
     func dealingChips() -> [SuggestedQuestion] {
@@ -262,7 +278,7 @@ struct TableChips {
         var chips: [SuggestedQuestion] = []
         if !selected.isEmpty {
             let cards = trump.sorted(selected).shortText
-            chips.append(SuggestedQuestions.make("table.isSelectionGood", "Are these good to bury?",
+            chips.append(SuggestedQuestions.make("table.isBurySelectionGood", "Are these good to bury?",
                                                  "I'm thinking of burying \(CoachText.clip(cards, 100)). Is that a good choice? Why or why not?"))
         }
         chips.append(SuggestedQuestions.make("table.whatToBury", "What should I bury?",
@@ -328,8 +344,16 @@ struct TableChips {
             chips.append(SuggestedQuestions.make("table.kittyScoring", "How was the kitty scored?",
                                                  "The kitty held \(result.kittyPoints) points and counted ×\(result.kittyMultiplier). How was that worked out?"))
         }
-        chips.append(SuggestedQuestions.make("table.whatNext", "What happens next round?",
-                                             "What happens to the levels after this round, and who deals next?"))
+        if let winner = view.gameWinnerTeam {
+            // The game is over: there is no next round to ask about.
+            let ours = winner == Seats.team(of: Seats.human)
+            let who = ours ? "My team" : "East and West"
+            chips.append(SuggestedQuestions.make("table.gameOver", ours ? "How did we win the game?" : "How did they win the game?",
+                                                 "\(who) just won the whole game. How does a team win the game in Shengji, and what decided it this round?"))
+        } else {
+            chips.append(SuggestedQuestions.make("table.whatNext", "What happens next round?",
+                                                 "What happens to the levels after this round, and who deals next?"))
+        }
         chips.append(SuggestedQuestions.make("table.doBetter", "What could I do better?",
                                              "Looking at how this round went, what's one thing I could do better next time?"))
         return chips

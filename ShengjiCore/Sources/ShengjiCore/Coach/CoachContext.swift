@@ -272,7 +272,7 @@ struct TableDescription {
         let who = view.isDefender(Seats.human) ? "your team (the defenders)" : "the defenders (East and West)"
         var line = "Points: \(who) have \(defenders) so far; 80 takes over the deal"
         line += need > 0 ? " (\(need) more needed)." : " (already reached)."
-        line += " Point cards played so far: \(played) of \(Scoring.totalPoints)."
+        line += " Points in the cards played so far: \(played) of \(Scoring.totalPoints)."
         return line
     }
 
@@ -331,13 +331,38 @@ struct TableDescription {
         }
         if let options = available {
             if options.isEmpty {
-                parts.append("You can't declare right now (no rank cards or jokers that beat the current declaration).")
+                parts.append(whyNoDeclaration())
             } else {
                 let texts = options.map { CoachText.declarationOption($0) }
                 parts.append("You could declare: \(texts.joined(separator: "; ")).")
             }
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// Why the viewer has no declaration to make right now.
+    func whyNoDeclaration() -> String {
+        var myTurnToBid = false
+        if view.phase == .bidding, let turn = view.bidding?.turn {
+            if turn != Seats.human {
+                return "It is \(Seats.name(turn))'s turn to declare or pass; you can declare when your turn comes."
+            }
+            myTurnToBid = true
+        }
+        let reason: String
+        if let current = view.declaration {
+            if current.player != Seats.human {
+                reason = "You can't declare right now (no rank cards or jokers that beat the current declaration)."
+            } else if current.strength == 1 {
+                reason = "Your declaration is the current one. You can only strengthen it with a pair of the same card."
+            } else {
+                reason = "Your declaration is the current one, and it can't be strengthened any further."
+            }
+        } else {
+            let rank = CoachText.rankSingular(trump.rank)
+            reason = "You can't declare yet: you need a \(rank) (any suit) or a pair of matching jokers."
+        }
+        return myTurnToBid ? reason + " So pass this turn." : reason
     }
 
     func kittyLine() -> String? {
@@ -368,7 +393,10 @@ struct TableDescription {
         line += CoachText.playsSentence(plays, trump: trump)
         line += " " + CoachText.winningSentence(plays, trump: trump)
         var waiting: [String] = []
-        for offset in plays.count..<4 { waiting.append(Seats.name((view.leader + offset) % 4)) }
+        // A trick has four plays; an online view could hold more by mistake, which must not crash.
+        if plays.count < 4 {
+            for offset in plays.count..<4 { waiting.append(Seats.name((view.leader + offset) % 4)) }
+        }
         if !waiting.isEmpty { line += " Still to play: \(waiting.joined(separator: ", "))." }
         return line
     }
@@ -392,6 +420,7 @@ struct TableDescription {
             let tricks = won.count == 1 ? "1 trick" : "\(won.count) tricks"
             parts.append("\(Seats.name(seat)) \(tricks) (\(points) points)")
         }
+        guard !parts.isEmpty else { return nil }
         let header = view.phase == .finished ? "Tricks won" : "Tricks won so far"
         return "\(header): " + parts.joined(separator: ", ") + "."
     }
@@ -481,7 +510,9 @@ struct TableDescription {
     func hintLine(_ hint: HintLadder?) -> String? {
         guard let hint, let step = hint.step else { return nil }
         let text = CoachText.clip(CoachText.plain(hint.text), 400)
-        var line = "Hint shown to you (step \(step.rawValue) of \(HintStep.allCases.count), \(CoachText.stepName(step))): \(text)"
+        let buryHint: Bool = step == HintStep.show && view.phase == SeatView.Phase.burying
+        let name: String = buryHint ? "the cards to bury" : CoachText.stepName(step)
+        var line = "Hint shown to you (step \(step.rawValue) of \(HintStep.allCases.count), \(name)): \(text)"
         if let concept = hint.concept { line += " Concept: \(CoachText.clip(CoachText.plain(concept), 60))." }
         let cards = CoachText.owned(hint.highlightedCards, from: view.hand)
         if !cards.isEmpty { line += " Suggested cards: \(trump.sorted(cards).shortText)." }
@@ -491,7 +522,8 @@ struct TableDescription {
     func selectionLine(_ selection: [Card]) -> String? {
         let cards = CoachText.owned(selection, from: view.hand)
         guard !cards.isEmpty else { return nil }
-        return "Cards you have selected (not played yet): \(trump.sorted(cards).shortText)."
+        let pending = view.phase == .burying ? "not buried yet" : "not played yet"
+        return "Cards you have selected (\(pending)): \(trump.sorted(cards).shortText)."
     }
 
     func illegalLine(_ attempt: IllegalAttempt?) -> String? {
@@ -502,7 +534,8 @@ struct TableDescription {
         if cards.isEmpty {
             return "Your last attempt was not allowed. Reason: \(reason)"
         }
-        return "You just tried to play \(trump.sorted(cards).shortText) and it was not allowed. Reason: \(reason)"
+        let verb = CoachText.Attempt(attempt.error, phase: view.phase).verb
+        return "You just tried to \(verb) \(trump.sorted(cards).shortText) and it was not allowed. Reason: \(reason)"
     }
 }
 
@@ -598,6 +631,38 @@ enum CoachText {
             }
         }
         return out
+    }
+
+    /// What the learner was doing when a move was rejected: the app reports rejected buries and declarations
+    /// as illegal attempts too, not only plays.
+    enum Attempt {
+        case play, bury, declare
+
+        init(_ error: RoundError, phase: SeatView.Phase) {
+            switch error {
+            case .invalidBury:
+                self = .bury
+            case .invalidDeclaration:
+                self = .declare
+            case .illegalLead, .illegalFollow:
+                self = .play
+            case .wrongPhase, .notYourTurn:
+                switch phase {
+                case .burying: self = .bury
+                case .dealing, .bidding: self = .declare
+                case .playing, .finished: self = .play
+                }
+            }
+        }
+
+        /// "You just tried to <verb> 3♠ 4♠"
+        var verb: String {
+            switch self {
+            case .play: return "play"
+            case .bury: return "bury"
+            case .declare: return "declare with"
+            }
+        }
     }
 
     static func stepName(_ step: HintStep) -> String {
