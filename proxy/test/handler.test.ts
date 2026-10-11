@@ -197,5 +197,8 @@ test("a failure to start the stream returns 502 JSON", async () => {
 test("system prompt stays free of em dashes and states the key thresholds", () => {
   assert.equal(SYSTEM_PROMPT.includes("—"), false);
   assert.match(SYSTEM_PROMPT, /80 to 115 = defenders take over/);
+  // Bigger tables: 3 decks take over at 120.
+  assert.match(SYSTEM_PROMPT, /# Bigger tables \(6 or 8 players\)/);
+  assert.match(SYSTEM_PROMPT, /120 takes over/);
   assert.match(SYSTEM_PROMPT, /claude|Coach/);
 });

@@ -41,9 +41,11 @@ struct SavedGame: Codable, Sendable {
         return "Round \(roundNumber) · Us \(us) · Them \(them)"
     }
 
-    /// e.g. "Playing to Ace"
+    /// e.g. "Playing to Ace", or "6 players · Playing to Ace" at a bigger table.
     var targetLine: String {
-        "Playing to \(game.settings.targetRank == .ace ? "Ace" : "level \(game.settings.targetRank.label)")"
+        let target = "Playing to \(game.settings.targetRank == .ace ? "Ace" : "level \(game.settings.targetRank.label)")"
+        let players = round.players
+        return players > 4 ? "\(players) players · \(target)" : target
     }
 }
 

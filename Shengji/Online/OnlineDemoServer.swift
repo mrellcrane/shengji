@@ -208,8 +208,9 @@ final class OnlineDemoServer: @unchecked Sendable {
     }
 
     private func createGame(_ body: Data?) -> OnlineHTTPResponse {
-        guard let request = decode(OnlineNewGameBody.self, body), request.seats.count == 4 else {
-            return failure(400, "bad_request", "A game needs four seats.")
+        guard let request = decode(OnlineNewGameBody.self, body),
+              let table = TableSize(exactly: request.seats.count) else {
+            return failure(400, "bad_request", "A game needs 4, 6 or 8 seats.")
         }
         guard let club = clubs.first(where: { $0.id == request.clubId }) else {
             return failure(404, "not_found", "That club doesn't exist any more.")
@@ -236,7 +237,8 @@ final class OnlineDemoServer: @unchecked Sendable {
         }
         let number = takeNumber()
         let game = OnlineDemoGame.start(id: "g_demo_new\(number)", clubId: club.id, creatorID: me.id, players: players,
-                                        botLevels: botLevels, settings: GameSettings(targetRank: request.targetRank),
+                                        botLevels: botLevels,
+                                        settings: GameSettings(targetRank: request.targetRank, table: table),
                                         seed: UInt64(1000 + number), firstBidder: 0, now: clock())
         games[game.id] = game
         return json(OnlineGameResponse(game: game.summary()))

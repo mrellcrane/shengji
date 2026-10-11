@@ -1,7 +1,7 @@
 import Foundation
 import ShengjiCore
 
-/// Deterministic tables for CI screenshots (`-ScreenshotScene game|dealing|result`).
+/// Deterministic tables for CI screenshots (`-ScreenshotScene game|dealing|result|game6|game8`).
 /// Built by driving the real engine and bots from seed 7 (a bot plays your seat where needed),
 /// entirely in memory: demo controllers never save and never touch the saved game.
 extension GameController {
@@ -14,14 +14,16 @@ extension GameController {
     static func demo(_ scene: DemoScene) -> GameController? {
         switch scene {
         case .game, .coach: return playingDemo()
+        case .game6: return playingDemo(table: .six)
+        case .game8: return playingDemo(table: .eight)
         case .dealing: return dealingDemo()
         case .result: return resultDemo()
         case .learn, .lesson, .predict, .review, .quiz, .rules, .achievements, .online, .onlineGame: return nil
         }
     }
 
-    private static func demoTable(seed: UInt64) -> GameController {
-        let controller = GameController.newGame(settings: GameSettings(), seed: seed, persistence: nil,
+    private static func demoTable(seed: UInt64, table: TableSize = .four) -> GameController {
+        let controller = GameController.newGame(settings: GameSettings(table: table), seed: seed, persistence: nil,
                                                 isDemo: true, coachLevel: .guided)
         controller.predictionsEnabled = false
         controller.speed = .normal
@@ -30,13 +32,13 @@ extension GameController {
 
     /// Mid-round, at least 3 tricks done, your turn with 1 or 2 bot plays on the table, Guided, a hint shown
     /// (the ladder's second step, so the concept tag shows and the button offers "Show me").
-    static func playingDemo() -> GameController {
+    static func playingDemo(table: TableSize = .four) -> GameController {
         var last: GameController?
         for seed in demoSeeds {
-            let controller = demoTable(seed: seed)
-            controller.botSeats = Set(Seats.all)
+            let controller = demoTable(seed: seed, table: table)
+            controller.botSeats = Set(controller.seats)
             controller.advanceSynchronously { $0.isPlayingDemoMoment }
-            controller.botSeats = [1, 2, 3]
+            controller.botSeats = Set(controller.seats.dropFirst())
             last = controller
             if controller.isPlayingDemoMoment {
                 controller.coachLevel = .guided
@@ -46,12 +48,15 @@ extension GameController {
                 return controller
             }
         }
-        return last ?? demoTable(seed: demoSeed)
+        return last ?? demoTable(seed: demoSeed, table: table)
     }
 
+    /// Your turn after a few tricks with some plays on the table (1 or 2 at a table of four; at bigger
+    /// tables at least 3, so the seats round the table show their cards).
     var isPlayingDemoMoment: Bool {
-        stage == .playing && round.tricks.count >= 3 && round.turn == Seats.human
-            && (1...2).contains(round.currentTrick.count)
+        let plays = players == 4 ? 1...2 : 3...(players - 1)
+        return stage == .playing && round.tricks.count >= 3 && round.turn == Seats.human
+            && plays.contains(round.currentTrick.count)
     }
 
     /// About 60 cards dealt, you can declare (so the declare buttons show), dealing paused.

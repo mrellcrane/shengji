@@ -223,13 +223,15 @@ public enum MoveDetector {
     /// (from `round.declarationHistory`). Returns nothing while the round is still dealing.
     public static func moves(inDeclarationsOf round: Round, player: Int = Seats.human) -> [MoveEvent] {
         guard round.phase != .dealing else { return [] }
-        return declarationMoves(round.declarationHistory, final: round.declaration, player: player)
+        return declarationMoves(round.declarationHistory, final: round.declaration, player: player,
+                                players: round.players)
     }
 
     /// Declaration moves from a seat view once bidding is over (the viewer is seat 0).
     public static func moves(inDeclarationsOf view: SeatView) -> [MoveEvent] {
         guard view.phase != .dealing && view.phase != .bidding else { return [] }
-        return declarationMoves(view.declarationHistory, final: view.declaration, player: Seats.human)
+        return declarationMoves(view.declarationHistory, final: view.declaration, player: Seats.human,
+                                players: view.playerCount)
     }
 
     // MARK: - Tricks
@@ -292,7 +294,7 @@ public enum MoveDetector {
                     + pointsTail(wonPoints, prefix: " and ") + "."
                 events.append(MoveEvent(kind: .overruff, detail: detail, points: wonPoints))
             } else {
-                let detail = "Ruff! You trumped \(CoachText.possessive(leadPlay.player)) \(ledSuit.singularName) lead and "
+                let detail = "Ruff! You trumped \(CoachText.possessive(leadPlay.player, players: players)) \(ledSuit.singularName) lead and "
                     + (wonPoints > 0 ? "won \(pointsText(wonPoints))." : "took the trick.")
                 events.append(MoveEvent(kind: .ruff, detail: detail, points: wonPoints))
             }
@@ -316,7 +318,7 @@ public enum MoveDetector {
             } else {
                 let myTractor = Combos.decompose(mine, trump: trump).first { $0.shape.isTractor }
                 let cards = myTractor.map { trump.sorted($0.cards).shortText } ?? trump.sorted(mine).shortText
-                detail = "Tractor! Your \(cards) beat \(CoachText.possessive(leadPlay.player)) tractor lead"
+                detail = "Tractor! Your \(cards) beat \(CoachText.possessive(leadPlay.player, players: players)) tractor lead"
                     + pointsTail(wonPoints, prefix: " and won ") + "."
             }
             events.append(MoveEvent(kind: .tractor, detail: detail, points: iWon ? wonPoints : 0))
@@ -387,15 +389,16 @@ public enum MoveDetector {
 
     // MARK: - Declarations
 
-    static func declarationMoves(_ history: [Declaration], final: Declaration?, player: Int) -> [MoveEvent] {
+    static func declarationMoves(_ history: [Declaration], final: Declaration?, player: Int,
+                                 players: Int = 4) -> [MoveEvent] {
         var events: [MoveEvent] = []
         let myTeam = Seats.team(of: player)
         for (index, declaration) in history.enumerated() where index > 0 && declaration.player == player {
             let previous = history[index - 1]
             guard Seats.team(of: previous.player) != myTeam else { continue }
             let beaten = previous.suit.map { "\($0.symbol) declaration" } ?? "no-trump declaration"
-            let shown = declaration.strength >= 2 ? "a " + shownText(declaration) : shownText(declaration)
-            let detail = "Override! You beat \(CoachText.possessive(previous.player)) \(beaten) with \(shown)."
+            let shown = (2...4).contains(declaration.strength) ? "a " + shownText(declaration) : shownText(declaration)
+            let detail = "Override! You beat \(CoachText.possessive(previous.player, players: players)) \(beaten) with \(shown)."
             events.append(MoveEvent(kind: .overrideDeclaration, detail: detail, points: 0))
         }
         if let final, final.player == player {
@@ -430,7 +433,7 @@ public enum MoveDetector {
         case 2: return "pair of \(card)"
         case 3: return "pair of small jokers"
         case 4: return "pair of big jokers"
-        default: return declaration.cards.shortText
+        default: return declaration.detail
         }
     }
 

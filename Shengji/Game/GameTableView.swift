@@ -123,6 +123,7 @@ struct GameTableView: View {
                     .onTapGesture {}
                 RoundResultView(summary: summary,
                                 roundNumber: controller.game.roundsPlayed,
+                                players: controller.players,
                                 isDemo: controller.isDemo,
                                 onNextRound: { controller.startNextRound() },
                                 onNewGame: { controller.startNewGame() },
@@ -138,7 +139,7 @@ struct GameTableView: View {
     @ViewBuilder private func sheetContent(_ item: GameTableSheet) -> some View {
         switch item {
         case .rules:
-            RulesQuickSheet()
+            RulesQuickSheet(players: controller.players)
         case .lastTrick:
             LastTrickView(trick: controller.round.tricks.last,
                           trickNumber: controller.round.tricks.count,
@@ -233,7 +234,7 @@ struct GameCoachArea: View {
     var body: some View {
         VStack(spacing: 8) {
             if controller.stage == .predicting {
-                GamePredictionPanel { seat in controller.answerPrediction(seat) }
+                GamePredictionPanel(players: controller.players) { seat in controller.answerPrediction(seat) }
                     .transition(AnyTransition.opacity)
             } else {
                 GameCoachBannerView(message: controller.banner,

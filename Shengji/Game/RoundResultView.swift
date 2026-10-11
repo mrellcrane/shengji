@@ -1,12 +1,14 @@
 import SwiftUI
 import ShengjiCore
 
-/// End of a round: who declared, the defenders' points against the 80 line, the kitty and its
-/// multiplier, the level change in words, the next dealer and one takeaway tip.
+/// End of a round: who declared, the defenders' points against the 80 line (40 per deck), the kitty and
+/// its multiplier, the level change in words, the next dealer and one takeaway tip.
 @MainActor
 struct RoundResultView: View {
     let summary: RoundSummary
     let roundNumber: Int
+    /// Seats at the table (4, 6 or 8).
+    var players: Int = 4
     let isDemo: Bool
     let onNextRound: () -> Void
     let onNewGame: () -> Void
@@ -14,6 +16,10 @@ struct RoundResultView: View {
     let onLeave: () -> Void
 
     private var result: RoundResult { summary.result }
+    private var decks: Int { TableSize(players: players).decks }
+    private var threshold: Int { Scoring.takeoverThreshold(decks: decks) }
+    /// "East and West" with 4 players, "The other team" with more.
+    private var theirTeam: String { GameCoachText.teamName(1, capitalized: true, players: players) }
     private var defenderTeam: Int { 1 - result.declarerTeam }
     private var isGameOver: Bool { summary.gameWinner != nil }
 
@@ -62,13 +68,13 @@ struct RoundResultView: View {
     private var headline: String {
         let humanTeam = Seats.team(of: Seats.human)
         if let winner = summary.gameWinner {
-            return winner == humanTeam ? "You win the game!" : "East and West win the game"
+            return winner == humanTeam ? "You win the game!" : "\(theirTeam) \(players > 4 ? "wins" : "win") the game"
         }
         let humanDeclared = result.declarerTeam == humanTeam
         if result.outcome.declarersHold {
-            return humanDeclared ? "Your team held the deal" : "East and West held the deal"
+            return humanDeclared ? "Your team held the deal" : "\(theirTeam) held the deal"
         }
-        return humanDeclared ? "East and West take over" : "Your team takes over!"
+        return humanDeclared ? "\(theirTeam) \(players > 4 ? "takes" : "take") over" : "Your team takes over!"
     }
 
     // MARK: Sections
@@ -83,8 +89,8 @@ struct RoundResultView: View {
     /// "You and Partner were the declarers. You dealt." (In later rounds nobody has to declare,
     /// so this names the dealer's team rather than saying who declared.)
     private var declarersLine: String {
-        let team = GameCoachText.teamName(result.declarerTeam, capitalized: true)
-        return "\(team) were the declarers. \(Seats.name(result.dealer)) dealt."
+        let team = GameCoachText.teamName(result.declarerTeam, capitalized: true, players: players)
+        return "\(team) were the declarers. \(Seats.name(result.dealer, players: players)) dealt."
     }
 
     private var pointsSection: some View {
@@ -104,7 +110,7 @@ struct RoundResultView: View {
                 Spacer()
                 Text("\(result.defenderPoints)").fontWeight(.bold).monospacedDigit()
             }
-            GamePointsBar(points: result.defenderPoints, color: Theme.teamColor(defenderTeam))
+            GamePointsBar(points: result.defenderPoints, color: Theme.teamColor(defenderTeam), decks: decks)
             Text(lineText)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -112,9 +118,9 @@ struct RoundResultView: View {
     }
 
     private var lineText: String {
-        result.defenderPoints >= Scoring.takeoverThreshold
-            ? "That's at least 80, so the defenders take over the deal."
-            : "Under 80, so the declarers keep the deal."
+        result.defenderPoints >= threshold
+            ? "That's at least \(threshold), so the defenders take over the deal."
+            : "Under \(threshold), so the declarers keep the deal."
     }
 
     private var kittySection: some View {
@@ -125,7 +131,7 @@ struct RoundResultView: View {
                 .accessibilityLabel("Kitty: \(result.kitty.map { $0.face.longName }.joined(separator: ", "))")
             Text("Kitty points: \(result.kittyPoints)")
                 .font(.subheadline)
-            Text(GameCoachText.kittyLine(result))
+            Text(GameCoachText.kittyLine(result, decks: decks))
                 .font(.subheadline.weight(.semibold))
         }
     }
@@ -144,7 +150,7 @@ struct RoundResultView: View {
             levelRow(team: 0, title: "Us")
             levelRow(team: 1, title: "Them")
             if !isGameOver {
-                Text("Next dealer: \(Seats.name(summary.nextDealer))")
+                Text("Next dealer: \(Seats.name(summary.nextDealer, players: players))")
                     .font(.subheadline.weight(.semibold))
             }
         }
@@ -176,7 +182,7 @@ struct RoundResultView: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "lightbulb.fill")
                 .foregroundStyle(Theme.gold)
-            Text(GameCoachText.takeaway(summary))
+            Text(GameCoachText.takeaway(summary, decks: decks))
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -231,17 +237,21 @@ struct RoundResultSection<Content: View>: View {
     }
 }
 
-/// Defenders' points as a bar with the 80 line marked.
+/// Defenders' points as a bar with the 80 line marked (40 points per deck in play).
 @MainActor
 struct GamePointsBar: View {
     let points: Int
     let color: Color
+    var decks: Int = 2
+
+    private var total: Int { Scoring.totalPoints(decks: decks) }
+    private var threshold: Int { Scoring.takeoverThreshold(decks: decks) }
 
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
-            let fraction = CGFloat(min(max(points, 0), Scoring.totalPoints)) / CGFloat(Scoring.totalPoints)
-            let line = CGFloat(Scoring.takeoverThreshold) / CGFloat(Scoring.totalPoints)
+            let fraction = CGFloat(min(max(points, 0), total)) / CGFloat(total)
+            let line = CGFloat(threshold) / CGFloat(total)
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.secondary.opacity(0.2))
@@ -252,7 +262,7 @@ struct GamePointsBar: View {
                     .fill(Color.primary)
                     .frame(width: 2, height: 22)
                     .offset(x: width * line - 1)
-                Text("80")
+                Text("\(threshold)")
                     .font(.caption2.weight(.bold))
                     .offset(x: width * line + 4, y: -16)
             }
@@ -260,6 +270,6 @@ struct GamePointsBar: View {
         .frame(height: 16)
         .padding(.top, 14)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(points) of \(Scoring.totalPoints) points. The line is at \(Scoring.takeoverThreshold).")
+        .accessibilityLabel("\(points) of \(total) points. The line is at \(threshold).")
     }
 }

@@ -46,8 +46,12 @@ public struct Declaration: Hashable, Codable, Sendable, CustomStringConvertible 
     public var kind: Kind { Declaration.kind(forStrength: strength) }
 
     /// e.g. "East declares ♥ (one 2♥)", "You declare no trump (pair of big jokers)"
-    public var description: String {
-        let who = player == Seats.human ? "You declare" : "\(Seats.name(player)) declares"
+    public var description: String { description(players: 4) }
+
+    /// The description at a table of `players`, e.g. "Northeast declares ♠ (three 2♠)".
+    public func description(players: Int) -> String {
+        let name = players > 4 ? Seats.name(player, players: players) : Seats.name(player)
+        let who = player == Seats.human ? "You declare" : "\(name) declares"
         return "\(who) \(suit.map { $0.symbol } ?? "no trump") (\(detail))"
     }
 

@@ -57,7 +57,7 @@ struct GameActionBar: View {
                 controller.continueAfterDeal()
             }
         case let .bury(count, enabled):
-            GamePrimaryButton(title: "Bury \(count)/\(Round.kittySize)", systemImage: "tray.and.arrow.down",
+            GamePrimaryButton(title: "Bury \(count)/\(controller.round.kittySize)", systemImage: "tray.and.arrow.down",
                               enabled: enabled) {
                 controller.burySelected()
             }
@@ -235,9 +235,10 @@ struct GameCoachBannerView: View {
     }
 }
 
-/// "Who wins this trick?" with one button per seat.
+/// "Who wins this trick?" with one button per seat (two rows at a table of 6 or 8).
 @MainActor
 struct GamePredictionPanel: View {
+    var players: Int = 4
     let onAnswer: (Int) -> Void
 
     var body: some View {
@@ -245,13 +246,13 @@ struct GamePredictionPanel: View {
             Label("Who wins this trick?", systemImage: "questionmark.circle.fill")
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(Color.white)
-            HStack(spacing: 6) {
-                ForEach(Seats.all, id: \.self) { seat in
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: columns), spacing: 6) {
+                ForEach(Seats.all(players: players), id: \.self) { seat in
                     Button {
                         onAnswer(seat)
                     } label: {
                         // Four buttons share a 375 pt row, so let "Partner" shrink rather than truncate.
-                        Text(Seats.name(seat))
+                        Text(Seats.name(seat, players: players))
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
@@ -278,7 +279,10 @@ struct GamePredictionPanel: View {
         }
     }
 
+    /// Four buttons a row (three with 6 players, so both rows are full).
+    private var columns: Int { players == 6 ? 3 : 4 }
+
     private func answerLabel(_ seat: Int) -> String {
-        seat == Seats.human ? "You win it" : "\(Seats.name(seat)) wins it"
+        seat == Seats.human ? "You win it" : "\(Seats.name(seat, players: players)) wins it"
     }
 }

@@ -319,6 +319,21 @@ final class OnlineGameModel: Identifiable {
 
     func name(_ seat: Int) -> String { OnlineGameText.name(seat, players: players) }
 
+    /// Players and decks at this table (4 seats until the game has loaded).
+    var table: TableSize {
+        if let view { return view.table }
+        return TableSize(players: players.isEmpty ? 4 : players.count)
+    }
+
+    /// Every seat, you first.
+    var seats: [Int] { Seats.all(players: table.players) }
+
+    /// Cards the dealer buries: 8, or 6 at a table of six.
+    var kittySize: Int { table.kittySize }
+
+    /// Points the defenders need to take over the deal: 40 per deck.
+    var takeoverThreshold: Int { Scoring.takeoverThreshold(decks: table.decks) }
+
     var isGameOver: Bool {
         view?.gameWinnerTeam != nil || summary?.status == .finished
     }
@@ -373,7 +388,7 @@ final class OnlineGameModel: Identifiable {
         guard view != nil, !isGameOver, !isGone else { return .none }
         if isBiddingTurn { return .pass(enabled: !isSending) }
         if isBuryingTurn {
-            return .bury(count: selection.count, enabled: selection.count == Round.kittySize && !isSending)
+            return .bury(count: selection.count, enabled: selection.count == kittySize && !isSending)
         }
         if isPlayingTurn { return .play(enabled: isPlausiblePlay && !isSending) }
         return .none
@@ -467,7 +482,8 @@ final class OnlineGameModel: Identifiable {
         return GameSeatInfo(seat: seat, name: name(seat), team: Seats.team(of: seat),
                             cardCount: counts.indices.contains(seat) ? counts[seat] : 0, role: role(of: seat),
                             isTurn: !isGameOver && actingSeat == seat, isThinking: false,
-                            isTrickWinner: display.winner == seat, isLeading: leadingSeat == seat)
+                            isTrickWinner: display.winner == seat, isLeading: leadingSeat == seat,
+                            shortName: table.players > 4 ? OnlineGameText.shortName(seat, players: players) : nil)
     }
 
     // MARK: Selecting cards
@@ -534,8 +550,8 @@ final class OnlineGameModel: Identifiable {
     func bury() {
         guard isBuryingTurn else { return }
         let cards = selectedCards
-        guard cards.count == Round.kittySize else {
-            banner = GameCoachMessage("Choose exactly \(Round.kittySize) cards to bury (you chose \(cards.count)).",
+        guard cards.count == kittySize else {
+            banner = GameCoachMessage("Choose exactly \(kittySize) cards to bury (you chose \(cards.count)).",
                                       concept: "The kitty", kind: .warning)
             return
         }

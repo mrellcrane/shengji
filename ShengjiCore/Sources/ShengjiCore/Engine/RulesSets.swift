@@ -194,4 +194,26 @@ extension Rules {
         }
         return best
     }
+
+    /// A legal follow to `lead` from `hand` built straight from the rules, with no strategy: every owed
+    /// combination first, then the lowest other cards (the led group first). For a safety net when a
+    /// chosen play is refused; any table size.
+    public static func legalFollow(hand: [Card], lead: [Card], trump: Trump) -> [Card] {
+        guard let first = lead.first else { return [] }
+        let count = lead.count
+        let ledGroup = Combos.group(of: lead, trump: trump) ?? trump.group(first)
+        let sorted = trump.sorted(hand)
+        let held = sorted.filter { trump.group($0) == ledGroup }
+        let others = sorted.filter { trump.group($0) != ledGroup }
+        if held.count <= count { return held + Array(others.prefix(count - held.count)) }
+        let requirement = followRequirement(lead: lead, suitCards: held, trump: trump)
+        var play: [Card] = []
+        searchUnits(held, shapes: sortedUnits(requirement.units)[...], trump: trump, chosen: []) { _, chosen in
+            play = chosen.flatMap(\.cards)
+            return true
+        }
+        var pool = held
+        pool.remove(cards: play)
+        return play + pool.prefix(max(0, count - play.count))
+    }
 }

@@ -12,6 +12,8 @@ enum DemoScene: String, CaseIterable {
     case online
     /// An online table mid-play from the demo server (a seeded round's seat view).
     case onlineGame
+    /// The `game` table with 6 players (3 decks) and with 8 players (4 decks).
+    case game6, game8
 
     static var current: DemoScene? {
         UserDefaults.standard.string(forKey: "ScreenshotScene").flatMap(DemoScene.init(rawValue:))
@@ -22,7 +24,7 @@ enum DemoScene: String, CaseIterable {
         switch self {
         case .learn, .lesson, .predict: return .learn
         case .review, .quiz: return .review
-        case .game, .dealing, .result, .coach, .achievements, .online, .onlineGame: return .play
+        case .game, .dealing, .result, .coach, .achievements, .online, .onlineGame, .game6, .game8: return .play
         case .rules: return .rules
         }
     }

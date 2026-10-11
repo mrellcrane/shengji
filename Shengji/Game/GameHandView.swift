@@ -26,7 +26,7 @@ struct GameHandView: View {
         // The ZStack is only one card tall (cards are placed with offsets), so pin it to the top:
         // centred, the second row would hang about 25 pt below the hand area.
         .frame(height: CGFloat(GameHandLayout.reservedHeight(count: hand.count, width: Double(width),
-                                                             fullHand: Round.handSize)),
+                                                             fullHand: controller.round.handSize)),
                alignment: .top)
         .background(widthReader)
         .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.8), value: controller.selection)

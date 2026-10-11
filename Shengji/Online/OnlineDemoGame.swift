@@ -101,17 +101,18 @@ struct OnlineDemoGame: Sendable {
             }
             state.history.append(SeatView.Bid(player: seat, declaration: declaration))
             state.passes = 0
-            state.turn = Seats.next(after: seat)
+            state.turn = Seats.next(after: seat, players: round.players)
             bidding = state
             lastEvent = OnlineGameText.declarationLine(declaration, players: players)
         case .pass:
             guard var state = bidding else { throw Rejection.illegal("Bidding is over for this round.") }
             state.history.append(SeatView.Bid(player: seat, declaration: nil))
             state.passes += 1
-            state.turn = Seats.next(after: seat)
+            state.turn = Seats.next(after: seat, players: round.players)
             bidding = state
             lastEvent = "\(name(seat)) passed."
-            let needed = round.declaration == nil ? 4 : 3
+            // Everyone passes with nothing declared, or everyone else passes after a declaration.
+            let needed = round.declaration == nil ? round.players : round.players - 1
             if state.passes >= needed {
                 bidding = nil
                 round.finishDealing()
@@ -167,7 +168,7 @@ struct OnlineDemoGame: Sendable {
         switch round.phase {
         case .burying:
             if attempt(.bury(bot.cardsToBury(in: round).cards), by: seat, now: now) { return true }
-            return attempt(.bury(Array(round.hands[seat].prefix(Round.kittySize))), by: seat, now: now)
+            return attempt(.bury(Array(round.hands[seat].prefix(round.kittySize))), by: seat, now: now)
         case .playing:
             if attempt(.play(bot.decide(in: round).cards), by: seat, now: now) { return true }
             guard let fallback = GameController.fallbackPlay(for: seat, in: round) else { return false }
@@ -203,7 +204,7 @@ struct OnlineDemoGame: Sendable {
         if archived {
             view.phase = .finished
             view.hand = []
-            view.handCounts = [0, 0, 0, 0]
+            view.handCounts = Array(repeating: 0, count: players.count)
             view.turn = nil
             view.bidding = nil
             view.kitty = nil

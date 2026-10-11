@@ -98,6 +98,36 @@ tractor ×8…). Then `Scoring.outcome`:
 Next dealer: declarers hold → the dealer's partner; defenders take over → the player after the dealer.
 Game won when the declaring team holds while at the target rank.
 
+### Bigger tables (6 or 8 players)
+
+Offline and online games can also seat 6 players with 3 decks or 8 with 4 (`TableSize`; the lessons and drills
+teach the classic game only). Everything above holds, with these changes:
+
+- **Seats and teams.** Teams alternate round the table (team = seat % 2), so you have two or three partners. Play
+  still goes 0 → 1 → … counter-clockwise; seat names are compass points from South (6: South, Southeast,
+  Northeast, North, Northwest, Southwest; 8: the eight points). Next dealer when the declarers hold: two seats on
+  (the dealer's next partner); when the defenders take over: the next seat, as before.
+- **Cards.** 54 × decks cards (162 or 216), 26 each, kitty 6 (6 players) or 8 (8 players). `Card.id` goes up to 215.
+- **Sets.** A face can appear 3 or 4 times: three identical cards are a triple (`ComboShape.set(3)`), four are four of
+  a kind (`.set(4)`), and runs of them are tractors (`.setTractor(width:length:)`). Decomposition takes the widest
+  sets first (777 888 99 = tractor of triples + pair).
+- **Following.** The same walk over the lead's components, largest first: a set of width w asks for the widest set
+  you hold up to w (a triple led: your triple, else a pair); a tractor asks for the same tractor if you hold one,
+  otherwise, for each of its steps, the widest set you hold up to its width (a tractor of pairs: as many pairs as you
+  have, four identical cards counting as two pairs). The play must contain every owed set disjointly.
+- **Winning and throws.** Only the lead's exact shapes compete (a triple beats only a lower triple, or a trump triple);
+  a throw component is beaten by a higher one of the same shape held by any other player.
+- **Declaring.** More cards beat fewer: strength(count, kind) = 1 for one rank card, else 3·count − 4 + kind (rank 0,
+  small jokers 1, big jokers 2), so 2 rank = 2, small-joker pair 3, big-joker pair 4, three rank cards 5, three small
+  jokers 6, … four big jokers 10. A holder may strengthen their own declaration with more of the same card.
+  Online bidding ends when everyone else has passed since the last declaration (or all pass).
+- **Scoring.** 100 points per deck; take over at 40 per deck, a level per 20 per deck (3 decks: 0 → +3, 5–55 → +2,
+  60–115 → +1, 120–175 take over, then +1 per 60). The kitty multiplier is unchanged (a triple lead ×6).
+
+The general rules live in `Engine/RulesSets.swift` and only run when a lead, hand or play holds three or more copies
+of a face; with two decks the classic code paths run unchanged (a test checks that both agree there). Bots use the
+same strategy with partners and opponents for any table, plus sets as sure winners.
+
 ## Engine API notes
 
 - `Round` is a value-type state machine (`dealing → burying → playing → finished`). The UI keeps one `Round` and calls
@@ -183,7 +213,8 @@ opens straight into a deterministic scene so CI can capture simulator screenshot
 Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `result` (round result sheet),
 `rules` (rules reference), `coach` (the `game` table with the coach sheet open on a canned chat, no network),
 `achievements` (the achievements screen with sample progress), `online` (Play online: sample clubs and games from
-the in-memory demo server), `onlineGame` (an online table mid-play, a seeded round's seat view, demo server).
+the in-memory demo server), `onlineGame` (an online table mid-play, a seeded round's seat view, demo server),
+`game6` and `game8` (the `game` table with 6 players and 3 decks, and with 8 and 4).
 Without the argument the app starts normally. Scene setup must never touch saved progress (or the network).
 
 ## Work ownership (for parallel development)
@@ -246,7 +277,7 @@ Without the argument the app starts normally. Scene setup must never touch saved
 
 ## Online multiplayer (planned; decisions made with the user)
 
-Small private groups (6 to 10 friends), asynchronous turn-based play with push notifications, live updates when
+Small private groups (6 to 10 friends), tables of 4, 6 or 8 (bots fill empty seats), asynchronous turn-based play with push notifications, live updates when
 several players are in the app. Offline learning, practice and bot games stay as they are.
 
 - Server: a separate Cloudflare Worker in `server/` (free plan). TypeScript port of the engine (decision: no
@@ -259,8 +290,8 @@ several players are in the app. Offline learning, practice and bot games stay as
   TypeScript port of the bots (`server/src/bots`, both levels, choices without the texts) must choose exactly the
   cards the Swift bots choose at every decision of the generated rounds (`bots.json`), bidding included.
   CI regenerates the vectors and fails if they drift from the Swift engine or bots.
-- Card wire format: `Card.id` (0...107 = face index + copy × 54). Seats 0...3 as offline; each player sees the
-  table rotated so they are "You".
+- Card wire format: `Card.id` (face index + copy × 54: 0...107 with 2 decks, up to 215 with 4). Seats 0...3 as
+  offline (0...5 or 0...7 at a table of 6 or 8); each player sees the table rotated so they are "You".
 - Declaring online is turn-based: all 25 cards are dealt at once, then from the first bidder (the dealer, or the
   game creator's seat in round 1) each player in turn declares (same strength rules as offline) or passes.
   Bidding ends when the three other players have passed since the last declaration, or when all four pass with no

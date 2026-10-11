@@ -1,6 +1,6 @@
 # Shengji variants by players and decks (research notes)
 
-Collected 2026-10-10 by a research pass (four independent web sweeps, a merge, two skeptic checks) to plan games for more than 4 players. The app itself plays the classic 4-player, 2-deck game. A friend who plays says: at least half a deck per person (2 for 4 players, 3 or more for 6), any number of decks beyond that, and more than 8 players gets hard to follow.
+Collected 2026-10-10 by a research pass (four independent web sweeps, a merge, two skeptic checks) to plan games for more than 4 players. The app teaches the classic 4-player, 2-deck game and also plays fixed-team tables of 6 players with 3 decks and 8 with 4 (DESIGN.md, Bigger tables). A friend who plays says: at least half a deck per person (2 for 4 players, 3 or more for 6), any number of decks beyond that, and more than 8 players gets hard to follow.
 
 Skeptic caveat: many hosts (pagat.com, Wikipedia, Baidu) were unreachable during verification, so most rows rest on search excerpts plus arithmetic checks (hand x players + kitty = deck). Claims a skeptic refuted are listed at the end.
 

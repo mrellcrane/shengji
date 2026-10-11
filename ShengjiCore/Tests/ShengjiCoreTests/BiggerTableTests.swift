@@ -495,3 +495,50 @@ final class BiggerTableTests: XCTestCase {
         return play + pool.shuffled(using: &rng).prefix(n - play.count)
     }
 }
+
+// MARK: - Coach context at bigger tables
+
+final class BiggerTableCoachTests: XCTestCase {
+    func testCoachContextDescribesASixPlayerTable() throws {
+        var rng = SeededGenerator(seed: 12)
+        var round = Round(trumpRank: .two, dealer: 3, rng: &rng, table: .six)
+        round.dealAll()
+        round.finishDealing()
+        let dealer = try XCTUnwrap(round.dealer)
+        try round.bury(Array(round.hands[dealer].prefix(round.kittySize)))
+        // Play a few cards so a trick is in progress.
+        var moves = 0
+        while round.currentTrick.count < 2, moves < 40, let seat = round.turn {
+            let hand = round.hands[seat]
+            let cards = round.currentTrick.isEmpty ? [round.trump.sorted(hand)[0]]
+                : Rules.legalFollow(hand: hand, lead: round.currentLead, trump: round.trump)
+            _ = try round.play(cards, by: seat)
+            moves += 1
+        }
+        let text = CoachContext.describe(round: round, game: GameState(settings: GameSettings(table: .six)), hint: nil,
+                                         selection: [], lastIllegal: nil)
+        XCTAssertTrue(text.contains("6 players and 3 decks"), text)
+        XCTAssertTrue(text.contains("120 takes over the deal"), text)
+        XCTAssertTrue(text.contains("of 300"), text)
+        XCTAssertTrue(text.contains("Northeast"), text)
+        XCTAssertFalse(text.contains("East and West"), text)
+        XCTAssertTrue(text.contains("Still to play:"), text)
+    }
+
+    func testMoveTextsNameSeatsAtABiggerTable() {
+        let trump = Trump(rank: .two, suit: .hearts)
+        // Seat 0 feeds a K to its partner at seat 4, who wins.
+        let plays = [
+            Play(player: 3, cards: [Card(.three, .spades)]),
+            Play(player: 4, cards: [Card(.ace, .spades)]),
+            Play(player: 5, cards: [Card(.four, .spades)]),
+            Play(player: 0, cards: [Card(.king, .spades)]),
+            Play(player: 1, cards: [Card(.six, .spades)]),
+            Play(player: 2, cards: [Card(.seven, .spades)]),
+        ]
+        let trick = TrickRecord(plays: plays, winner: 4, points: 10)
+        let events = MoveDetector.trickMoves(trick, trump: trump, player: 0)
+        let feed = events.first { $0.kind == .feedPartner }
+        XCTAssertEqual(feed?.detail.contains("Northwest"), true, "\(events)")
+    }
+}
