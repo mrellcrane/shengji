@@ -5,13 +5,17 @@
 // 3. declarers with many trumps draw trumps (top pairs, else low singles);
 // 4. a suit a partner is out of, so that partner can ruff;
 // 5. a low non-point card (or low pair) from a short plain suit; last resort, the lowest trump.
+// Finding Friends adds two leads before these: a hidden friend leads the called card to show
+// themselves, and the dealer's side (after any guaranteed throw) leads a low card of a called card's
+// suit so the friend not found yet can win it with the called card.
 
 import { ALL_SUITS, cardPoints, faceOf, isJoker, rankOf } from "../engine/cards.ts";
 import type { Card } from "../engine/cards.ts";
 import { PAIR, SINGLE, componentsOf, decompose, longestRun, pairsIn, shapesEqual, tractorShape } from "../engine/combos.ts";
 import type { ComboShape, Component } from "../engine/combos.ts";
 import { checkThrowAgainstPool, isThrow, validateLead } from "../engine/rules.ts";
-import { strength } from "../engine/trump.ts";
+import type { FriendCall } from "../engine/friends.ts";
+import { groupOf, isTrump, strength } from "../engine/trump.ts";
 import type { SuitGroup, Trump } from "../engine/trump.ts";
 import { CostModel, cheapest, cheapestFirst } from "./builder.ts";
 import { noteFallback, points } from "./table.ts";
@@ -43,7 +47,9 @@ class StandardLead {
   choose(): Card[] {
     const tuning = this.table.tuning;
     return (
+      this.revealLead() ??
       this.throwLead() ??
+      this.findFriendLead() ??
       (tuning.drawBeforeCashing ? this.drawTrumps() : null) ??
       this.sureWinnerLead() ??
       this.drawTrumps() ??
@@ -61,6 +67,47 @@ class StandardLead {
   private safeToCash(group: SuitGroup): boolean {
     for (const opponent of this.table.opponents) if (this.table.mayRuff(opponent, group)) return false;
     return !this.table.isRunningOut(group, 1, this.table.opponents.length);
+  }
+
+  // MARK: Finding Friends
+
+  /**
+   * A hidden friend leads the called card (the copies still needed to reach the called one, which are
+   * identical cards: a single, pair or set), unless it holds points something unseen could beat.
+   */
+  private revealLead(): Card[] | null {
+    const { table, trump } = this;
+    const reveal = table.friends?.reveal ?? null;
+    if (reveal === null) return null;
+    if (points(reveal.cards) !== 0 && decompose(reveal.cards, trump).some((c) => table.unseenCanBeatComponent(c))) {
+      return null;
+    }
+    return reveal.cards;
+  }
+
+  /**
+   * The dealer's side looks for a friend not found yet: a low card without points from the suit of a
+   * called plain-suit card, lower than it, so the friend can win the trick with the called card.
+   */
+  private findFriendLead(): Card[] | null {
+    const { table, trump } = this;
+    const plan = table.friends;
+    if (plan === null || !plan.onDealerSide || plan.reveal !== null) return null;
+    let best: { card: Card; call: FriendCall; score: number } | null = null;
+    for (const call of table.view.friendCalls ?? []) {
+      if (call.friend !== null || isJoker(call.face)) continue;
+      // The called card itself (its face index is the id of its first copy).
+      const called = call.face;
+      if (isTrump(trump, called)) continue;
+      const level = strength(trump, called);
+      for (const card of table.cards(groupOf(trump, called))) {
+        if (cardPoints(card) !== 0 || strength(trump, card) >= level) continue;
+        const score = table.value(card) + table.pairPenalty(card);
+        if (best !== null && best.score <= score) continue;
+        best = { card, call, score };
+      }
+    }
+    return best === null ? null : [best.card];
   }
 
   // MARK: 1. Throws

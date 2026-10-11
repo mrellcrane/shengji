@@ -6,19 +6,32 @@
 // When a round ends it is recorded and the next one is dealt at once (fresh crypto shuffle,
 // bidding at the next dealer); when a team wins, the game is finished and the last round stays
 // on the table. Bots decide from their own seat's view with the app's bot logic (src/bots).
+// Tables of 5, 7 or 9 play Finding Friends: the dealer calls friends with the burial, and the
+// winners are the dealer's side of the last round (`gameWinners`).
 
-import { tableCardCount, tableSizeExactly } from "../engine/cards.ts";
+import { tableCardCount, tableFindsFriends, tableSizeExactly } from "../engine/cards.ts";
 import type { Card, Rank, TableSize } from "../engine/cards.ts";
-import { gameTable, newGame, recordRound, startOnlineRound } from "../engine/game.ts";
-import type { GameState } from "../engine/game.ts";
-import { bid, biddingTurn, bury, play, roundErrorExplanation, turn as playTurn } from "../engine/round.ts";
+import { copyCall } from "../engine/friends.ts";
+import type { FriendCall } from "../engine/friends.ts";
+import { gameTable, gameWinners, newGame, recordRound, startOnlineRound } from "../engine/game.ts";
+import type { GameState, RoundSummary } from "../engine/game.ts";
+import {
+  bid,
+  biddingTurn,
+  bury,
+  friendCallsOf,
+  play,
+  roundErrorExplanation,
+  turn as playTurn,
+} from "../engine/round.ts";
 import type { Declaration, PlayOutcome, Round, RoundError } from "../engine/round.ts";
+import { normalizeSeat } from "../engine/rules.ts";
 import { roundNumber, toSeatView, viewPhase } from "../engine/seatview.ts";
 import type { SeatPlayer, SeatView } from "../engine/seatview.ts";
 import { sortCards } from "../engine/trump.ts";
 import { chooseBotAction, safeActions } from "./bots.ts";
 import type { BotLevel } from "./bots.ts";
-import { eventText, summarize, teamName } from "./summary.ts";
+import { eventText, sideNames, summarize, teamName } from "./summary.ts";
 import type { GameEvent, GameSnapshot, GameSummary, SummaryPhase } from "./summary.ts";
 
 /** Who sits in an absolute seat. */
@@ -49,11 +62,14 @@ export interface OnlineGame {
   lastNudgeAt: number | null;
 }
 
-/** An action in absolute terms (a bid's declaration already belongs to the acting seat). */
+/**
+ * An action in absolute terms (a bid's declaration already belongs to the acting seat). A bury's
+ * `calls` are the friends called (Finding Friends; empty or absent at a table of fixed teams).
+ */
 export type SeatAction =
   | { type: "bid"; declaration: Declaration }
   | { type: "pass" }
-  | { type: "bury"; cards: Card[] }
+  | { type: "bury"; cards: Card[]; calls?: FriendCall[] }
   | { type: "play"; cards: Card[] };
 
 /** One row of the action log (server-side only, never sent to players). */
@@ -72,19 +88,29 @@ export interface Notification {
 }
 
 export interface GameDeps {
-  /** Every card of the table's decks (108 for 4 players, 162 for 6, 216 for 8) in a fresh random order. */
+  /** Every card of the table's decks (108 for 4 players, 162 for 5 or 6, 216 for 7 or 8, 270 for 9) in a fresh random order. */
   deck(table: TableSize): Card[];
   now(): Date;
 }
 
 /**
- * Bot turns run per request at most (a whole round is about 110 with 4 players, 230 with 8); stops
- * a runaway loop.
+ * Bot turns run per request at most (a whole round is about 110 with 4 players, 230 with 8, 280
+ * with 9); stops a runaway loop.
  */
 export const MAX_AUTOMATIC_STEPS = 600;
 
-/** Bots are named by absolute seat (up to 8 seats). */
-const BOT_NAMES = ["Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot", "Koi Bot", "Fox Bot", "Owl Bot", "Yak Bot"];
+/** Bots are named by absolute seat (up to 9 seats). */
+const BOT_NAMES = [
+  "Panda Bot",
+  "Tiger Bot",
+  "Crane Bot",
+  "Dragon Bot",
+  "Koi Bot",
+  "Fox Bot",
+  "Owl Bot",
+  "Yak Bot",
+  "Bee Bot",
+];
 
 export function botName(seat: number): string {
   return BOT_NAMES[seat] ?? "Bot";
@@ -98,7 +124,7 @@ export function actingSeat(round: Round): number | null {
   return playTurn(round);
 }
 
-/** Card ids of this game's table: 0 up to 54 per deck (0...107 with 4 players, 0...215 with 8). */
+/** Card ids of this game's table: 0 up to 54 per deck (0...107 with 4 players, up to 0...269 with 9). */
 export function cardCountOf(state: OnlineGame): number {
   return tableCardCount(gameTable(state.game));
 }
@@ -123,14 +149,15 @@ export interface NewGameInput {
 
 /**
  * A new game with its first round dealt and bidding open at the creator's seat. The table has as
- * many players as seats (4, 6 or 8; teams alternate: the even seats against the odd ones).
+ * many players as seats: 4, 6 or 8 (teams alternate: the even seats against the odd ones), or 5, 7
+ * or 9 (Finding Friends: the dealer calls friends every round, everyone keeps their own level).
  */
 export function newOnlineGame(
   input: NewGameInput,
   deps: GameDeps,
 ): { state: OnlineGame; log: LogEntry[]; events: GameEvent[] } {
   const table = tableSizeExactly(input.seats.length);
-  if (table === null) throw new RangeError("a table has 4, 6 or 8 seats");
+  if (table === null) throw new RangeError("a table has 4 to 9 seats");
   const creatorSeat = input.seats.findIndex((s) => s.userId === input.createdBy);
   if (creatorSeat < 0) throw new RangeError("the creator must hold a seat");
   const game = newGame({ startRank: 2, targetRank: input.targetRank, table });
@@ -180,9 +207,12 @@ function applySeatAction(
       return { ok: true, outcome: { type: "played" }, event: { type: "pass", seat } };
     }
     case "bury": {
-      const error = bury(round, action.cards, seat);
+      const error = bury(round, action.cards, seat, action.calls ?? []);
       if (error !== null) return { ok: false, error };
-      return { ok: true, outcome: { type: "played" }, event: { type: "bury", seat } };
+      // The friends called are public once buried (as the engine stores them: unfound).
+      const calls = friendCallsOf(round).map(copyCall);
+      const event: GameEvent = calls.length > 0 ? { type: "bury", seat, calls } : { type: "bury", seat };
+      return { ok: true, outcome: { type: "played" }, event };
     }
     case "play": {
       const lead = round.currentTrick.length === 0;
@@ -235,8 +265,9 @@ function describeAction(action: SeatAction): string {
     case "pass":
       return "a pass";
     case "bury":
+      return `bury ${action.cards.join(",")}${action.calls !== undefined && action.calls.length > 0 ? ` calling ${JSON.stringify(action.calls)}` : ""}`;
     case "play":
-      return `${action.type} ${action.cards.join(",")}`;
+      return `play ${action.cards.join(",")}`;
   }
 }
 
@@ -279,15 +310,19 @@ function runAutomatic(state: OnlineGame, deps: GameDeps, events: GameEvent[], lo
     if (round.phase === "finished" && round.result !== null) {
       const summary = recordRound(state.game, round.result);
       const team = summary.result.outcome.declarersHold ? summary.result.declarerTeam : 1 - summary.result.declarerTeam;
-      events.push({
-        type: "round",
-        round: state.game.roundsPlayed,
-        team,
-        tookOver: !summary.result.outcome.declarersHold,
-        levelsGained: summary.levelsGained,
-        newLevel: summary.levelsAfter[team],
-        gameWinner: summary.gameWinner,
-      });
+      if (tableFindsFriends(gameTable(state.game))) {
+        events.push(findingFriendsRoundEvent(state, summary));
+      } else {
+        events.push({
+          type: "round",
+          round: state.game.roundsPlayed,
+          team,
+          tookOver: !summary.result.outcome.declarersHold,
+          levelsGained: summary.levelsGained,
+          newLevel: summary.levelsAfter[team],
+          gameWinner: summary.gameWinner,
+        });
+      }
       if (state.game.winner !== null) {
         state.status = "finished";
         break;
@@ -308,6 +343,33 @@ function runAutomatic(state: OnlineGame, deps: GameDeps, events: GameEvent[], lo
     log.push({ version: state.version, seat, kind: "bot", data: applied.action });
     events.push(applied.event);
   }
+}
+
+/** Finding Friends: the round event, naming the dealer's side by seats (absolute, the dealer first). */
+function findingFriendsRoundEvent(state: OnlineGame, summary: RoundSummary): GameEvent {
+  const n = state.seats.length;
+  const dealer = normalizeSeat(summary.result.dealer, n);
+  const side = [dealer];
+  for (const seat of summary.result.declarers ?? []) {
+    const s = normalizeSeat(seat, n);
+    if (!side.includes(s)) side.push(s);
+  }
+  const holds = summary.result.outcome.declarersHold;
+  // The highest level reached by a player who went up (the dealer's level when nobody did).
+  const raised = summary.levelsAfter.filter((level, seat) => level > summary.levelsBefore[seat]);
+  const newLevel: Rank = raised.length > 0
+    ? (Math.max(...raised) as Rank)
+    : (summary.levelsAfter[dealer] ?? state.game.settings.startRank);
+  return {
+    type: "round",
+    round: state.game.roundsPlayed,
+    team: holds ? summary.result.declarerTeam : 1 - summary.result.declarerTeam,
+    tookOver: !holds,
+    levelsGained: summary.levelsGained,
+    newLevel,
+    gameWinner: summary.gameWinner,
+    side,
+  };
 }
 
 /** The most useful line for a batch: the last event, but a round result outranks later bids. */
@@ -376,6 +438,7 @@ export function snapshotOf(state: OnlineGame): GameSnapshot {
     phase: (phase === "dealing" ? "bidding" : phase) as SummaryPhase,
     turn: turnSeat,
     winner: state.game.winner,
+    winners: gameWinners(state.game),
     lastEvent: state.lastEvent === null ? null : structuredClone(state.lastEvent),
   };
 }
@@ -410,16 +473,26 @@ export function batchNotifications(
   const gameOver = wasActive && state.status === "finished";
   const due = turnUser(state);
   const club = state.clubName;
+  const winners = gameWinners(state.game);
+  const findsFriends = tableFindsFriends(gameTable(state.game));
   state.seats.forEach((seat, index) => {
     if (seat.userId === null || seat.userId === actorUserId) return;
     if (gameOver) {
       const winner = state.game.winner;
-      const body =
-        winner === index % 2
-          ? `Your team won the game in ${club}!`
-          : winner === null
-            ? `The game in ${club} is over.`
+      let body: string;
+      if (winner === null || winners === null) {
+        body = `The game in ${club} is over.`;
+      } else if (findsFriends) {
+        // Finding Friends: the winners are the dealer's side of the last round.
+        body = winners.includes(index)
+          ? `Your side won the game in ${club}!`
+          : `${capitalize(sideNames(players, winners, index))} won the game in ${club}.`;
+      } else {
+        body =
+          winner === index % 2
+            ? `Your team won the game in ${club}!`
             : `${capitalize(teamName(players, winner, index))} won the game in ${club}.`;
+      }
       out.push({ userId: seat.userId, gameId: state.id, title: "Game over", body });
       return;
     }

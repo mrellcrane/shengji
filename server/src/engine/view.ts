@@ -5,12 +5,14 @@
 // sees the kitty while holding it (burying) and after burying it, and everyone sees it once the
 // round is finished. Public by the rules, and therefore in every view: cards revealed to declare
 // (declarations and bids), the kitty card turned up to fix trump when nobody declared
-// (`trumpFromKitty`), every play of the current and past tricks, and the result.
+// (`trumpFromKitty`), every play of the current and past tricks, the friends the dealer called
+// (Finding Friends, once buried) with whoever has played a called card, and the result.
 
 import type { Card, Rank } from "./cards.ts";
-import { teammatesOf } from "./rules.ts";
+import { copyCall } from "./friends.ts";
+import type { FriendCall } from "./friends.ts";
 import type { Play } from "./rules.ts";
-import { availableBids, declarerTeam, roundPlayers, turn } from "./round.ts";
+import { availableBids, declarerTeam, declarers, friendCallsOf, turn } from "./round.ts";
 import type { Bid, Declaration, Round, RoundPhase, RoundResult, TrickRecord } from "./round.ts";
 import { sortCards } from "./trump.ts";
 import type { Trump } from "./trump.ts";
@@ -32,8 +34,13 @@ export interface RoundView {
   /** Null only before the first round's dealer is known. */
   dealer: number | null;
   declarerTeam: number | null;
-  /** Seats of the declaring team (dealer first, then in play order); empty while unknown. */
+  /**
+   * Seats of the declaring team (dealer first, then in play order); empty while unknown. With
+   * Finding Friends the dealer and the friends found so far.
+   */
   declarers: number[];
+  /** Finding Friends: the friends the dealer called (empty before burying and at tables of fixed teams). */
+  friendCalls: FriendCall[];
   /** This seat's own cards, in display order. */
   hand: Card[];
   /** Number of cards in each seat's hand. */
@@ -79,13 +86,12 @@ function copyDeclaration(d: Declaration): Declaration {
   return { player: d.player, cards: d.cards.slice(), suit: d.suit, strength: d.strength };
 }
 
-/** The view of `round` for `seat` (0...3, or up to 7 at a bigger table). Shares no objects with `round`. */
+/** The view of `round` for `seat` (0...3, or up to 8 at a bigger table). Shares no objects with `round`. */
 export function viewFor(round: Round, seat: number): RoundView {
   if (!Number.isInteger(seat) || seat < 0 || seat >= round.hands.length) {
     throw new RangeError(`seat must be 0...${round.hands.length - 1}, got ${seat}`);
   }
   const team = declarerTeam(round);
-  const declarers = round.dealer === null ? [] : [round.dealer, ...teammatesOf(round.dealer, roundPlayers(round))];
   return {
     seat,
     phase: round.phase,
@@ -93,7 +99,8 @@ export function viewFor(round: Round, seat: number): RoundView {
     trump: { rank: round.trump.rank, suit: round.trump.suit },
     dealer: round.dealer,
     declarerTeam: team,
-    declarers,
+    declarers: declarers(round),
+    friendCalls: friendCallsOf(round).map(copyCall),
     hand: sortCards(round.trump, round.hands[seat]),
     handCounts: round.hands.map((hand) => hand.length),
     undealtCount: round.undealt.length,

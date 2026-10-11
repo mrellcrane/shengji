@@ -14,11 +14,11 @@ src/room/       service.ts (one game's state and action log over SQL), host.ts (
 src/game/       online.ts (the online game: turns, bots between humans, rounds, notifications),
                 summary.ts (GameSummary, lastEvent lines), bots.ts (bot actions from a view, safe fallback moves)
 src/bots/       the app's bots ported from Swift (ShengjiCore/Sources/ShengjiCore/Bots): table, builder, lead,
-                follow, beginner, burying, declaring, bot (the entry points)
+                follow, beginner, burying, declaring, friends, bot (the entry points)
 src/push/       apns.ts (ES256 provider token, APNs requests)
 src/durable/    hub.ts, room.ts (thin Durable Object adapters: RPC, WebSockets), sql.ts
 src/storage/    sql.ts (the one storage interface: synchronous SQLite)
-src/engine/     cards, trump, combos, rules, scoring, round, game  (ports of the Swift files)
+src/engine/     cards, trump, combos, rules, scoring, friends, round, game  (ports of the Swift files)
                 seatview.ts the wire view (Swift SeatView, viewer-relative), view.ts absolute views
                 shuffle.ts  crypto-quality shuffling for real games
 scripts/        smoke.ts (end-to-end test of a running server), e2e.ts (runs it on wrangler dev),
@@ -46,7 +46,7 @@ Two kinds of Durable Objects, both SQLite-backed (`new_sqlite_classes`):
   never wake the GameRooms.
 - **GameRoom**, one per game (named by the game id): the authoritative `GameState` and `Round`
   with a version that grows with every change, seat assignments (a user id or a bot level per
-  absolute seat: 4, 6 or 8 of them), an action log of every move (bots too) and every deck dealt,
+  absolute seat: 4 to 9 of them), an action log of every move (bots too) and every deck dealt,
   and the live WebSockets (hibernation API, so idle sockets cost nothing).
 
 The logic lives in plain modules over a tiny `Sql` interface (`exec`, `transaction`), so the tests
@@ -66,18 +66,28 @@ updates, every delete a 500). A rename is a new version too (clients
 keep only newer versions). Each person keeps at most 4 live sockets per game (src/room/sockets.ts):
 a fifth replaces their oldest (close code 4001), so sockets a phone left behind never fill a game.
 
-**Tables of 4, 6 or 8.** `POST /v1/games` takes 4, 6 or 8 seats (teams alternate: the even seats
-against the odd ones) and the game is played with half a deck per player: 2 decks with 4 players,
-3 with 6, 4 with 8 (`GameSettings.table`; `GameDeps.deck(table)` deals that many cards, and card
-ids in a request are checked against the table's range before anything else). Bots get names by
-absolute seat (Panda, Tiger, Crane, Dragon, then Koi, Fox, Owl and Yak Bot), and summaries, event
-lines and pushes name a team of 3 or 4 in full ("Mei, Lin and Sam").
+**Tables of 4 to 9.** `POST /v1/games` takes 4 to 9 seats and the game is played with half a deck
+per player, rounded up: 2 decks with 4 players, 3 with 5 or 6, 4 with 7 or 8, 5 with 9
+(`GameSettings.table`; `GameDeps.deck(table)` deals that many cards, and card ids in a request are
+checked against the table's range, up to 0...269, before anything else). With 4, 6 or 8 teams
+alternate (the even seats against the odd ones), and summaries, event lines and pushes name a team
+of 3 or 4 in full ("Mei, Lin and Sam"). With 5, 7 or 9 the table plays **Finding Friends** (找朋友,
+engine/friends.ts): the dealer's bury action carries `calls` (1, 2 or 3 friends, `{"face",
+"ordinal"}`, checked by the engine before the cards, so a refused call is `400 illegal` with its
+reason), whoever plays a called copy joins the dealer's side, everyone keeps their own level
+(`GameState.levels` and `GameSummary.teamLevels` per seat), and the winners are the dealer's side of
+the last round (`gameWinners`, the snapshot's `winners`, so `winnerTeam` is 0 exactly for them).
+Event lines name the calls and the dealer's side ("Sam buried the kitty and called the first A♠",
+"Round 3: Mei, Lin and Sam kept the deal and went up 2 levels", "Round 3: the defenders took over
+the deal"). Bot dealers call friends with the bots' `friendCalls`. Bots get names by absolute seat
+(Panda, Tiger, Crane, Dragon, then Koi, Fox, Owl, Yak and Bee Bot).
 
 **Privacy.** Every view is built by `toSeatView` from what that seat may see (DESIGN.md); game
 summaries and their `lastEvent` lines come from public facts only. test/privacy.test.ts checks
-every state a client can receive in many random games, for every seat (tables of 4, 6 and 8) and
+every state a client can receive in many random games, for every seat (tables of 4 to 9) and
 every message (replies, WebSocket updates, summaries), and that shuffling a seat's hidden cards
-never changes what it receives.
+never changes what it receives. Friend calls are public once the dealer has buried (and a friend
+only once they have played the called card): views show them from then on, never while burying.
 
 **Bots** play exactly like the app's bots. `src/bots/` is a port of the Swift bots
 (`ShengjiCore/Sources/ShengjiCore/Bots`, DESIGN.md §Bot strategy), both levels, choices only (the
@@ -103,16 +113,27 @@ mutate it in place like the Swift mutating methods and return an error value ins
 when they return an error they have not changed anything. `cloneRound` makes a copy.
 
 - Cards are their Swift `Card.id`, face index + copy x 54 (52/53 are the small and big joker):
-  0...107 with 2 decks, up to 0...215 with 4. Suits and ranks are the Swift raw values (suits
+  0...107 with 2 decks, up to 0...269 with 5. Suits and ranks are the Swift raw values (suits
   0 = spades, 1 = hearts, 2 = clubs, 3 = diamonds; ranks 2...14). A suit group is `"trump"` or a
   suit. Shapes are `{type: "single" | "pair" | "tractor", pairs}`, and with three or more decks
   `{type: "set", width}` (a triple, four of a kind) and `{type: "setTractor", width, length}`.
-- Tables: `TableSize` is `{players, decks}` (4 and 2, 6 and 3, 8 and 4; `tableSize`, with
-  `tableKittySize` 8, 6, 8 and `tableHandSize` 25, 26, 26). A `Round` has one hand per seat and
-  its table is the number of hands (`roundTable`); `newRound(rank, dealer, deck, table)` takes the
-  table (default 4 players) and a game keeps it in `settings.table` (absent in games stored
-  before bigger tables: 4 players). Seats go round the table and teams alternate (`teammatesOf`,
-  `opponentsOf`, `seatName(seat, viewer, players)` with compass names for 6 or 8).
+- Tables: `TableSize` is `{players, decks}` (4 to 9 players with `(players + 1) / 2` decks;
+  `tableSize` clamps other counts, with `tableKittySize` 8, 7, 6, 6, 8, 9 and `tableHandSize` 25,
+  31, 26, 30, 26, 29). A `Round` has one hand per seat and its table is the number of hands
+  (`roundTable`); `newRound(rank, dealer, deck, table)` takes the table (default 4 players) and a
+  game keeps it in `settings.table` (absent in games stored before bigger tables: 4 players). Seats
+  go round the table (`seatName(seat, viewer, players)` with compass names from 5 players); at even
+  tables teams alternate (`teammatesOf`, `opponentsOf`).
+- Finding Friends (odd tables, `tableFindsFriends`, Engine/Friends.swift): a `FriendCall` is
+  `{face, ordinal, friend}` (`friend` null until found). `bury(round, cards, seat?, calls)` checks
+  `friendCallProblem` first (the Swift texts) and keeps the calls unfound in `round.friendCalls`
+  (absent at even tables; read with `friendCallsOf`); `play` notes a friend found (`notingFriends`)
+  before the cards leave the hand and recounts `defenderTrickPoints` over the finished tricks won by
+  defenders. `declarers`, `isDeclarer`, `isDefender` and `declarerTeam` (seat 0's side) follow the
+  friends found; the result gets `declarers` and `friendCalls` and the short-handed bonus
+  (`findingFriendsOutcome`). `recordRound` keeps one level per seat (`levelOf`, `gameWinners`) and
+  writes `explainFindingFriends`; `rotateSummary` (game.ts) and `rotateResult` (round.ts) swap team
+  numbers when the viewer is on the other side from seat 0.
 - Three or more decks follow Engine/RulesSets.swift: `decompose` takes the widest sets first when a
   face appears 3+ times, `followRequirement` returns `units` (every owed combination) besides the
   two-deck `tractorLengths` and `totalPairs`, and the violations `mustPlaySetTractor` and
@@ -136,8 +157,8 @@ when they return an error they have not changed anything. `cloneRound` makes a c
 
 ### Online bidding (no Swift counterpart)
 
-`startBidding(round, firstBidder)` deals every card but the kitty at once (100 with 4 players, 156
-with 6, 208 with 8) and opens turn-based declaring at
+`startBidding(round, firstBidder)` deals every card but the kitty at once (100 with 4 players, 155
+with 5, 156 with 6, 210 with 7, 208 with 8, 261 with 9) and opens turn-based declaring at
 `firstBidder` (the dealer, or the game creator's seat in round 1; `startOnlineRound(game, deck,
 creatorSeat)` does both steps). Then, in seat order:
 
@@ -145,8 +166,8 @@ creatorSeat)` does both steps). Then, in seat order:
   declare now (exactly the offline `availableDeclarations`: strictly stronger than the current
   declaration) and is empty for everyone else.
 - `bid(round, seat, declaration | "pass")`. A declaration resets the pass count.
-- Bidding ends when every other player has passed since the last declaration (three with 4
-  players, five with 6, seven with 8), or when everyone passes with no declaration at all (then the
+- Bidding ends when every other player has passed since the last declaration (one pass fewer than
+  the players: three with 4 players, up to eight with 9), or when everyone passes with no declaration at all (then the
   kitty flip sets trump, as offline). The round then
   moves to burying exactly as `finishDealing` does. In round 1 the winning declarer deals; if
   nobody declared, the first bidder deals.
@@ -161,7 +182,8 @@ creatorSeat)` does both steps). Then, in seat order:
 `toSeatView(game, round, seat, players)` (seatview.ts) is the wire view: a port of Swift
 `Round.seatView(for:players:game:)`, rotated so the viewer is seat 0, plus the online bidding state
 (`bidding`: turn, history, and the viewer's own options on their turn). views.json proves the
-JSON is identical to the Swift `SeatView` Codable for every seat, at tables of 4, 6 and 8.
+JSON is identical to the Swift `SeatView` Codable for every seat, at tables of 4 to 9 (with
+`friendCalls` from the burial on at tables of 5, 7 and 9, and one level per seat in `teamLevels`).
 
 `viewFor(round, seat)` (view.ts) is the older absolute-seat view of one round: its own hand (sorted
 for display), every hand's card count, the trump, dealer and declarers, declarations and bids,
@@ -192,6 +214,16 @@ their own seeds and are rich in faces held three or four times, so they hold tri
 kind and tractors of them in leads, follows, throws, ruffs and declarations. A follow requirement
 carries `units` (every owed combination) only when it says more than `tractorLengths` and
 `totalPairs`, which is only ever with three or more copies of a face.
+
+Last come tables of 5, 7 and 9 players (Finding Friends, 3 to 5 decks, five of a kind with 5): 45
+rounds in rounds.json whose bury attempts carry the friends called (`calls`, illegal ones first:
+too few, too many, a joker, a trump-rank card, a copy that doesn't exist, the same call twice) and
+whose snapshots carry `friendCalls` and `declarers`; in games.json the scoring table for 5 decks,
+outcomes with the short-handed bonus (`shortHanded: {declarers, fullSide}`) and 30 games with one
+level per seat and results with `declarers` and `friendCalls`; in views.json 12 games whose round
+carries `friendCalls`; in bots.json 60 rounds (45 online, 15 offline) and 60 deals whose burying
+step also has the friends each level calls (`standardCalls`, `beginnerCalls`) and a random seat's
+calls (`moveCalls`), which the replay uses for the burial.
 
 - `combos.json`: suit, rank (including `advanced(by:cap:)`), face, group and shape tables; for
   every trump context (13 ranks x 5 suit choices) the trump membership, group, strength and sort
@@ -276,11 +308,15 @@ carries `units` (every owed combination) only when it says more than `tractorLen
   body limits, validation, a whole round with bots, a game played to the end with pushes, stale
   versions, illegal moves with the engine's explanation, failed throws, nudges, renames, deletion,
   and tables of 6 and 8 (seat counts, card ids of the table, whole rounds with bots, team names, a
-  failed throw's blocker);
+  failed throw's blocker), and of 5, 7 and 9 (friend calls with the burial and every refusal's text,
+  malformed calls, event lines naming the side, per-seat levels, card ids up to 269, Bee Bot, a game
+  of 5 played to the end with "Your side won");
 - privacy.test.ts (see above), bots.test.ts (150 all-bot rounds decided from each seat's view, and
-  30 more at tables of 6 and 8: every move legal, deterministic, no failed throws; the safe moves
-  are legal; a refused choice falls back to a safe move and is reported), bidding.test.ts (every
-  rule of turn-based bidding, with 4, 6 and 8 players),
+  30 more at tables of 6 and 8, and games at 5, 7 and 9 where bot dealers call legal friends that
+  are mostly found: every move legal, deterministic, no failed throws; the safe moves are legal; a
+  refused choice falls back to a safe move and is reported), bidding.test.ts (every rule of
+  turn-based bidding, with 4 to 9 players), friends.test.ts (Finding Friends in the engine: call
+  rules, finding a friend, the short-handed bonus, per-seat levels, summaries from every seat),
   seatview.test.ts (bidding views, summaries, event lines), push.test.ts (ES256 provider tokens
   signed with a generated P-256 key and verified, the 50-minute cache, one signing for a burst of
   pushes, the token kept across Hub restarts, APNs requests and replies with fetch mocked, device

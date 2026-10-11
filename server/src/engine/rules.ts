@@ -38,8 +38,11 @@ import type { SuitGroup, Trump } from "./trump.ts";
 /**
  * Seats: 0 = South (the human offline), 1 = East, 2 = North (partner), 3 = West. Play goes
  * 0 -> 1 -> 2 -> 3 -> 0. Partners sit opposite; team = seat % 2. Bigger tables (6 or 8 players) go
- * on round the same way: teams alternate, so a team is every even or every odd seat. Functions
- * without `players` are for the classic 4-player table.
+ * on round the same way: teams alternate, so a team is every even or every odd seat. Odd tables (5,
+ * 7 or 9 players) have no fixed teams (Finding Friends: the dealer's side is the dealer plus the
+ * friends found, see `declarers` in round.ts), so `teamOf`, `partnerOf`, `teammatesOf` and
+ * `opponentsOf` only apply to even tables. Functions without `players` are for the classic
+ * 4-player table.
  */
 export const HUMAN_SEAT = 0;
 export const ALL_SEATS: readonly number[] = [0, 1, 2, 3];
@@ -83,13 +86,18 @@ export function opponentsOf(player: number, players: number): number[] {
 
 const COMPASS: Record<number, readonly string[]> = {
   4: ["South", "East", "North", "West"],
+  5: ["South", "East", "Northeast", "Northwest", "West"],
   6: ["South", "Southeast", "Northeast", "North", "Northwest", "Southwest"],
+  7: ["South", "Southeast", "East", "Northeast", "Northwest", "West", "Southwest"],
   8: ["South", "Southeast", "East", "Northeast", "North", "Northwest", "West", "Southwest"],
+  9: ["South", "Southeast", "East", "Northeast", "North-northeast", "North-northwest", "Northwest", "West", "Southwest"],
 };
 
 /**
  * Compass point of a seat when seat 0 is South: South, East, North, West with 4; South, Southeast,
- * Northeast, North, Northwest, Southwest with 6; the eight points with 8.
+ * Northeast, North, Northwest, Southwest with 6; the eight points with 8. Odd tables: South, East,
+ * Northeast, Northwest, West with 5; South, Southeast, East, Northeast, Northwest, West, Southwest
+ * with 7; with 9 the two top seats are North-northeast and North-northwest.
  */
 export function compassName(player: number, players: number): string {
   const names = COMPASS[players] ?? COMPASS[4];
@@ -99,7 +107,7 @@ export function compassName(player: number, players: number): string {
 /**
  * Display name of `seat` as seen from `viewer` (default seat 0, as in Swift `Seats.name`) at a table
  * of `players`: "You", "East", "Partner", "West" with 4; "You" and compass names round the table
- * with 6 or 8 (Swift `Seats.name(_:players:)`). Online, each player sees the table rotated so they
+ * with 5 to 9 (Swift `Seats.name(_:players:)`). Online, each player sees the table rotated so they
  * are "You".
  */
 export function seatName(seat: number, viewer = HUMAN_SEAT, players = 4): string {
@@ -299,7 +307,7 @@ interface Opponent {
 }
 
 /**
- * Checks a throw against every other player's hand (`hands` lists every seat: 4, 6 or 8). For each
+ * Checks a throw against every other player's hand (`hands` lists every seat: 4 to 9). For each
  * component of the throw, another player beats it if they hold, in the same group, a component of
  * the same shape with higher strength. Returns ok for non-throws.
  */

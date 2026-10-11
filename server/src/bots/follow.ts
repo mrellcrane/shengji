@@ -7,6 +7,7 @@
 //    stake (high enough when a later opponent may overruff), otherwise duck low.
 //  - Next to last: the last player is an opponent, so a trick left to them is worth more than the
 //    points on the table.
+//  - Finding Friends: a hidden friend first follows with the called card when the lead lets them.
 
 import type { Card } from "../engine/cards.ts";
 import { SINGLE, groupOfCards } from "../engine/combos.ts";
@@ -149,10 +150,28 @@ class StandardFollow {
   }
 
   decide(): Card[] {
+    const reveal = this.revealFollow();
+    if (reveal !== null && this.builder.isLegal(reveal)) return reveal;
     const cards = this.table.isTeammate(this.winner) ? this.partnerWinning() : this.opponentWinning();
     if (this.builder.isLegal(cards)) return cards;
     noteFallback();
     return this.builder.fallback();
+  }
+
+  // MARK: Finding Friends
+
+  /**
+   * A hidden friend follows with the called card when the lead lets them (as many cards as were led,
+   * all of the led group), to show which side they are on. Points go only to a partner winning the
+   * trick, or with cards that take the lead.
+   */
+  private revealFollow(): Card[] | null {
+    const { table } = this;
+    const reveal = table.friends?.reveal ?? null;
+    if (reveal === null || reveal.cards.length !== this.count) return null;
+    if (!reveal.cards.every((card) => groupOf(table.trump, card) === this.ledGroup)) return null;
+    if (points(reveal.cards) !== 0 && !table.isTeammate(this.winner) && !this.judge.wins(reveal.cards)) return null;
+    return reveal.cards;
   }
 
   // MARK: Trick reading

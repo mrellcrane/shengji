@@ -7,23 +7,51 @@ All bodies are JSON (`content-type: application/json`). Errors are
 
 ## Conventions
 
-- **Tables** have 4, 6 or 8 seats, with half a deck per player: 2 decks (108 cards) for 4 players, 3 decks
-  (162) for 6 and 4 decks (216) for 8. Everyone holds 25 cards with 4 players and 26 with 6 or 8; the kitty is
-  8 cards with 4 or 8 players and 6 with 6. Teams alternate round the table: the even seats against the odd
-  ones (0+2 and 1+3 with 4 players; 0+2+4 and 1+3+5 with 6). Defenders take over the deal from 40 points per
-  deck (80, 120 or 160) and each further 20 points per deck is a level. With 3 or 4 decks a card can be
-  held three or four times: triples, four of a kind and tractors of them (see DESIGN.md for the rules).
+- **Tables** have 4 to 9 seats, with half a deck per player, rounded up:
+
+  | Players | Decks (cards) | Hand | Kitty | Takeover line | Teams |
+  |---|---|---|---|---|---|
+  | 4 | 2 (108) | 25 | 8 | 80 | fixed: even seats against odd |
+  | 5 | 3 (162) | 31 | 7 | 120 | Finding Friends, 1 friend |
+  | 6 | 3 (162) | 26 | 6 | 120 | fixed: 0+2+4 against 1+3+5 |
+  | 7 | 4 (216) | 30 | 6 | 160 | Finding Friends, 2 friends |
+  | 8 | 4 (216) | 26 | 8 | 160 | fixed: even seats against odd |
+  | 9 | 5 (270) | 29 | 9 | 200 | Finding Friends, 3 friends |
+
+  Defenders take over the deal from 40 points per deck and each further 20 points per deck is a level. With
+  3 to 5 decks a card can be held three to five times: triples, four (or five) of a kind and tractors of them
+  (see DESIGN.md for the rules).
+- **Finding Friends (找朋友)**: with 5, 7 or 9 players nobody has fixed partners. When burying, the dealer calls
+  friends by naming cards (1, 2 or 3 calls): a `FriendCall` is `{"face": 0...51, "ordinal": n, "friend": seat}`,
+  "the first A♠" being `{"face": 12, "ordinal": 1}`. Whoever plays the copy of that card that reaches the
+  ordinal (the first, second, ... played this round) joins the dealer's side, and their tricks so far count
+  for that side from then on; until then everyone counts as a defender. A call can't name a joker or a
+  trump-rank card, nor a copy beyond the number of decks, nor be made twice. If the dealer (or a friend
+  already found) plays a called card, or a called card is never played, the dealer's side plays short-handed
+  and goes up 1 level more if it keeps the deal. Everyone keeps their own level: the trump rank is the
+  dealer's level, and everyone on the side that wins the round goes up (levels stop at the target). The next
+  dealer is the dealer's next player on their side when it holds (the dealer again if alone), else the first
+  defender after the dealer. The game is won when the dealer's side holds while the dealer is at the target.
+  The calls (and who turned out to be each friend) are public; nobody learns more than the plays show.
 - **Cards** are integers `Card.id` = face index + copy × 54 (face index = suit × 13 + (rank − 2), small
   joker 52, big joker 53; suits: spades 0, hearts 1, clubs 2, diamonds 3; ranks 2...14 with A = 14; copy 0
-  for the first deck, 1 for the second, ...): 0...107 with 2 decks, 0...161 with 3, 0...215 with 4.
+  for the first deck, 1 for the second, ...): 0...107 with 2 decks, 0...161 with 3, 0...215 with 4,
+  0...269 with 5.
 - **Seats in views are viewer-relative**: the viewer is always seat 0, seat 1 their right (next to play),
-  and so on round the table; with 4 players 2 is their partner and 3 their left. Even seats are the viewer's
-  team (team 0), odd seats the other team. `players` and `handCounts` have one entry per seat (4, 6 or 8).
-  Actions never name seats.
+  and so on round the table; with 4 players 2 is their partner and 3 their left. At tables of 4, 6 or 8 even
+  seats are the viewer's team (team 0), odd seats the other team. At tables of 5, 7 or 9 team 0 means the
+  viewer's side (in a result: 0 when the viewer was on the dealer's side). `players` and `handCounts` have
+  one entry per seat (4 to 9). Actions never name seats.
 - **SeatView** JSON is exactly the Codable form of Swift `SeatView` (`ShengjiCore/Sources/ShengjiCore/Engine/SeatView.swift`):
   optionals may be omitted or `null`; `Trump` is `{"rank": 2, "suit": 1}`; `Declaration` is
   `{"player", "cards", "suit"?, "strength"}`; `Play` `{"player", "cards"}`; `TrickRecord` `{"plays", "winner", "points"}`;
   `RoundResult` and `RoundSummary` mirror their Swift fields (with `outcome` = `{"declarersHold", "levels", "summary"}`).
+  Finding Friends adds: `friendCalls` (the calls with each `friend` seat once found, viewer-relative; present
+  from the burial on, `null` while bidding or burying and at tables of fixed teams); `teamLevels` holds one
+  level per seat, the viewer's first; a `RoundResult` carries `declarers` (the dealer's side at the end, the
+  dealer first and then in play order) and `friendCalls`; `lastRoundSummary.levelsBefore` and `levelsAfter`
+  are per seat, and its `advancingTeam` and `gameWinner` are 0 for the viewer's side. The explanation names
+  the side ("Northwest, you and Southeast played together as the dealer's side. ...").
   The server must never put a hidden card in a view (other hands, the undealt deck, a kitty the viewer may not see).
   The server writes absent optionals as `null` (Swift decodes both). `hand` is in deal order (not sorted).
   `lastRoundSummary.explanation` is written from the viewer's side ("Your team", "East and West", "Partner deals
@@ -89,33 +117,42 @@ Invite codes use the letters and digits `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no I,
 `GameSummary` =
 ```
 {"id": "g_...", "clubId": "c_...", "createdAt": iso, "updatedAt": iso, "status": "active" | "finished",
- "players": [{"name": "Mei", "isBot": false, "userID": "u_..."} x4, x6 or x8],   // viewer-relative, index 0 = you
- "teamLevels": [rank, rank], "targetRank": 14, "roundNumber": 3,
+ "players": [{"name": "Mei", "isBot": false, "userID": "u_..."} x4 to x9],   // viewer-relative, index 0 = you
+ "teamLevels": [rank, rank],     // [your team, the other]; with 5, 7 or 9 seats one rank per seat, yours first
+ "targetRank": 14, "roundNumber": 3,
  "phase": "bidding" | "burying" | "playing" | "finished",
  "turn": seat | null,            // viewer-relative seat that must act (bid, bury or play)
  "yourTurn": true,
- "winnerTeam": 0 | 1 | null,     // viewer-relative
+ "winnerTeam": 0 | 1 | null,     // viewer-relative: 0 when your team (with 5, 7 or 9 seats: your side) won
  "lastEvent": "West played K♠ K♠",
  "startedByYou": false}          // you started this game (only you can end it)
 ```
+With 5, 7 or 9 seats the winners are the dealer's side of the last round, so `winnerTeam` is 0 exactly for them.
 
 `lastEvent` is one line about the latest move, naming players by display name and the viewer as "You":
 "Mei started the game", "Lin declared ♥ (pair of 2♥)", "Sam declared no trump (three small jokers)", "You passed",
 "Sam buried the kitty", "Mei led K♠ K♠", "Tiger Bot played 3♣", "You tried a throw that failed and led 9♠",
 "Round 3: your team took over the deal", "Round 4: Mei and Lin kept the deal and went up 2 levels to 7",
 "Round 5: Mei, Lin and Sam kept the deal" (a team of 3 or 4 is listed in seat order), "Round 9: your team won the game".
+With 5, 7 or 9 seats the burial names the calls and a round's line names the dealer's side (the dealer first, then in
+play order, "you" for the viewer) or the defenders: "Sam buried the kitty and called the first A♠" ("... called the
+first A♠ and the second K♥" with more friends), "Round 3: Mei, Lin and Sam kept the deal and went up 2 levels",
+"Round 3: Sam, you and Lin kept the deal", "Round 3: the defenders took over the deal and went up 1 level",
+"Round 9: Lin and you won the game" (no "to 7": everyone has their own level).
 When a round ends during a batch of bot moves, its line is kept over the bids that follow it.
-Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot", then with 6 or 8 seats
-"Koi Bot", "Fox Bot", "Owl Bot", "Yak Bot" (`userID` null).
+Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot", then "Koi Bot", "Fox Bot",
+"Owl Bot", "Yak Bot" and "Bee Bot" for seats 4 to 8 (`userID` null).
 
-- `POST /v1/games` `{"clubId": "...", "seats": [Seat x4, x6 or x8], "targetRank": 5 | 10 | 14}` where
-  `Seat` = `{"userId": "u_..."}` or `{"bot": "standard" | "beginner"}`, in absolute seat order (teams alternate:
-  the even seats against the odd ones). Any other number of seats is `400 bad_request`.
+- `POST /v1/games` `{"clubId": "...", "seats": [Seat x4 to x9], "targetRank": 5 | 10 | 14}` where
+  `Seat` = `{"userId": "u_..."}` or `{"bot": "standard" | "beginner"}`, in absolute seat order (with 4, 6 or 8
+  seats teams alternate: the even seats against the odd ones; with 5, 7 or 9 the table plays Finding Friends).
+  Any other number of seats is `400 bad_request`.
   The creator must hold a seat; every human must be a club member. → `{"game": GameSummary}` (from the creator's view).
   The first round deals immediately; bidding starts at the creator's seat. Bidding goes round the table: each
   player in turn declares (same strength rules as offline: more cards beat fewer, so three of a card beats a
-  pair of big jokers) or passes; it ends when every other player has passed since the last declaration (3, 5 or
-  7 passes), or when everyone passes with no declaration (then the kitty flip sets trump).
+  pair of big jokers) or passes; it ends when every other player has passed since the last declaration (one
+  pass fewer than the players: 3 to 8), or when everyone passes with no declaration (then the kitty flip sets
+  trump). With 5, 7 or 9 seats nobody has a partner yet, so bots may override anyone.
   `targetRank` defaults to 14. Each person sits once. At most 30 active games per player: if anyone at the
   table already has 30, the answer is `409 too_many_games` (its `message` names who).
 - `GET /v1/games` → `{"games": [GameSummary]}` (the caller's active games first, then up to 20 finished)
@@ -127,19 +164,27 @@ Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon 
   `409 {"error": "stale", "game", "view", "version"}` when `version` is old (refresh and retry),
   `400 {"error": "illegal", "message": "<the engine's explanation, e.g. You must follow suit...>"}`,
   `403 {"error": "not_your_turn"}`.
-  `Action` = `{"type": "bid", "declaration": Declaration}` | `{"type": "pass"}` | `{"type": "bury", "cards": [ids]}` |
-  `{"type": "play", "cards": [ids]}`. A bury holds as many cards as the kitty (8, or 6 with 6 players); a
-  declaration shows 1 to 4 cards.
+  `Action` = `{"type": "bid", "declaration": Declaration}` | `{"type": "pass"}` |
+  `{"type": "bury", "cards": [ids], "calls": [{"face": n, "ordinal": n}]}` | `{"type": "play", "cards": [ids]}`.
+  A bury holds as many cards as the kitty (8, 7, 6, 6, 8 or 9 with 4 to 9 players); a declaration shows 1 to 5
+  cards. `calls` are the friends the dealer calls (Finding Friends): required with 5, 7 or 9 seats, exactly 1, 2
+  or 3 of them, and absent or empty with 4, 6 or 8. The calls are checked before the cards; a call the rules
+  refuse is `400 illegal` with the engine's reason ("Call exactly 2 friends (you called 1).", "Jokers can't be
+  called: pick a suited card.", "Trump-rank cards (2) can't be called: pick another card.", "With 3 decks there
+  are only 3 copies of each card: call one of the first 3.", "You called the first A♣ twice: pick a different
+  card or copy.", "Only a table with an odd number of players calls friends."); a malformed one (`face` not an
+  integer 0...53, `ordinal` not an integer, more than 8 calls) is `400 bad_request`. A `friend` sent in a call
+  is ignored. Bot dealers call their friends the way the app's bots do.
   `Outcome` = `{"type": "throwFailed", "forced": [ids], "blocker": seat}` (viewer-relative) when a throw failed.
   After every human action the server runs bot turns until a human must act. Bots play exactly like the app's bots of
   their level, each deciding from its own seat's view (bids from `view.bidding.available`). When a round ends the
   server records it and immediately deals the next round (the finished round's summary is in `view.lastRoundSummary`).
   Details: send a bid's declaration back as it appears in `view.bidding.available` (its `player` is 0, you; it may be
   left out; `suit` is left out or `null` for jokers). Cards are matched by id. The checks run in this order:
-  `403 not_seated`, `400 bad_request` for a card id outside this table's range (0...107, 0...161 or 0...215),
-  `409 stale`, `403 not_your_turn` (also when the game is over: "The game is over."), then the engine
+  `403 not_seated`, `400 bad_request` for a card id outside this table's range (0...107, 0...161, 0...215 or
+  0...269), `409 stale`, `403 not_your_turn` (also when the game is over: "The game is over."), then the engine
   (`400 illegal`, with "You can't do that at this point in the round." for an action of the wrong phase).
-  A malformed body (including a card id above 215) is `400 bad_request`. Refused actions change nothing.
+  A malformed body (including a card id above 269) is `400 bad_request`. Refused actions change nothing.
   `outcome` is only in the mover's own reply; others see the forced cards in the trick. When a team wins, the game's `status` and `phase` become `"finished"`,
   the last round stays on the table (its `result` and kitty visible to all), `view.gameWinnerTeam` and
   `game.winnerTeam` are set, and nobody can act any more.
@@ -172,7 +217,8 @@ Exactly: `{"aps": {"alert": {"title", "body"}, "badge": n, "sound": "default", "
   "Round 3: your team took over the deal. It's your turn in Friday Tractor.");
 - round over (to the other people): title "<club>", body "Round 3: your team took over the deal.";
 - game over: title "Game over", body "Your team won the game in Friday Tractor!" or
-  "Mei and Lin won the game in Friday Tractor." ("Mei, Lin and Sam won ..." for a team of three);
+  "Mei and Lin won the game in Friday Tractor." ("Mei, Lin and Sam won ..." for a team of three); with 5, 7 or
+  9 seats "Your side won the game in Friday Tractor!" for the dealer's side that won, else its players by name;
 - nudge: title "Your turn", body "Lin is waiting for you in Friday Tractor."
 Devices that APNs reports as gone (410, `BadDeviceToken`, `Unregistered`, `DeviceTokenNotForTopic`) are forgotten.
 

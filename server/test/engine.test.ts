@@ -93,24 +93,48 @@ test("card ids follow the wire format (face index + copy * 54)", () => {
   assert.equal(E.bigJoker(3), 215);
   assert.equal(E.copyOf(215), 3);
   assert.equal(E.cardDescription(E.smallJoker(2)), "SJ");
-  assert.deepEqual([E.isCard(0), E.isCard(107), E.isCard(215), E.isCard(216), E.isCard(-1), E.isCard(1.5), E.isCard("3")],
-    [true, true, true, false, false, false, false]);
-  // One table's range: 108 cards with 2 decks, 162 with 3, 216 with 4.
-  assert.deepEqual([E.isCardOf(107, 2), E.isCardOf(108, 2), E.isCardOf(161, 3), E.isCardOf(162, 3), E.isCardOf(215, 4)],
-    [true, false, true, false, true]);
+  // Five decks (9 players): ids up to 269, copies 0...4.
+  assert.equal(E.bigJoker(4), 269);
+  assert.equal(E.copyOf(269), 4);
+  assert.deepEqual(
+    [E.isCard(0), E.isCard(107), E.isCard(215), E.isCard(216), E.isCard(269), E.isCard(270), E.isCard(-1), E.isCard(1.5), E.isCard("3")],
+    [true, true, true, true, true, false, false, false, false]);
+  // One table's range: 108 cards with 2 decks, 162 with 3, 216 with 4, 270 with 5.
+  assert.deepEqual([E.isCardOf(107, 2), E.isCardOf(108, 2), E.isCardOf(161, 3), E.isCardOf(162, 3), E.isCardOf(215, 4),
+    E.isCardOf(216, 4), E.isCardOf(269, 5), E.isCardOf(270, 5)],
+  [true, false, true, false, true, false, true, false]);
 });
 
-test("table sizes: 4, 6 or 8 players with half a deck each", () => {
-  const sizes = [4, 6, 8].map((players) => {
+test("table sizes: 4 to 9 players with half a deck each, rounded up", () => {
+  const sizes = [4, 5, 6, 7, 8, 9].map((players) => {
     const table = E.tableSize(players);
     return [table.players, table.decks, E.tableCardCount(table), E.tableKittySize(table), E.tableHandSize(table),
       E.tableTotalPoints(table)];
   });
-  assert.deepEqual(sizes, [[4, 2, 108, 8, 25, 200], [6, 3, 162, 6, 26, 300], [8, 4, 216, 8, 26, 400]]);
-  // Other counts round to the nearest table (ties to the smaller), as Swift `TableSize(players:)`.
-  assert.deepEqual([1, 5, 7, 9, 12].map((n) => E.tableSize(n).players), [4, 4, 6, 8, 8]);
-  assert.deepEqual([4, 6, 8, 5, 3, "6", null].map((n) => E.tableSizeExactly(n)?.players ?? null), [4, 6, 8, null, null, null, null]);
+  assert.deepEqual(sizes, [
+    [4, 2, 108, 8, 25, 200],
+    [5, 3, 162, 7, 31, 300],
+    [6, 3, 162, 6, 26, 300],
+    [7, 4, 216, 6, 30, 400],
+    [8, 4, 216, 8, 26, 400],
+    [9, 5, 270, 9, 29, 500],
+  ]);
+  // Other counts are clamped to 4...9, as Swift `TableSize(players:)`.
+  assert.deepEqual([1, 3, 5, 7, 9, 12].map((n) => E.tableSize(n).players), [4, 4, 5, 7, 9, 9]);
+  assert.deepEqual([4, 5, 6, 7, 8, 9, 3, 10, "6", null].map((n) => E.tableSizeExactly(n)?.players ?? null),
+    [4, 5, 6, 7, 8, 9, null, null, null, null]);
   assert.deepEqual(E.deckCards(3), Array.from({ length: 162 }, (_, id) => id));
+  assert.deepEqual(E.deckCards(5), Array.from({ length: 270 }, (_, id) => id));
+  // Finding Friends at odd tables: 1, 2 or 3 friends; the dealer's side holds up to 2, 3 or 4.
+  const tables = [4, 5, 6, 7, 8, 9].map((n) => E.tableSize(n));
+  assert.deepEqual(tables.map(E.tableFindsFriends), [false, true, false, true, false, true]);
+  assert.deepEqual(tables.map(E.tableFriendCount), [0, 1, 0, 2, 0, 3]);
+  assert.deepEqual(tables.map(E.tableTeamSize), [2, 2, 3, 3, 4, 4]);
+  assert.deepEqual(E.allSeats(5).map((seat) => E.seatName(seat, 0, 5)), ["You", "East", "Northeast", "Northwest", "West"]);
+  assert.deepEqual(E.allSeats(7).map((seat) => E.compassName(seat, 7)),
+    ["South", "Southeast", "East", "Northeast", "Northwest", "West", "Southwest"]);
+  assert.equal(new Set(E.allSeats(9).map((seat) => E.seatName(seat, 0, 9))).size, 9);
+  assert.equal(E.seatName(4, 0, 9), "North-northeast");
   // Seats: teams alternate; teammates and opponents in play order after the seat.
   assert.deepEqual(E.teammatesOf(1, 8), [3, 5, 7]);
   assert.deepEqual(E.opponentsOf(5, 6), [0, 2, 4]);
@@ -156,7 +180,7 @@ test("parseDeclaration accepts well-formed declarations only", () => {
   for (const bad of [
     null, 3, "x", [], {},
     { ...good, player: "1" }, { ...good, player: 1.5 },
-    { ...good, cards: [13, 67, 121, 175, 13] }, { ...good, cards: [13, 216] }, { ...good, cards: "13" },
+    { ...good, cards: [13, 67, 121, 175, 229, 13] }, { ...good, cards: [13, 270] }, { ...good, cards: "13" },
     { ...good, suit: 4 }, { ...good, suit: "1" }, { ...good, strength: "2" },
   ]) {
     assert.equal(E.parseDeclaration(bad), null, JSON.stringify(bad));

@@ -4,15 +4,17 @@
 // chose, in the same order. Each round is rebuilt with the TypeScript engine (its parity is proven
 // by vectors.test.ts) from the recorded deal and moves, and each view comes from `toSeatView`, the
 // view the server sends. Rounds at tables of 6 and 8 players (a `players` field) follow the classic
-// ones in both lists.
+// ones in both lists, then rounds at tables of 5, 7 and 9 (Finding Friends), whose burying step also
+// holds the friends each level calls (`standardCalls`, `beginnerCalls`) and a random seat's calls
+// (`moveCalls`).
 // Regenerate with: cd ShengjiCore && swift run ShengjiVectors ../server/test/vectors
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { botDiagnostics, cardsToBury, decide, declaration } from "../src/bots/index.ts";
+import { botDiagnostics, cardsToBury, decide, declaration, friendCalls } from "../src/bots/index.ts";
 import type { BotLevel } from "../src/bots/index.ts";
 import * as E from "../src/engine/index.ts";
-import type { Card, Declaration, Rank, Round, RoundResult, SeatPlayer, SeatView, Trump } from "../src/engine/index.ts";
+import type { Card, Declaration, FriendCall, Rank, Round, RoundResult, SeatPlayer, SeatView, Trump } from "../src/engine/index.ts";
 import { loadVectors } from "./support.ts";
 
 type Controller = BotLevel | "random";
@@ -25,6 +27,10 @@ interface Step {
   move?: Card[];
   /** Offline declaring: cards dealt before this decision. */
   deal?: number;
+  /** Finding Friends, burying step: the friends each level calls with its own burial, and a random seat's calls. */
+  standardCalls?: FriendCall[];
+  beginnerCalls?: FriendCall[];
+  moveCalls?: FriendCall[];
 }
 
 interface BotRound {
@@ -53,6 +59,10 @@ const LEVELS: readonly BotLevel[] = ["standard", "beginner"];
 
 function seatPlayers(players: number): SeatPlayer[] {
   return E.allSeats(players).map((seat) => ({ name: `Seat ${seat}`, isBot: true, userID: null }));
+}
+
+function sameCalls(a: readonly FriendCall[], b: readonly FriendCall[]): boolean {
+  return a.length === b.length && a.every((call, i) => call.face === b[i].face && call.ordinal === b[i].ordinal && call.friend === b[i].friend);
 }
 
 /** A viewer-relative seat in words: "you", "right", "partner" and "left" with 4 players, else "seat 3". */
@@ -120,6 +130,20 @@ function newCoverage() {
     seats: [0, 0, 0, 0],
     /** Tables of 6 and 8 players: rounds, and standard leads and follows with sets of three or more. */
     bigTables: { rounds: { six: 0, eight: 0 }, setLeads: 0, setFollows: 0, setDeclarations: 0, decisions: 0 },
+    /**
+     * Tables of 5, 7 and 9 (Finding Friends): rounds and deals, calls compared, standard plays of a
+     * called card by a hidden friend (leads and follows), friends found and the dealer playing alone.
+     */
+    oddTables: {
+      rounds: { five: 0, seven: 0, nine: 0 },
+      calls: 0,
+      revealLeads: 0,
+      revealFollows: 0,
+      friendsFound: 0,
+      alone: 0,
+      fiveOfAKind: 0,
+      decisions: 0,
+    },
   };
 }
 
@@ -146,12 +170,14 @@ function replay(): Replay {
 
   for (const entry of [...file.rounds, ...file.deals]) {
     const table = E.tableSize(entry.players ?? 4);
-    const big = table.players > 4;
+    const odd = E.tableFindsFriends(table);
+    const big = table.players > 4 && !odd;
     const players = seatPlayers(table.players);
     const round: Round = E.newRound(entry.trumpRank, entry.dealer, entry.deck, table);
     const game = E.newGame({ startRank: entry.trumpRank, targetRank: 14, table });
     coverage.rounds[entry.mode] += 1;
     if (big) coverage.bigTables.rounds[table.players === 6 ? "six" : "eight"] += 1;
+    if (odd) coverage.oddTables.rounds[table.players === 5 ? "five" : table.players === 7 ? "seven" : "nine"] += 1;
     const label = (part: string, index: number, step: Step): string =>
       `seed ${entry.seed} (${entry.mode}, ${table.players} players), ${part} step ${index}, absolute seat ${step.seat}`;
 
@@ -159,6 +185,7 @@ function replay(): Replay {
     const compare = (context: string, step: Step, view: SeatView, choose: (level: BotLevel) => Card[]): Card[] => {
       coverage.decisions += 1;
       if (big) coverage.bigTables.decisions += 1;
+      if (odd) coverage.oddTables.decisions += 1;
       for (const level of LEVELS) {
         const expected = step[level];
         const actual = choose(level);
@@ -235,7 +262,33 @@ function replay(): Replay {
         assert.deepEqual(decide(view, level), cards, `${context}: decide and cardsToBury differ`);
         return cards;
       });
-      assert.equal(E.bury(round, move, step.seat), null, `${context}: bury refused`);
+      // Finding Friends: each level's calls for its own burial, then the calls of whoever moves.
+      let calls: FriendCall[] = [];
+      if (odd) {
+        for (const level of LEVELS) {
+          const expected = level === "standard" ? step.standardCalls : step.beginnerCalls;
+          assert.ok(expected !== undefined, `${context}: no ${level} calls recorded`);
+          const actual = friendCalls(view, step[level]);
+          coverage.oddTables.calls += 1;
+          if (sameCalls(actual, expected)) continue;
+          mismatches += 1;
+          if (failures.length < 12) {
+            failures.push(
+              `  ${context}, ${level} bot's friend calls:\n` +
+                `    Swift called: ${E.friendCallList(expected)}\n` +
+                `    TS called:    ${E.friendCallList(actual)}\n` +
+                `    ${situation(view)}`,
+            );
+          }
+        }
+        const controller = entry.controllers[step.seat];
+        const chosen = controller === "random" ? step.moveCalls : controller === "standard" ? step.standardCalls : step.beginnerCalls;
+        assert.ok(chosen !== undefined, `${context}: no calls recorded for the move`);
+        calls = chosen;
+      } else {
+        assert.deepEqual(friendCalls(view, move), [], `${context}: calls at a table of fixed teams`);
+      }
+      assert.equal(E.bury(round, move, step.seat, calls), null, `${context}: bury refused`);
     }
     if (entry.playing === undefined) {
       assert.equal(round.phase, "playing", `seed ${entry.seed}: the burial was not accepted`);
@@ -256,6 +309,18 @@ function replay(): Replay {
       if (!leading && E.decompose(lead, view.trump).some((c) => c.shape.type === "tractor")) coverage.tractorFollows += 1;
       const move = compare(context, step, view, (level) => {
         const cards = decide(view, level) ?? [];
+        if (odd && level === "standard" && cards.length > 0) {
+          // A hidden friend showing themselves: the cards answer a call not found yet.
+          const played = E.viewPlayedCards(view);
+          const reveals = (view.friendCalls ?? []).some((call) => {
+            if (call.friend !== null) return false;
+            const before = played.filter((card) => E.faceOf(card) === call.face).length;
+            const now = cards.filter((card) => E.faceOf(card) === call.face).length;
+            return now === cards.length && before < call.ordinal && before + now >= call.ordinal;
+          });
+          if (reveals && !E.viewIsDeclarer(view, 0)) coverage.oddTables[leading ? "revealLeads" : "revealFollows"] += 1;
+          if (E.maxCopies(cards) >= 5) coverage.oddTables.fiveOfAKind += 1;
+        }
         if (level === "standard" && leading && cards.length > 0) {
           if (E.isThrow(cards, view.trump)) coverage.throws += 1;
           if (E.decompose(cards, view.trump).some((c) => c.shape.type === "tractor")) coverage.tractorLeads += 1;
@@ -281,6 +346,10 @@ function replay(): Replay {
 
     assert.equal(round.phase, "finished", `seed ${entry.seed}: the round did not finish`);
     assert.deepEqual(round.result, entry.result, `seed ${entry.seed}: the replayed round ended differently`);
+    if (odd && round.result !== null) {
+      coverage.oddTables.friendsFound += (round.result.friendCalls ?? []).filter((call) => call.friend !== null).length;
+      if ((round.result.declarers ?? []).length === 1) coverage.oddTables.alone += 1;
+    }
   }
   replayed = { mismatches, failures, fallbacks: botDiagnostics.fallbacks - fallbacksBefore, coverage };
   return replayed;
@@ -317,4 +386,9 @@ test("bots.json covers every kind of decision", () => {
   const b = c.bigTables;
   assert.ok(b.rounds.six >= 50 && b.rounds.eight >= 50 && b.decisions >= 10000, `bigger tables: ${report}`);
   assert.ok(b.setLeads >= 30 && b.setFollows >= 150 && b.setDeclarations >= 20, `bigger tables: ${report}`);
+  // Tables of 5, 7 and 9: every size, the dealer's calls, hidden friends showing themselves.
+  const o = c.oddTables;
+  assert.ok(o.rounds.five >= 30 && o.rounds.seven >= 30 && o.rounds.nine >= 30 && o.decisions >= 10000, `odd tables: ${report}`);
+  assert.ok(o.calls >= 240 && o.friendsFound >= 80 && o.fiveOfAKind >= 5, `odd tables: ${report}`);
+  assert.ok(o.revealLeads >= 30 && o.revealFollows >= 60, `odd tables: ${report}`);
 });

@@ -1,7 +1,8 @@
 // Declaring trump: offline during the deal, online in turn-based bidding. Port of
 // ShengjiCore/Sources/ShengjiCore/Bots/BotDeclaring.swift (`choose`), choices only. Deterministic:
 // the same view and options always give the same choice.
-//  - Never overrides a partner; always reinforces its own declaration with more of the same card
+//  - Never overrides a partner (Finding Friends has no partners while declaring: anyone else's
+//    declaration is fair game); always reinforces its own declaration with more of the same card
 //    when it can (a single becomes a pair; with three or more decks, the most copies held).
 //  - Standard: strength = would-be trumps (that suit + every trump-rank card + jokers) as a share of
 //    the cards received so far. Declares once at least 6 cards are in, when strength reaches a
@@ -17,7 +18,7 @@ import type { Card, Rank, Suit } from "../engine/cards.ts";
 import { HAND_SIZE, RANK_CARDS, declarationCardCount, declarationKind } from "../engine/round.ts";
 import type { Declaration } from "../engine/round.ts";
 import { teamOf } from "../engine/rules.ts";
-import { viewTable } from "../engine/seatview.ts";
+import { viewFindsFriends, viewTable } from "../engine/seatview.ts";
 import type { SeatView } from "../engine/seatview.ts";
 import { isTrump } from "../engine/trump.ts";
 import type { BotLevel } from "./bot.ts";
@@ -115,7 +116,7 @@ export function chooseDeclaration(
   // Who holds the declaration comes first.
   const current = view.declaration;
   if (current !== null) {
-    if (current.player !== 0 && teamOf(current.player) === teamOf(0)) return null;
+    if (current.player !== 0 && !viewFindsFriends(view) && teamOf(current.player) === teamOf(0)) return null;
     if (current.player === 0) {
       // Reinforce with more of the same card: a single becomes a pair (with three or more decks,
       // the most copies held).

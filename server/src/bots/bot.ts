@@ -3,17 +3,20 @@
 //
 // Every decision is made from a SeatView alone, the visible-state model the server sends to the
 // seat: the viewer is seat 0, its partners the other even seats (seat 2 with 4 players), at tables
-// of 4, 6 or 8. Only the choices are ported; the learner-facing texts (reason, nudge, principle,
+// of 4, 6 or 8; at tables of 5, 7 or 9 (Finding Friends) the partners are the players the seat knows
+// share its side. Only the choices are ported; the learner-facing texts (reason, nudge, principle,
 // concept) stay in the app. The bots are deterministic: there is no randomness, and ties are broken
 // exactly as in Swift (stable sorts over the same orders).
 
 import type { Card } from "../engine/cards.ts";
+import type { FriendCall } from "../engine/friends.ts";
 import type { Declaration } from "../engine/round.ts";
 import type { SeatView } from "../engine/seatview.ts";
 import { beginnerPlay } from "./beginner.ts";
 import { buryDecision } from "./burying.ts";
 import { chooseDeclaration } from "./declaring.ts";
 import { standardFollow } from "./follow.ts";
+import { friendCalls as callFriends } from "./friends.ts";
 import { standardLead } from "./lead.ts";
 import { BotTable, DEFAULT_TUNING } from "./table.ts";
 import type { BotTuning } from "./table.ts";
@@ -37,11 +40,19 @@ export function decide(view: SeatView, level: BotLevel, tuning: Readonly<BotTuni
 
 /**
  * Phase "burying" with the viewer as dealer (the hand includes the kitty): exactly as many cards as
- * the kitty held (8, or 6 with 6 players) from the hand to bury. Null otherwise. Swift
+ * the kitty held (8, 7, 6 or 9 by table) from the hand to bury. Null otherwise. Swift
  * `Bot.cardsToBury(view:)`.
  */
 export function cardsToBury(view: SeatView, level: BotLevel, tuning: Readonly<BotTuning> = DEFAULT_TUNING): Card[] | null {
   return buryDecision(view, level, tuning);
+}
+
+/**
+ * Finding Friends, dealer only (phase "burying"): the friends to call when burying `buried` (both
+ * levels call the same way). Empty at a table of fixed teams. Swift `Bot.friendCalls(view:buried:)`.
+ */
+export function friendCalls(view: SeatView, buried: readonly Card[]): FriendCall[] {
+  return callFriends(view, buried);
 }
 
 /**

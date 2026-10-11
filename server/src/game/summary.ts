@@ -1,12 +1,17 @@
 // Game summaries (docs/online-protocol.md, GameSummary) and the public event log line.
 //
 // A GameRoom publishes a `GameSnapshot` after every change: everything a game list shows, in
-// absolute seats and built only from public information (never a hand or the kitty). The Hub
-// stores it in its games index, so lists need no call to each GameRoom; both turn it into a
-// viewer-relative `GameSummary` with `summarize`.
+// absolute seats and built only from public information (never a hand or the kitty; the friends a
+// dealer calls are public once buried). The Hub stores it in its games index, so lists need no call
+// to each GameRoom; both turn it into a viewer-relative `GameSummary` with `summarize`.
+//
+// Tables of 5, 7 or 9 (Finding Friends) have no fixed teams: levels are per seat, a round's line
+// names the dealer's side, and the winners are the seats of the dealer's side that held the deal.
 
 import { cardDescription, rankLabel, suitSymbol } from "../engine/cards.ts";
 import type { Card, Rank } from "../engine/cards.ts";
+import { friendCallList } from "../engine/friends.ts";
+import type { FriendCall } from "../engine/friends.ts";
 import { levelPhrase } from "../engine/scoring.ts";
 import { declarationDetail } from "../engine/round.ts";
 import type { Declaration } from "../engine/round.ts";
@@ -21,18 +26,27 @@ export type GameEvent =
   | { type: "started"; seat: number }
   | { type: "bid"; seat: number; declaration: Declaration }
   | { type: "pass"; seat: number }
-  | { type: "bury"; seat: number }
+  /** Finding Friends: `calls` are the friends the dealer called (public); absent at tables of fixed teams. */
+  | { type: "bury"; seat: number; calls?: FriendCall[] }
   | { type: "play"; seat: number; cards: Card[]; lead: boolean; failedThrow: boolean }
   | {
       type: "round";
       /** 1-based number of the round that ended. */
       round: number;
-      /** Team that kept or took over the deal. */
+      /** Team that kept or took over the deal (with Finding Friends: 0 for seat 0's side, as `RoundSummary`). */
       team: number;
       tookOver: boolean;
+      /** Levels gained (with Finding Friends, the most any one player gained). */
       levelsGained: number;
+      /** The team's new level (with Finding Friends, the highest level a player who went up reached). */
       newLevel: Rank;
+      /** The winning team when this round ended the game (with Finding Friends: see `side`). */
       gameWinner: number | null;
+      /**
+       * Finding Friends only: the dealer's side when the round ended (absolute seats, the dealer first
+       * and then in play order). The defenders are everyone else.
+       */
+      side?: number[];
     };
 
 export interface GameSnapshot {
@@ -43,17 +57,19 @@ export interface GameSnapshot {
   updatedAt: string;
   status: GameStatus;
   version: number;
-  /** Absolute seat order (4, 6 or 8 seats). */
+  /** Absolute seat order (4 to 9 seats). */
   players: SeatPlayer[];
-  /** Levels per absolute team. */
+  /** Levels per absolute team, or with Finding Friends (5, 7 or 9 seats) per absolute seat. */
   levels: Rank[];
   targetRank: Rank;
   roundNumber: number;
   phase: SummaryPhase;
   /** Absolute seat that must act (bid, bury or play), or null. */
   turn: number | null;
-  /** Absolute winning team, or null. */
+  /** Absolute winning team, or null (with Finding Friends 0 if seat 0 won; see `winners`). */
   winner: number | null;
+  /** The seats that won the game (absolute), or null while it goes on. Absent in older snapshots. */
+  winners?: number[] | null;
   lastEvent: GameEvent | null;
 }
 
@@ -65,12 +81,14 @@ export interface GameSummary {
   updatedAt: string;
   status: GameStatus;
   players: SeatPlayer[];
+  /** [your team, other team]; with Finding Friends (5, 7 or 9 seats) one level per seat, yours first. */
   teamLevels: Rank[];
   targetRank: Rank;
   roundNumber: number;
   phase: SummaryPhase;
   turn: number | null;
   yourTurn: boolean;
+  /** 0 when your team (with Finding Friends: your side) won, 1 when the others did, null while the game goes on. */
   winnerTeam: number | null;
   lastEvent: string | null;
   /** The viewer started this game (only they can end it). */
@@ -99,6 +117,16 @@ export function teamName(players: readonly SeatPlayer[], team: number, viewer: n
   return names.length <= 1 ? (names[0] ?? "Someone") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+/**
+ * Finding Friends: the players of a side by name in the order given (the dealer first), the viewer
+ * as "you": "Mei, Lin and Sam", "you and Mei".
+ */
+export function sideNames(players: readonly SeatPlayer[], seats: readonly number[], viewer: number | null): string {
+  const names = seats.map((seat) => (viewer !== null && seat === viewer ? "you" : nameOf(players, seat, null)));
+  if (names.length <= 1) return names[0] ?? "Someone";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** "♥ (pair of 2♥)", "no trump (three small jokers)". */
 function declarationText(d: Declaration): string {
   const what = d.suit === null ? "no trump" : suitSymbol(d.suit);
@@ -117,8 +145,11 @@ export function eventText(event: GameEvent, players: readonly SeatPlayer[], view
       return `${nameOf(players, event.seat, viewer)} declared ${declarationText(event.declaration)}`;
     case "pass":
       return `${nameOf(players, event.seat, viewer)} passed`;
-    case "bury":
-      return `${nameOf(players, event.seat, viewer)} buried the kitty`;
+    case "bury": {
+      const who = nameOf(players, event.seat, viewer);
+      const calls = event.calls ?? [];
+      return calls.length === 0 ? `${who} buried the kitty` : `${who} buried the kitty and called ${friendCallList(calls)}`;
+    }
     case "play": {
       const who = nameOf(players, event.seat, viewer);
       const cards = event.cards.map(cardDescription).join(" ");
@@ -127,6 +158,13 @@ export function eventText(event: GameEvent, players: readonly SeatPlayer[], view
     }
     case "round": {
       const prefix = `Round ${event.round}: `;
+      if (event.side !== undefined) {
+        // Finding Friends: the dealer's side by name, or the defenders.
+        const up = event.levelsGained > 0 ? ` and went up ${levelPhrase(event.levelsGained)}` : "";
+        const side = sideNames(players, event.side, viewer);
+        if (event.gameWinner !== null) return `${prefix}${side} won the game`;
+        return event.tookOver ? `${prefix}the defenders took over the deal${up}` : `${prefix}${side} kept the deal${up}`;
+      }
       if (event.gameWinner !== null) return `${prefix}${teamName(players, event.gameWinner, viewer)} won the game`;
       const team = teamName(players, event.team, viewer);
       const deal = event.tookOver ? "took over the deal" : "kept the deal";
@@ -147,7 +185,18 @@ export function summarize(snapshot: GameSnapshot, viewer: number | null): GameSu
     const p = snapshot.players[(i + v) % n];
     return { name: p.name, isBot: p.isBot, userID: p.userID };
   });
-  const teamLevels = snapshot.levels.length === 2 ? [snapshot.levels[v % 2], snapshot.levels[(v + 1) % 2]] : snapshot.levels.slice();
+  // Finding Friends (an odd number of seats): one level per seat, the viewer's first.
+  const perSeat = n % 2 === 1 && snapshot.levels.length === n;
+  const teamLevels = perSeat
+    ? snapshot.levels.map((_, i) => snapshot.levels[(i + v) % n])
+    : snapshot.levels.length === 2
+      ? [snapshot.levels[v % 2], snapshot.levels[(v + 1) % 2]]
+      : snapshot.levels.slice();
+  let winnerTeam: number | null = null;
+  if (snapshot.winner !== null) {
+    const winners = snapshot.winners ?? null;
+    winnerTeam = n % 2 === 1 && winners !== null ? (winners.includes(v) ? 0 : 1) : relativeTeam(snapshot.winner, v);
+  }
   return {
     id: snapshot.id,
     clubId: snapshot.clubId,
@@ -161,7 +210,7 @@ export function summarize(snapshot: GameSnapshot, viewer: number | null): GameSu
     phase: snapshot.phase,
     turn: snapshot.turn === null ? null : relativeSeat(snapshot.turn, v, n),
     yourTurn: viewer !== null && snapshot.status === "active" && snapshot.turn === viewer,
-    winnerTeam: snapshot.winner === null ? null : relativeTeam(snapshot.winner, v),
+    winnerTeam,
     lastEvent: snapshot.lastEvent === null ? null : eventText(snapshot.lastEvent, snapshot.players, viewer),
     startedByYou: viewer !== null && !snapshot.players[viewer].isBot && snapshot.players[viewer].userID === snapshot.createdBy,
   };

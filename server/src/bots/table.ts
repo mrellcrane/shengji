@@ -1,8 +1,9 @@
 // One seat's view of the table for the bots, built from a SeatView alone. Port of
-// ShengjiCore/Sources/ShengjiCore/Bots: BotTuning.swift, CardOrder and BotTable (BotTable.swift) and
-// BotKnowledge (Bot.swift). Seats are viewer-relative: the viewer is 0, its partner 2, the opponents
-// 1 (next to play) and 3. With 6 or 8 players the partners are every even seat and the opponents
-// every odd one.
+// ShengjiCore/Sources/ShengjiCore/Bots: BotTuning.swift, CardOrder, BotTable and FriendsPlan
+// (BotTable.swift) and BotKnowledge (Bot.swift). Seats are viewer-relative: the viewer is 0, its
+// partner 2, the opponents 1 (next to play) and 3. With 6 or 8 players the partners are every even
+// seat and the opponents every odd one. With Finding Friends (an odd number of players) the partners
+// are the players this seat knows share its side (`FriendsPlan`); everyone else counts as an opponent.
 
 import { MAX_CARD_COUNT, cardPoints, deckCards, faceOf, suitOf } from "../engine/cards.ts";
 import type { Card, Face } from "../engine/cards.ts";
@@ -10,7 +11,8 @@ import { componentsOf, groupOfCards, longestSetRun, maxCopies, setShape, setTrac
 import type { ComboShape, Component } from "../engine/combos.ts";
 import { canBeat, normalizeSeat, opponentsOf, partnerOf, teamOf, teammatesOf } from "../engine/rules.ts";
 import type { Play } from "../engine/rules.ts";
-import { viewTable } from "../engine/seatview.ts";
+import type { FriendCall } from "../engine/friends.ts";
+import { viewDeclarers, viewFindsFriends, viewFriendsToFind, viewIsDeclarer, viewPlayedCards, viewTable } from "../engine/seatview.ts";
 import type { SeatView } from "../engine/seatview.ts";
 import {
   BIG_JOKER_STRENGTH,
@@ -171,6 +173,59 @@ export function noteVoids(plays: readonly Play[], trump: Trump, voids: Set<SuitG
   }
 }
 
+// MARK: Finding Friends
+
+/**
+ * Finding Friends: the sides as one seat (the viewer, seat 0) can work them out (Swift `FriendsPlan`).
+ * The dealer and the friends found so far are on the dealer's side. A player holding the card that
+ * answers a call not found yet is a hidden friend: they know they are on the dealer's side before
+ * anyone else does. Everyone else is a defender, but a defender can only be sure who plays with them
+ * once every called card has been played, so until then they count only themselves.
+ */
+export class FriendsPlan {
+  /** The viewer is the dealer, a friend found, or a hidden friend. */
+  readonly onDealerSide: boolean;
+  /**
+   * Hidden friend: the call this seat answers and the cards that answer it (the copies still needed
+   * to reach the called one, lowest ids first).
+   */
+  readonly reveal: { call: FriendCall; cards: Card[] } | null;
+  /** Seats known to share the viewer's side (never the viewer). */
+  readonly allies: Set<number>;
+
+  constructor(view: SeatView, hand: readonly Card[]) {
+    const n = viewTable(view).players;
+    const calls = view.friendCalls ?? [];
+    let reveal: { call: FriendCall; cards: Card[] } | null = null;
+    if (view.dealer !== null && !viewIsDeclarer(view, 0)) {
+      const played = viewPlayedCards(view);
+      for (const call of calls) {
+        if (call.friend !== null) continue;
+        let before = 0;
+        for (const card of played) if (faceOf(card) === call.face) before++;
+        const need = call.ordinal - before;
+        const mine = hand.filter((card) => faceOf(card) === call.face).sort((a, b) => a - b);
+        if (need >= 1 && mine.length >= need) {
+          reveal = { call, cards: mine.slice(0, need) };
+          break;
+        }
+      }
+    }
+    this.reveal = reveal;
+    const onDealerSide = viewIsDeclarer(view, 0) || reveal !== null;
+    this.onDealerSide = onDealerSide;
+    if (onDealerSide) {
+      this.allies = new Set(viewDeclarers(view).filter((seat) => seat !== 0));
+    } else if (view.dealer !== null && viewFriendsToFind(view) === 0 && calls.length > 0) {
+      const allies = new Set<number>();
+      for (let seat = 1; seat < n; seat++) if (!viewIsDeclarer(view, seat)) allies.add(seat);
+      this.allies = allies;
+    } else {
+      this.allies = new Set<number>();
+    }
+  }
+}
+
 // MARK: The table
 
 /** A seat's own cards of one group as one card per face (lowest copy) and the faces held at least twice. */
@@ -187,18 +242,20 @@ export class BotTable {
   readonly view: SeatView;
   /** Always 0: the viewer. */
   readonly seat = 0;
-  /** Seats at the table (4, 6 or 8). */
+  /** Seats at the table (4 to 9). */
   readonly players: number;
   /** The partner opposite with 4 players (seat 2); with more, the first partner after this seat. */
   readonly partner: number;
   /** Every partner, in play order after this seat (just seat 2 with 4 players). */
   readonly teammates: number[];
+  /** Finding Friends: which side this seat is on and how it can show it (null at tables of fixed teams). */
+  readonly friends: FriendsPlan | null;
   readonly trump: Trump;
   readonly order: CardOrder;
   /** Own hand, lowest first in display order. */
   readonly hand: Card[];
   readonly knowledge: BotKnowledge;
-  /** True if the viewer's team is the declaring (dealer's) team. */
+  /** True if the viewer's team is the declaring (dealer's) team (with Finding Friends: the viewer's side). */
   readonly isDeclarer: boolean;
   readonly tuning: Readonly<BotTuning>;
   /** Faces held twice. */
@@ -217,13 +274,19 @@ export class BotTable {
     this.tuning = tuning;
     const trump = view.trump;
     this.trump = trump;
-    this.players = viewTable(view).players;
+    const players = viewTable(view).players;
+    this.players = players;
     this.partner = partnerOf(0);
-    this.teammates = teammatesOf(0, this.players);
     this.order = cardOrder(trump);
     this.hand = this.order.sorted(view.hand);
+    const friends = viewFindsFriends(view) ? new FriendsPlan(view, this.hand) : null;
+    this.friends = friends;
+    this.teammates =
+      friends === null
+        ? teammatesOf(0, players)
+        : Array.from({ length: players - 1 }, (_, i) => i + 1).filter((seat) => friends.allies.has(seat));
     this.knowledge = new BotKnowledge(view);
-    this.isDeclarer = view.dealer !== null && teamOf(view.dealer) === teamOf(0);
+    this.isDeclarer = friends !== null ? friends.onDealerSide : view.dealer !== null && teamOf(view.dealer) === teamOf(0);
 
     const counts = new Map<Face, number>();
     for (const card of this.hand) {
@@ -267,16 +330,21 @@ export class BotTable {
 
   /** The opponents, in play order after this seat (two with 4 players: East, then West). */
   get opponents(): number[] {
-    return opponentsOf(this.seat, this.players);
+    const friends = this.friends;
+    if (friends === null) return opponentsOf(this.seat, this.players);
+    return Array.from({ length: this.players - 1 }, (_, i) => i + 1).filter((seat) => !friends.allies.has(seat));
   }
 
   isOpponent(player: number): boolean {
-    return teamOf(player) !== teamOf(this.seat);
+    if (this.friends === null) return teamOf(player) !== teamOf(this.seat);
+    const p = normalizeSeat(player, this.players);
+    return p !== this.seat && !this.friends.allies.has(p);
   }
 
   /** A partner of this seat (not this seat itself). */
   isTeammate(player: number): boolean {
     const p = normalizeSeat(player, this.players);
+    if (this.friends !== null) return this.friends.allies.has(p);
     return p !== this.seat && teamOf(p) === teamOf(this.seat);
   }
 

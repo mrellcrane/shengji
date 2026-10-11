@@ -571,7 +571,7 @@ test("tables of 6 and 8: seat counts, card ids of the table, a whole round with 
   const [mei, lin, sam] = [await cloud.signIn("Mei"), await cloud.signIn("Lin"), await cloud.signIn("Sam")];
   const clubId = await clubOf(cloud, mei, [lin, sam]);
   const bot = { bot: "standard" };
-  for (const count of [3, 5, 7, 9]) {
+  for (const count of [3, 10]) {
     const seats = [{ userId: mei.id }, ...new Array(count - 1).fill(bot)];
     const reply = await cloud.call("POST", "/v1/games", { token: mei.token, body: { clubId, seats } });
     assert.deepEqual([reply.status, reply.body.error], [400, "bad_request"], `${count} seats`);
@@ -651,11 +651,179 @@ test("a failed throw at a table of 6 names the blocker from the thrower's side",
   const bury = t.view.hand.filter((card) => !meiCards.slice(0, 2).includes(card) && E.groupOf(t.view.trump, card) !== 1).slice(0, 6);
   const tooFew = await act({ version: t.version, action: { type: "bury", cards: bury.slice(0, 5) } });
   assert.deepEqual(tooFew.body, { error: "illegal", message: "Choose exactly 6 cards to bury (you chose 5)." });
-  reply = await act({ version: t.version, action: { type: "bury", cards: bury } });
+  // Fixed teams: no friends to call (an empty list is the same as none).
+  const calling = await act({ version: t.version, action: { type: "bury", cards: bury, calls: [{ face: 12, ordinal: 1 }] } });
+  assert.deepEqual(calling.body, { error: "illegal", message: "Only a table with an odd number of players calls friends." });
+  reply = await act({ version: t.version, action: { type: "bury", cards: bury, calls: [] } });
   assert.equal(reply.status, 200);
   t = reply.body;
   reply = await act({ version: t.version, action: { type: "play", cards: [c(14, 0), c(12, 0)] } });
   assert.equal(reply.status, 200);
   assert.deepEqual(reply.body.outcome, { type: "throwFailed", forced: [c(12, 0)], blocker: 5 });
   assert.ok(reply.body.view.hand.includes(c(14, 0)), "the rest of the throw goes back to the hand");
+});
+
+test("a table of 5 (Finding Friends): friends are called with the burial, refused calls are explained, lines name the side", async () => {
+  // Rank 2, three decks. Seats 1 to 3 (beginner bots) hold one copy each of every 2 and joker, so
+  // nobody can declare (beginners only declare with a pair); everyone passes, the kitty flip sets
+  // trump and Mei, the first bidder, deals.
+  const c = (rank: E.Rank, suit: E.Suit, copy = 0): Card => E.makeCard(rank, suit, copy);
+  const ranks = (copy: number): Card[] => [0, 1, 2, 3].map((suit) => c(2, suit as E.Suit, copy)).concat([E.smallJoker(copy), E.bigJoker(copy)]);
+  const deck = buildDeck([[], ranks(0), ranks(1), ranks(2), []], [], 0, 7, 5);
+  const cloud = makeCloud({ decks: [deck], seed: 55 });
+  const [mei, lin] = [await cloud.signIn("Mei"), await cloud.signIn("Lin")];
+  const clubId = await clubOf(cloud, mei, [lin]);
+  const beginner = { bot: "beginner" };
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, beginner, beginner, beginner, { userId: lin.id }]);
+  let t = await read(cloud, mei, gameId);
+  assert.deepEqual(t.game.players.map((p) => p.name), ["Mei", "Tiger Bot", "Crane Bot", "Dragon Bot", "Lin"]);
+  assert.deepEqual([t.view.hand.length, t.view.handCounts, t.game.teamLevels], [31, [31, 31, 31, 31, 31], [2, 2, 2, 2, 2]]);
+  const act = (p: Player, body: unknown) => cloud.call("POST", `/v1/games/${gameId}/actions`, { token: p.token, body });
+  // Card ids: up to 161 with three decks.
+  const offTable = await act(mei, { version: t.version, action: { type: "play", cards: [162] } });
+  assert.deepEqual([offTable.status, offTable.body.error], [400, "bad_request"]);
+  assert.match(offTable.body.message, /0 to 161/);
+
+  let reply = await act(mei, { version: t.version, action: { type: "pass" } });
+  assert.equal(reply.status, 200);
+  t = await read(cloud, lin, gameId);
+  assert.deepEqual([t.view.phase, t.view.bidding?.turn], ["bidding", 0], "the bots passed: Lin's turn");
+  reply = await act(lin, { version: t.version, action: { type: "pass" } });
+  assert.equal(reply.status, 200);
+  t = await read(cloud, mei, gameId);
+  assert.deepEqual([t.view.phase, t.view.dealer, t.view.hand.length, t.view.kitty?.length, t.view.friendCalls], ["burying", 0, 38, 7, null]);
+
+  // Burying: the calls are checked first, with the engine's explanation.
+  const cards = E.sortCards(t.view.trump, t.view.hand).slice(0, 7);
+  const bury = (calls: unknown) => act(mei, { version: t.version, action: { type: "bury", cards, ...(calls === undefined ? {} : { calls }) } });
+  const refusals: [unknown, string][] = [
+    [undefined, "Call exactly 1 friend (you called 0)."],
+    [[], "Call exactly 1 friend (you called 0)."],
+    [[{ face: 12, ordinal: 1 }, { face: 25, ordinal: 1 }], "Call exactly 1 friend (you called 2)."],
+    [[{ face: 53, ordinal: 1 }], "Jokers can't be called: pick a suited card."],
+    [[{ face: 0, ordinal: 1 }], "Trump-rank cards (2) can't be called: pick another card."],
+    [[{ face: 12, ordinal: 4 }], "With 3 decks there are only 3 copies of each card: call one of the first 3."],
+  ];
+  for (const [calls, message] of refusals) {
+    const refused = await bury(calls);
+    assert.deepEqual([refused.status, refused.body], [400, { error: "illegal", message }], JSON.stringify(calls));
+  }
+  for (const calls of [[{ face: 54, ordinal: 1 }], [{ face: 12 }], "A♠", [{ face: 12, ordinal: 1.5 }], new Array(9).fill({ face: 12, ordinal: 1 })]) {
+    const malformed = await bury(calls);
+    assert.deepEqual([malformed.status, malformed.body.error], [400, "bad_request"], JSON.stringify(calls));
+  }
+  assert.equal((await read(cloud, mei, gameId)).version, t.version, "refused burials change nothing");
+  reply = await bury([{ face: 12, ordinal: 1 }]);
+  assert.equal(reply.status, 200, JSON.stringify(reply.body));
+  t = reply.body;
+  assert.deepEqual([t.view.phase, t.view.turn, t.view.friendCalls], ["playing", 0, [{ face: 12, ordinal: 1, friend: null }]]);
+  assert.equal(t.game.lastEvent, "You buried the kitty and called the first A♠");
+  const linView = await read(cloud, lin, gameId);
+  assert.equal(linView.game.lastEvent, "Mei buried the kitty and called the first A♠");
+  assert.deepEqual(linView.view.friendCalls, t.view.friendCalls, "the calls are public");
+  assert.equal(linView.view.kitty, null, "the buried cards are not");
+
+  // Play the round out: the result names the dealer's side; levels are per seat.
+  const { last } = await drive(cloud, [mei, lin], gameId, (table) => table.view.roundNumber === 2);
+  const summary = last.view.lastRoundSummary;
+  assert.ok(summary !== null);
+  assert.equal(summary.result.kitty.length, 7);
+  assert.equal(summary.result.friendCalls?.length, 1);
+  assert.ok((summary.result.declarers ?? []).length >= 1);
+  assert.match(summary.explanation, /, (short of|reaching) 120, /);
+  assert.equal(last.view.teamLevels.length, 5);
+  assert.match(last.game.lastEvent ?? "", /^Round 1: (.+ kept the deal|the defenders took over the deal)/);
+  const state = cloud.rooms.get(gameId)!.service.load()!;
+  const snap = snapshotOf(state);
+  assert.equal(snap.levels.length, 5);
+  for (const [seat, player] of [[0, mei], [4, lin]] as const) {
+    const listed = (await cloud.call("GET", "/v1/games", { token: player.token })).body.games[0] as GameSummary;
+    assert.deepEqual(listed.teamLevels, E.allSeats(5).map((i) => snap.levels[(i + seat) % 5]), "your level first");
+  }
+  // Mei's line names the dealer's side (Mei is seat 0, so her view's seats are the absolute ones).
+  const names = (summary.result.declarers ?? []).map((seat) => (seat === 0 ? "you" : state.seats[seat].name));
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const up = summary.levelsGained > 0 ? ` and went up ${E.levelPhrase(summary.levelsGained)}` : "";
+  assert.equal(last.game.lastEvent,
+    summary.result.outcome.declarersHold ? `Round 1: ${list} kept the deal${up}` : `Round 1: the defenders took over the deal${up}`);
+});
+
+test("tables of 7 and 9: seats, hands, card ids up to 269, the ninth bot, and whole rounds with friends called", async () => {
+  const cloud = makeCloud({ seed: 79 });
+  const [mei, lin, sam] = [await cloud.signIn("Mei"), await cloud.signIn("Lin"), await cloud.signIn("Sam")];
+  const clubId = await clubOf(cloud, mei, [lin, sam]);
+  const bot = { bot: "standard" };
+  const sevenId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, bot, { userId: lin.id }, bot, { bot: "beginner" }, { userId: sam.id }, bot]);
+  let t = await read(cloud, sam, sevenId);
+  assert.deepEqual(t.game.players.map((p) => p.name), ["Sam", "Owl Bot", "Mei", "Tiger Bot", "Lin", "Dragon Bot", "Koi Bot"]);
+  assert.deepEqual([t.view.hand.length, t.view.handCounts.length, t.game.teamLevels.length], [30, 7, 7]);
+  const seven = await drive(cloud, [mei, lin, sam], sevenId, (table) => table.view.roundNumber === 2);
+  const summary = seven.last.view.lastRoundSummary;
+  assert.equal(summary?.result.kitty.length, 6);
+  assert.equal(summary?.result.friendCalls?.length, 2, "two friends with 7 players");
+  assert.match(summary?.explanation ?? "", /, (short of|reaching) 160, /);
+
+  const nineId = await newGame(cloud, sam, clubId, [bot, bot, bot, { userId: sam.id }, bot, bot, { bot: "beginner" }, bot, bot]);
+  t = await read(cloud, sam, nineId);
+  assert.deepEqual(t.game.players.map((p) => p.name),
+    ["Sam", "Koi Bot", "Fox Bot", "Owl Bot", "Yak Bot", "Bee Bot", "Panda Bot", "Tiger Bot", "Crane Bot"]);
+  assert.deepEqual([t.view.hand.length, t.view.handCounts.length], [29, 9]);
+  // Card ids: five decks reach 269; 270 is no card at all.
+  const act = (body: unknown) => cloud.call("POST", `/v1/games/${nineId}/actions`, { token: sam.token, body });
+  const top = await act({ version: t.version, action: { type: "play", cards: [269] } });
+  assert.deepEqual([top.status, top.body.error], [400, "illegal"], "an id of the table is the engine's to judge");
+  const beyond = await act({ version: t.version, action: { type: "play", cards: [270] } });
+  assert.deepEqual([beyond.status, beyond.body.error], [400, "bad_request"]);
+  assert.match(beyond.body.message, /0 to 269/);
+  const nine = await drive(cloud, [sam], nineId, (table) => table.view.roundNumber === 2);
+  assert.equal(nine.last.view.lastRoundSummary?.result.kitty.length, 9);
+  assert.equal(nine.last.view.lastRoundSummary?.result.friendCalls?.length, 3);
+  assert.match(nine.last.view.lastRoundSummary?.explanation ?? "", /, (short of|reaching) 200, /);
+});
+
+test("a game of 5 played to the end: the dealer's side wins, and each player is told whether their side won", async () => {
+  const cloud = makeCloud({ seed: 505 });
+  const [mei, lin] = [await cloud.signIn("Mei"), await cloud.signIn("Lin")];
+  const clubId = await clubOf(cloud, mei, [lin], "Friday Tractor");
+  for (const [p, token] of [[mei, "aa"], [lin, "bb"]] as const) {
+    const r = await cloud.call("POST", "/v1/devices", { token: p.token, body: { platform: "ios", token: token.repeat(32), environment: "sandbox" } });
+    assert.equal(r.status, 204);
+  }
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, { bot: "standard" }, { userId: lin.id }, { bot: "standard" }, { bot: "beginner" }], 5);
+  let gameOver: { token: string; body: string } | null = null;
+  for (let moves = 0; ; moves++) {
+    assert.ok(moves < 6000, "the game did not finish");
+    const tables = [await read(cloud, mei, gameId), await read(cloud, lin, gameId)];
+    if (tables[0].game.status === "finished") break;
+    const who = tables.findIndex((x) => isMyTurn(x.view));
+    assert.ok(who >= 0);
+    cloud.push.sent.length = 0;
+    const r = await cloud.call("POST", `/v1/games/${gameId}/actions`, {
+      token: [mei, lin][who].token,
+      body: { version: tables[who].version, action: moveFrom(tables[who].view) },
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    await cloud.settle();
+    if (r.body.game.status === "finished") {
+      const other = cloud.push.sent.find((m) => m.title === "Game over");
+      assert.ok(other !== undefined, "the other player hears the game is over");
+      gameOver = { token: other.token, body: other.body };
+    }
+  }
+  const state = cloud.rooms.get(gameId)!.service.load()!;
+  const winners = E.gameWinners(state.game);
+  assert.ok(winners !== null && winners.length >= 1);
+  const last = state.game.history[state.game.history.length - 1];
+  assert.ok(last.result.outcome.declarersHold, "the dealer's side won by holding the deal");
+  assert.ok(winners.includes(E.normalizeSeat(last.result.dealer, 5)));
+  for (const [seat, player] of [[0, mei], [2, lin]] as const) {
+    const t: Table = await read(cloud, player, gameId);
+    const expected: number = winners.includes(seat) ? 0 : 1;
+    assert.deepEqual([t.game.winnerTeam, t.view.gameWinnerTeam], [expected, expected], `seat ${seat}`);
+    assert.match(t.game.lastEvent ?? "", /won the game$/);
+  }
+  assert.ok(gameOver !== null);
+  const otherSeat = gameOver.token === "aa".repeat(32) ? 0 : 2;
+  if (winners.includes(otherSeat)) assert.equal(gameOver.body, "Your side won the game in Friday Tractor!");
+  else assert.match(gameOver.body, /^[A-Z].* won the game in Friday Tractor\.$/);
 });

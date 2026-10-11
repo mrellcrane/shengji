@@ -80,6 +80,21 @@ export function scoreOutcome(defenderPoints: number, decks = 2): LevelOutcome {
 }
 
 /**
+ * Finding Friends: a dealer's side that keeps the deal with fewer players than it could have had (the
+ * dealer played a card they called, or a called card was never played) goes up 1 more level.
+ * `declarers` = players on the dealer's side at the end, `fullSide` = the dealer plus every friend
+ * called. Swift `Scoring.findingFriendsOutcome`.
+ */
+export function findingFriendsOutcome(outcome: LevelOutcome, declarers: number, fullSide: number): LevelOutcome {
+  if (!outcome.declarersHold || declarers >= fullSide) return { ...outcome };
+  const levels = outcome.levels + 1;
+  let summary = outcome.summary;
+  if (summary.endsWith(".")) summary = summary.slice(0, -1);
+  summary += `, plus 1 for playing short-handed (${declarers} of ${fullSide}): ${levelPhrase(levels)} in all.`;
+  return { declarersHold: true, levels, summary };
+}
+
+/**
  * Kitty multiplier when the defenders win the last trick: 2 x the number of cards in the largest
  * component of the last trick's lead (single x2, pair x4, triple x6, 2-pair tractor x8, 3-pair x12).
  */
