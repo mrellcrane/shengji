@@ -1,7 +1,7 @@
 // Checks on SeatView JSON as a client receives it, used by the unit tests and by the smoke test
 // (which only sees what the server sends, so it checks structure and cross-checks two players).
 
-import { tableCardCount, tableKittySize } from "../src/engine/cards.ts";
+import { TABLE_PLAYERS, tableCardCount, tableFindsFriends, tableFriendCount, tableKittySize } from "../src/engine/cards.ts";
 import { viewTable } from "../src/engine/seatview.ts";
 import type { SeatView } from "../src/engine/seatview.ts";
 
@@ -29,6 +29,7 @@ export const SEAT_VIEW_KEYS = [
   "result",
   "lastRoundSummary",
   "gameWinnerTeam",
+  "friendCalls",
 ].sort();
 
 /** Cards revealed by the rules this round: declarations, bids, the kitty flip, everything played. */
@@ -57,10 +58,23 @@ export function checkSeatView(view: SeatView): string[] {
   const keys = Object.keys(view).sort();
   if (keys.join(",") !== SEAT_VIEW_KEYS.join(",")) problems.push(`unexpected keys: ${keys.join(",")}`);
   if (view.hand.length !== view.handCounts[0]) problems.push("hand size differs from handCounts[0]");
-  if (![4, 6, 8].includes(view.handCounts.length) || view.players.length !== view.handCounts.length) {
+  if (!TABLE_PLAYERS.includes(view.handCounts.length) || view.players.length !== view.handCounts.length) {
     problems.push(`${view.players.length} players and ${view.handCounts.length} hand counts`);
   }
   const table = viewTable(view);
+  // Finding Friends: the calls are public from the burial on (tables of 5, 7 or 9 only).
+  const calls = view.friendCalls ?? null;
+  const callsShown = tableFindsFriends(table) && (view.phase === "playing" || view.phase === "finished");
+  if (calls !== null && !callsShown) problems.push(`friend calls shown at ${table.players} players in ${view.phase}`);
+  if (calls === null && callsShown) problems.push("friend calls missing");
+  if (calls !== null && calls.length !== tableFriendCount(table)) problems.push(`${calls.length} friend calls`);
+  for (const call of calls ?? []) {
+    if (!Number.isInteger(call.face) || call.face < 0 || call.face >= 52) problems.push(`bad called face ${call.face}`);
+    const friend = call.friend ?? null;
+    if (friend !== null && !(Number.isInteger(friend) && friend >= 0 && friend < table.players)) {
+      problems.push(`bad friend seat ${friend}`);
+    }
+  }
   const cardCount = tableCardCount(table);
   if (new Set(view.hand).size !== view.hand.length) problems.push("a card appears twice in the hand");
   const kittyAllowed =
@@ -70,7 +84,7 @@ export function checkSeatView(view: SeatView): string[] {
   for (const t of view.tricks) for (const p of t.plays) for (const c of p.cards) played.add(c);
   for (const p of view.currentTrick) for (const c of p.cards) played.add(c);
   for (const card of view.hand) if (played.has(card)) problems.push(`card ${card} is both in hand and played`);
-  // Every card is somewhere: in a hand (counted), played, or in the kitty (8, or 6 with 6 players;
+  // Every card is somewhere: in a hand (counted), played, or in the kitty (6 to 9 cards by table;
   // none while the dealer holds it during burying).
   const inHands = view.handCounts.reduce((a, b) => a + b, 0);
   const kittySize = view.phase === "burying" ? 0 : tableKittySize(table);

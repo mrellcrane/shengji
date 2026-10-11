@@ -1,7 +1,7 @@
 // Privacy (DESIGN.md): nothing a player receives may reveal a card they cannot see: other hands,
 // or the kitty unless they are the dealer holding or having buried it, or the round is over.
 // Checked over many random games (any mix of people and bots, random legal moves including failing
-// throws), for every state a client can receive and every seat (tables of 4, 6 and 8), in every message: the action
+// throws), for every state a client can receive and every seat (tables of 4 to 9), in every message: the action
 // replies, the WebSocket updates (view and game summary), the summaries in game lists (also for a
 // club member who is not seated) and their lastEvent text. The strongest check: shuffling the cards
 // a seat cannot see among their hidden places never changes what that seat receives.
@@ -15,13 +15,13 @@ import type { OnlineGame, SeatAction, SeatAssignment } from "../src/game/online.
 import { summarize } from "../src/game/summary.ts";
 import { RoomService } from "../src/room/service.ts";
 import { checkSeatView } from "../scripts/viewcheck.ts";
-import { randomFollow, randomLead } from "./play.ts";
+import { randomCalls, randomFollow, randomLead } from "./play.ts";
 import { seededRandom } from "./support.ts";
 import type { Rng } from "./support.ts";
 import { seededSource } from "./cloud.ts";
 import { memorySql } from "./sqlite.ts";
 
-/** Cards revealed by the rules this round: declarations, bids, the kitty flip card, all plays. */
+/** Cards revealed by the rules this round: declarations, bids, the kitty flip card, all plays (not the called cards: those are faces). */
 function publicCards(round: Round): Set<Card> {
   const cards = new Set<Card>();
   for (const d of round.declarationHistory) for (const c of d.cards) cards.add(c);
@@ -99,11 +99,15 @@ interface Tally {
   phases: Set<string>;
   failedThrows: number;
   kittyShown: number;
+  /** Finding Friends: views that showed a friend found. */
+  friendsShown: number;
 }
 
 function checkState(service: RoomService, state: OnlineGame, rng: Rng, tally: Tally, extra: { seat: number; message: unknown }[] = []): void {
   const round = state.round;
   const publicFaces = new Set(Array.from(publicCards(round), (c) => c % 54));
+  // Finding Friends: the cards the dealer called are announced with the burial.
+  for (const call of E.friendCallsOf(round)) publicFaces.add(call.face);
   tally.states++;
   for (let seat = 0; seat < state.seats.length; seat++) {
     const hidden = hiddenFrom(round, seat);
@@ -124,6 +128,11 @@ function checkState(service: RoomService, state: OnlineGame, rng: Rng, tally: Ta
     assert.equal(view.kitty !== null, E.kittyVisibleTo(round, seat));
     if (view.kitty !== null && round.phase !== "finished") tally.kittyShown++;
     tally.phases.add(view.phase);
+    // Friend calls: public from the burial on, the same for everyone but for the seats' rotation.
+    if (view.friendCalls !== null) {
+      assert.deepEqual(view.friendCalls, E.friendCallsOf(round).map((call) => E.rotateFriendCall(call, seat, state.seats.length)));
+      if (view.friendCalls.some((call) => call.friend !== null)) tally.friendsShown++;
+    }
     // The previous round's summary only shows that round's (public) kitty.
     const last = state.game.history.at(-1);
     assert.deepEqual(view.lastRoundSummary?.result.kitty ?? null, last?.result.kitty ?? null);
@@ -146,7 +155,9 @@ function randomAction(round: Round, seat: number, rng: Rng): SeatAction {
     if (options.length > 0 && rng.chance(35)) return { type: "bid", declaration: { ...rng.pick(options), player: 0 } };
     return { type: "pass" };
   }
-  if (round.phase === "burying") return { type: "bury", cards: rng.sample(round.hands[seat], E.kittySizeOf(round)) };
+  if (round.phase === "burying") {
+    return { type: "bury", cards: rng.sample(round.hands[seat], E.kittySizeOf(round)), calls: randomCalls(round, rng) };
+  }
   const hand = round.hands[seat];
   if (round.currentTrick.length === 0) return { type: "play", cards: randomLead(hand, round.trump, rng) };
   return { type: "play", cards: randomFollow(hand, E.currentLead(round), round.trump, rng) };
@@ -154,7 +165,7 @@ function randomAction(round: Round, seat: number, rng: Rng): SeatAction {
 
 /** Plays random games through a RoomService and checks every state; returns what was seen. */
 function randomGames(games: number, seed: number, players: (g: number) => number, rounds: number): Tally {
-  const tally: Tally = { states: 0, messages: 0, phases: new Set(), failedThrows: 0, kittyShown: 0 };
+  const tally: Tally = { states: 0, messages: 0, phases: new Set(), failedThrows: 0, kittyShown: 0, friendsShown: 0 };
   for (let g = 0; g < games; g++) {
     const rng = seededRandom(seed + g);
     const all = E.allSeats(players(g));
@@ -204,6 +215,14 @@ test("tables of 6 and 8: no message reveals a hidden card to any of the seats", 
   assert.ok(tally.kittyShown > 0, "the dealer never saw the kitty");
 });
 
+test("tables of 5, 7 and 9 (Finding Friends): no message reveals a hidden card; the calls are public", () => {
+  const tally = randomGames(9, 9800, (g) => [5, 7, 9][g % 3], 1);
+  assert.ok(tally.states > 300, `${tally.states} states`);
+  for (const phase of ["bidding", "burying", "playing"]) assert.ok(tally.phases.has(phase), `never saw ${phase}`);
+  assert.ok(tally.kittyShown > 0, "the dealer never saw the kitty");
+  assert.ok(tally.friendsShown > 0, "no friend was ever found");
+});
+
 test("the privacy check itself catches a leak (a hand card planted in another seat's view)", () => {
   const rng = seededRandom(1);
   const seats: SeatAssignment[] = [0, 1, 2, 3].map((s) => ({ userId: `u_p${s}`, bot: null, name: `P${s}` }));
@@ -212,7 +231,8 @@ test("the privacy check itself catches a leak (a hand card planted in another se
   const state = service.load() as OnlineGame;
   const leaked = JSON.parse(JSON.stringify(service.update(1))) as { view: { hand: Card[] } };
   leaked.view.hand.push(state.round.hands[2][0]);
-  assert.throws(() => checkState(service, state, rng, { states: 0, messages: 0, phases: new Set(), failedThrows: 0, kittyShown: 0 }, [{ seat: 1, message: leaked }]));
+  const tally: Tally = { states: 0, messages: 0, phases: new Set(), failedThrows: 0, kittyShown: 0, friendsShown: 0 };
+  assert.throws(() => checkState(service, state, rng, tally, [{ seat: 1, message: leaked }]));
   const planted = E.cloneRound(state.round);
   assert.notDeepEqual(permuteHidden(planted, 0, rng).hands[1], planted.hands[1]);
 });

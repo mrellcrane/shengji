@@ -119,7 +119,8 @@ export type Rng = ReturnType<typeof seededRandom>;
  * A deck in dealing order (like the Swift tests' EngineTestSupport.deck): `hands[seat]` lists cards
  * that seat must receive (dealt first, in order), `kitty` lists kitty cards, and the rest are filled
  * in from a seeded shuffle. Cards are dealt one at a time from `firstSeat`. `players` picks the
- * table: 4 (108 cards, 25 each, a kitty of 8), 6 (162, 26 each, 6) or 8 (216, 26 each, 8).
+ * table: 4 (108 cards, 25 each, a kitty of 8), 5 (162, 31 each, 7), 6 (162, 26 each, 6), 7 (216, 30
+ * each, 6), 8 (216, 26 each, 8) or 9 (270, 29 each, 9).
  */
 export function buildDeck(
   hands: readonly (readonly number[])[] = [[], [], [], []],
@@ -128,8 +129,11 @@ export function buildDeck(
   seed = 1,
   players = 4,
 ): number[] {
-  const decks = players / 2;
-  const kittySize = players === 6 ? 6 : 8;
+  // Half a deck per player, rounded up; the kitty is what is left over (at least 5 cards).
+  const decks = Math.floor((players + 1) / 2);
+  let kittySize = (54 * decks) % players;
+  if (kittySize === 0) kittySize = players;
+  if (kittySize < 5) kittySize += players;
   const handSize = (54 * decks - kittySize) / players;
   const seats = Array.from({ length: players }, (_, seat) => seat);
   const spec = seats.map((seat) => (hands[seat] ?? []).slice());

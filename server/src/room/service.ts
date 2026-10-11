@@ -185,7 +185,7 @@ export class RoomService {
     if (state === null) return NOT_FOUND_GAME();
     const seat = seatOf(state, userId);
     if (seat === null) return NOT_SEATED();
-    // Card ids are checked against this table's decks (0...107 with 4 players, up to 0...215 with 8).
+    // Card ids are checked against this table's decks (0...107 with 4 players, up to 0...269 with 9).
     const count = cardCountOf(state);
     const asked = request.action;
     const cards = asked.type === "bid" ? asked.declaration.cards : asked.type === "pass" ? [] : asked.cards;

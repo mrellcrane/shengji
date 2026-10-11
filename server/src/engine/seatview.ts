@@ -5,21 +5,35 @@
 // Seats are viewer-relative: the viewer is seat 0, 1 their right (next to play), 2 their partner,
 // 3 their left; team 0 is the viewer's team. Bigger tables go on round the same way: with 6 or 8
 // players `players` and `handCounts` have 6 or 8 entries, the viewer's team is every even seat and
-// the opponents every odd one. The JSON form of `SeatView` is exactly the Swift `SeatView` Codable
-// (test/vectors/views.json proves it for every seat of 4, 6 and 8-player tables); optionals are
-// written as null where Swift leaves the key out, which Swift's decoder reads the same way.
+// the opponents every odd one. With an odd number of players (Finding Friends) there are no fixed
+// teams: the dealer's side is the dealer plus the friends found so far (`friendCalls`), levels are
+// per seat (the viewer's first), and team 0 means the viewer's side. The JSON form of `SeatView` is
+// exactly the Swift `SeatView` Codable (test/vectors/views.json proves it for every seat of tables
+// of 4 to 9); optionals are written as null where Swift leaves the key out, which Swift's decoder
+// reads the same way.
 //
 // Privacy (DESIGN.md): a view never contains another hand, the undealt cards, or a kitty the viewer
 // may not see (the dealer sees it while burying and after burying it; everyone once the round is
-// finished).
+// finished). Friend calls are public once the dealer has buried (the friends found are public too:
+// everyone saw the called card played).
 
-import { tableSize } from "./cards.ts";
+import { tableFindsFriends, tableSize } from "./cards.ts";
 import type { Card, Rank } from "./cards.ts";
-import { normalizeSeat } from "./rules.ts";
-import { availableBids, roundPlayers, turn as playTurn } from "./round.ts";
+import { rotateFriendCall } from "./friends.ts";
+import type { FriendCall } from "./friends.ts";
+import { normalizeSeat, teamOf } from "./rules.ts";
+import {
+  availableBids,
+  friendCallsOf,
+  resultTeamRotation,
+  rotateResult,
+  roundFindsFriends,
+  roundPlayers,
+  turn as playTurn,
+} from "./round.ts";
 import type { Declaration, Round, RoundResult, TrickRecord } from "./round.ts";
 import type { Play } from "./rules.ts";
-import { explainRound } from "./game.ts";
+import { rotateSummary } from "./game.ts";
 import type { GameState, RoundSummary } from "./game.ts";
 import type { Trump } from "./trump.ts";
 
@@ -50,9 +64,9 @@ export interface SeatBidding {
 
 /** Swift `SeatView`, field for field. */
 export interface SeatView {
-  /** Players in seat order (4, 6 or 8); index 0 is the viewer. */
+  /** Players in seat order (4 to 9); index 0 is the viewer. */
   players: SeatPlayer[];
-  /** Levels as [viewer's team, other team]. */
+  /** Levels as [viewer's team, other team]. With Finding Friends one level per seat, the viewer's first. */
   teamLevels: Rank[];
   targetRank: Rank;
   /** 1-based round number within the game. */
@@ -77,7 +91,13 @@ export interface SeatView {
   defenderTrickPoints: number;
   result: RoundResult | null;
   lastRoundSummary: RoundSummary | null;
+  /** Viewer-relative winning team when the game is over (with Finding Friends 0 if the viewer won). */
   gameWinnerTeam: number | null;
+  /**
+   * Finding Friends: the friends the dealer called (null before burying and at tables of fixed
+   * teams), each with the seat (viewer-relative) that played the called card once it has been played.
+   */
+  friendCalls: FriendCall[] | null;
 }
 
 /** `seat` as seen from `viewer` at a table of `players` (Swift `seat(_:)` in `seatView`). */
@@ -90,16 +110,74 @@ export function absoluteSeat(relative: number, viewer: number, players = 4): num
   return normalizeSeat(relative + viewer, players);
 }
 
-/** Players and decks at the table a view shows (from its number of seats: 4, 6 or 8; Swift `SeatView.table`). */
+/** Players and decks at the table a view shows (from its number of seats: 4 to 9; Swift `SeatView.table`). */
 export function viewTable(view: SeatView): { players: number; decks: number } {
   return tableSize(view.handCounts.length === 0 ? view.players.length : view.handCounts.length);
 }
 
-/** Team `team` as seen from `viewer` (0 = the viewer's team). */
+/** Team `team` as seen from `viewer` (0 = the viewer's team) at a table of fixed teams. */
 export function relativeTeam(team: number, viewer: number): number {
   return (team + viewer) % 2;
 }
 
+// MARK: Finding Friends from a view (Swift `SeatView` conveniences)
+
+/** True at a table with an odd number of players: no fixed teams, the dealer calls friends. */
+export function viewFindsFriends(view: SeatView): boolean {
+  return tableFindsFriends(viewTable(view));
+}
+
+/** True if `seat` is known to be on the dealer's side (with Finding Friends: the dealer or a friend found). */
+export function viewIsDeclarer(view: SeatView, seat: number): boolean {
+  if (view.dealer === null) return false;
+  if (viewFindsFriends(view)) return seat === view.dealer || (view.friendCalls ?? []).some((call) => call.friend === seat);
+  return teamOf(seat) === teamOf(view.dealer);
+}
+
+/**
+ * True if `seat` is against the dealer's side. With Finding Friends a hidden friend counts as a
+ * defender until they play the called card.
+ */
+export function viewIsDefender(view: SeatView, seat: number): boolean {
+  return view.dealer !== null && !viewIsDeclarer(view, seat);
+}
+
+/**
+ * Team of the dealer (viewer-relative), null before the dealer is known. With Finding Friends: 0
+ * while the viewer is the dealer or a friend found so far, else 1.
+ */
+export function viewDeclarerTeam(view: SeatView): number | null {
+  if (view.dealer === null) return null;
+  return viewFindsFriends(view) ? (viewIsDeclarer(view, 0) ? 0 : 1) : teamOf(view.dealer);
+}
+
+/**
+ * The dealer's side as far as anyone can see, the dealer first and then in play order: the dealer's
+ * team, or with Finding Friends the dealer and the friends found so far. Empty before the dealer is
+ * known.
+ */
+export function viewDeclarers(view: SeatView): number[] {
+  const dealer = view.dealer;
+  if (dealer === null) return [];
+  const n = viewTable(view).players;
+  const seats = viewFindsFriends(view)
+    ? [dealer, ...(view.friendCalls ?? []).flatMap((call) => (call.friend === null ? [] : [call.friend]))]
+    : Array.from({ length: n }, (_, seat) => seat).filter((seat) => teamOf(seat) === teamOf(dealer));
+  return [...new Set(seats)].sort((a, b) => normalizeSeat(a - dealer, n) - normalizeSeat(b - dealer, n));
+}
+
+/** Friends called but not played yet. */
+export function viewFriendsToFind(view: SeatView): number {
+  return (view.friendCalls ?? []).filter((call) => call.friend === null).length;
+}
+
+/** Every card played this round: finished tricks, then the trick in progress. */
+export function viewPlayedCards(view: SeatView): Card[] {
+  const cards: Card[] = [];
+  for (const trick of view.tricks) for (const play of trick.plays) cards.push(...play.cards);
+  for (const play of view.currentTrick) cards.push(...play.cards);
+  return cards;
+}
 
 function rotateTeams<T>(values: readonly T[], viewer: number): T[] {
   if (values.length !== 2) return values.slice();
@@ -125,61 +203,14 @@ function rotateTrick(t: TrickRecord, viewer: number, players: number): TrickReco
   };
 }
 
-function rotateResult(r: RoundResult, viewer: number, players: number): RoundResult {
-  return {
-    dealer: relativeSeat(r.dealer, viewer, players),
-    declarerTeam: relativeTeam(r.declarerTeam, viewer),
-    trump: { rank: r.trump.rank, suit: r.trump.suit },
-    trickPoints: r.trickPoints,
-    kittyPoints: r.kittyPoints,
-    kittyMultiplier: r.kittyMultiplier,
-    defenderPoints: r.defenderPoints,
-    outcome: { declarersHold: r.outcome.declarersHold, levels: r.outcome.levels, summary: r.outcome.summary },
-    kitty: r.kitty.slice(),
-    lastTrickWinner: relativeSeat(r.lastTrickWinner, viewer, players),
-  };
-}
-
-function copySummary(s: RoundSummary): RoundSummary {
-  return structuredClone(s);
-}
-
-/**
- * The same summary from `viewer`'s point of view at a table of `players`: seats and teams rotated,
- * explanation rewritten so the viewer's team is "Your team". Swift
- * `RoundSummary.rotated(by:target:players:)`.
- */
-export function rotateSummary(summary: RoundSummary, viewer: number, target: Rank, players = 4): RoundSummary {
-  const n = tableSize(players).players;
-  const v = normalizeSeat(viewer, n);
-  if (v === 0) return copySummary(summary);
-  const result = rotateResult(summary.result, v, n);
-  const after = rotateTeams(summary.levelsAfter, v);
-  const benefiting = result.outcome.declarersHold ? result.declarerTeam : 1 - result.declarerTeam;
-  const next = relativeSeat(summary.nextDealer, v, n);
-  const gameWinner = summary.gameWinner === null ? null : relativeTeam(summary.gameWinner, v);
-  const explanation = explainRound({
-    result,
-    team: benefiting,
-    nominal: result.outcome.levels,
-    gained: summary.levelsGained,
-    newLevel: after[benefiting],
-    gameWinner,
-    target,
-    nextDealer: next,
-    nextLevel: after[next % 2],
-    players: n,
+/** Levels as the viewer sees them: [their team, other team], or with Finding Friends one per seat, theirs first. */
+function viewLevels(game: GameState, round: Round, viewer: number): Rank[] {
+  const n = roundPlayers(round);
+  if (!roundFindsFriends(round)) return rotateTeams(game.levels, viewer);
+  return Array.from({ length: n }, (_, i) => {
+    const index = (i + viewer) % n;
+    return index < game.levels.length ? game.levels[index] : round.trumpRank;
   });
-  return {
-    result,
-    advancingTeam: summary.advancingTeam === null ? null : relativeTeam(summary.advancingTeam, v),
-    levelsGained: summary.levelsGained,
-    levelsBefore: rotateTeams(summary.levelsBefore, v),
-    levelsAfter: after,
-    nextDealer: next,
-    gameWinner,
-    explanation,
-  };
 }
 
 /** Structural equality of JSON-like values (Swift `==` on value types). */
@@ -255,10 +286,17 @@ export function toSeatView(game: GameState, round: Round, viewer: number, player
     };
   }
   const last = game.history.length > 0 ? game.history[game.history.length - 1] : null;
+  const winnerTeam =
+    game.winner === null ? null : last === null ? game.winner : resultTeamRotation(last.result, v, n)(game.winner);
+  // Friend calls are made when burying: shown from then on (seats rotated), never while dealing or burying.
+  const friendCalls =
+    roundFindsFriends(round) && round.phase !== "dealing" && round.phase !== "burying"
+      ? friendCallsOf(round).map((call) => rotateFriendCall(call, v, n))
+      : null;
 
   return {
     players: rotatedPlayers,
-    teamLevels: rotateTeams(game.levels, v),
+    teamLevels: viewLevels(game, round, v),
     targetRank: game.settings.targetRank,
     roundNumber: roundNumber(game, round),
     phase: viewPhase(round),
@@ -283,6 +321,7 @@ export function toSeatView(game: GameState, round: Round, viewer: number, player
     defenderTrickPoints: round.defenderTrickPoints,
     result: round.result === null ? null : rotateResult(round.result, v, n),
     lastRoundSummary: last === null ? null : rotateSummary(last, v, game.settings.targetRank, n),
-    gameWinnerTeam: game.winner === null ? null : relativeTeam(game.winner, v),
+    gameWinnerTeam: winnerTeam,
+    friendCalls,
   };
 }

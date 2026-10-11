@@ -179,10 +179,35 @@ export function finishBidding(round: Round, rng: Rng, declarePercent = 30): void
   }
 }
 
-/** The dealer buries random cards (8, or 6 with 6 players). */
+/**
+ * Random legal friend calls for the round's dealer (Finding Friends; none at a table of fixed
+ * teams): mostly aces and kings, sometimes any suited card or a later copy, sometimes a card the
+ * dealer holds (so the dealer can turn out to be their own friend).
+ */
+export function randomCalls(round: Round, rng: Rng): E.FriendCall[] {
+  const table = E.roundTable(round);
+  const needed = E.tableFriendCount(table);
+  const hand = round.dealer === null ? [] : round.hands[round.dealer];
+  const calls: E.FriendCall[] = [];
+  while (calls.length < needed) {
+    const roll = rng.below(100);
+    const own = hand.filter((card) => !E.isJoker(card) && E.rankOf(card) !== round.trumpRank);
+    const face = roll < 15 && own.length > 0
+      ? E.faceOf(rng.pick(own))
+      : E.regularFace(roll < 70 ? (rng.chance(70) ? 14 : 13) : rng.pick(E.ALL_RANKS), rng.pick(E.ALL_SUITS));
+    if (E.rankOf(face) === round.trumpRank) continue;
+    const ordinal = rng.chance(75) ? 1 : 1 + rng.below(table.decks);
+    if (calls.some((call) => call.face === face && call.ordinal === ordinal)) continue;
+    calls.push(E.friendCall(face, ordinal));
+  }
+  return calls;
+}
+
+/** The dealer buries random cards (as many as the kitty holds), calling random friends at odd tables. */
 export function randomBury(round: Round, rng: Rng): void {
   const dealer = round.dealer as number;
-  assert.equal(E.bury(round, rng.sample(round.hands[dealer], E.kittySizeOf(round)), dealer), null);
+  const calls = randomCalls(round, rng);
+  assert.equal(E.bury(round, rng.sample(round.hands[dealer], E.kittySizeOf(round)), dealer, calls), null);
 }
 
 /** One random legal play by the seat whose turn it is. */

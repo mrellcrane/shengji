@@ -5,6 +5,7 @@
 import { isIdShape } from "../auth/crypto.ts";
 import { MAX_CARD_COUNT, TABLE_PLAYERS, isCard } from "../engine/cards.ts";
 import type { Card, Rank } from "../engine/cards.ts";
+import { parseFriendCalls } from "../engine/friends.ts";
 import { parseDeclaration } from "../engine/round.ts";
 import { isBotLevel } from "../game/bots.ts";
 import type { Device, GameRequest, SeatRequest } from "../hub/service.ts";
@@ -18,8 +19,13 @@ export const LIMITS = {
   clubName: 40,
   identityToken: 8192,
   devSecret: 256,
-  /** The most cards a hand holds (the dealer while burying: 26 and a kitty of 8 with 8 players). */
-  maxCards: 34,
+  /**
+   * The most cards a hand holds (the dealer while burying: 31 and a kitty of 7 with 5 players, 29
+   * and 9 with 9).
+   */
+  maxCards: 38,
+  /** The most friend calls a bury may carry (3 are needed with 9 players; more are refused by the engine). */
+  maxCalls: 8,
 };
 
 export const TARGET_RANKS: readonly Rank[] = [5, 10, 14];
@@ -90,11 +96,20 @@ export function parseActionRequest(body: unknown): Result<ActionRequest> {
       if (declaration === null) return badRequest("That declaration is not well formed.");
       return ok({ version, action: { type: "bid", declaration } });
     }
-    case "bury":
+    case "bury": {
+      const cards = parseCards(action.cards, LIMITS.maxCards);
+      if (cards === null) return badRequest(`cards must be a list of card ids (0 to ${MAX_CARD_COUNT - 1}).`);
+      // Finding Friends: the friends called with the burial (absent or empty at a table of fixed teams).
+      const calls = action.calls === undefined || action.calls === null ? [] : parseFriendCalls(action.calls, LIMITS.maxCalls);
+      if (calls === null) {
+        return badRequest(`calls must be a list of at most ${LIMITS.maxCalls} {"face": 0 to 53, "ordinal": n}.`);
+      }
+      return ok({ version, action: { type: "bury", cards, calls } });
+    }
     case "play": {
       const cards = parseCards(action.cards, LIMITS.maxCards);
       if (cards === null) return badRequest(`cards must be a list of card ids (0 to ${MAX_CARD_COUNT - 1}).`);
-      return ok({ version, action: { type: action.type, cards } });
+      return ok({ version, action: { type: "play", cards } });
     }
     default:
       return badRequest("action.type must be bid, pass, bury or play.");
@@ -114,7 +129,7 @@ export function parseGameRequest(body: unknown): Result<GameRequest> {
   if (!isObject(body)) return badRequest("Send {\"clubId\", \"seats\", \"targetRank\"}.");
   if (typeof body.clubId !== "string" || !isIdShape(body.clubId, "c")) return badRequest("clubId is not a club id.");
   if (!Array.isArray(body.seats) || !TABLE_PLAYERS.includes(body.seats.length)) {
-    return badRequest("seats must list 4, 6 or 8 seats.");
+    return badRequest("seats must list 4 to 9 seats.");
   }
   const seats: SeatRequest[] = [];
   for (const value of body.seats) {

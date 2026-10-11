@@ -201,3 +201,41 @@ test("tables of 6 and 8: bidding views rotate every seat; the dealer of 6 sees a
   assert.deepEqual([dealerView.dealer, dealerView.turn, dealerView.kitty?.length, dealerView.hand.length], [0, 0, 6, 32]);
   assert.equal(E.toSeatView(game, round, 1, seats).kitty, null);
 });
+
+test("tables of 5, 7 and 9: a level per seat (yours first), your side's win, and lines naming the dealer's side", () => {
+  const five: E.SeatPlayer[] = ["Mei", "Panda Bot", "Lin", "Dragon Bot", "Sam"].map((name) => ({
+    name,
+    isBot: name.endsWith("Bot"),
+    userID: name.endsWith("Bot") ? null : `u_${name.toLowerCase()}`,
+  }));
+  const game: GameSnapshot = { ...snapshot, players: five, levels: [2, 3, 4, 5, 6], turn: 4, lastEvent: null };
+  assert.deepEqual(summarize(game, 2).teamLevels, [4, 5, 6, 2, 3]);
+  assert.deepEqual(summarize(game, 4).teamLevels, [6, 2, 3, 4, 5]);
+  assert.deepEqual(summarize(game, null).teamLevels, [2, 3, 4, 5, 6], "someone not seated sees seat order from seat 0");
+  assert.deepEqual([summarize(game, 4).turn, summarize(game, 4).yourTurn], [0, true]);
+  // The game is won by the dealer's side of the last round (here seats 1 and 3): 0 for them, 1 for the others.
+  const won: GameSnapshot = { ...game, status: "finished", turn: null, winner: 1, winners: [1, 3] };
+  assert.deepEqual([0, 1, 2, 3, 4, null].map((v) => summarize(won, v).winnerTeam), [1, 0, 1, 0, 1, 1]);
+  assert.deepEqual(Object.keys(summarize(won, 1)).sort(), Object.keys(summarize(snapshot, 1)).sort(), "the same fields as ever");
+
+  // Burying: the friends called are public.
+  const aceOfSpades = E.friendCall(E.regularFace(14, 0));
+  const bury: GameEvent = { type: "bury", seat: 2, calls: [aceOfSpades] };
+  assert.equal(eventText(bury, five, 2), "You buried the kitty and called the first A♠");
+  assert.equal(eventText(bury, five, null), "Lin buried the kitty and called the first A♠");
+  assert.equal(eventText({ ...bury, calls: [aceOfSpades, E.friendCall(E.regularFace(13, 1), 2)] }, five, 0),
+    "Lin buried the kitty and called the first A♠ and the second K♥");
+  assert.equal(eventText({ type: "bury", seat: 2, calls: [] }, five, 0), "Lin buried the kitty");
+
+  // Rounds: the dealer's side by name (the dealer first), or the defenders.
+  const round = (side: number[], tookOver: boolean, levelsGained: number, gameWinner: number | null): GameEvent => ({
+    type: "round", round: 3, team: 1, tookOver, levelsGained, newLevel: 5, gameWinner, side,
+  });
+  assert.equal(eventText(round([2, 4, 1], false, 2, null), five, null), "Round 3: Lin, Sam and Panda Bot kept the deal and went up 2 levels");
+  assert.equal(eventText(round([2, 4, 1], false, 2, null), five, 4), "Round 3: Lin, you and Panda Bot kept the deal and went up 2 levels");
+  assert.equal(eventText(round([4], false, 0, null), five, 4), "Round 3: you kept the deal");
+  assert.equal(eventText(round([2, 4], true, 0, null), five, 0), "Round 3: the defenders took over the deal");
+  assert.equal(eventText(round([2, 4], true, 1, null), five, 2), "Round 3: the defenders took over the deal and went up 1 level");
+  assert.equal(eventText(round([2, 0], false, 1, 0), five, 0), "Round 3: Lin and you won the game");
+  assert.equal(eventText(round([2, 0], false, 1, 0), five, 3), "Round 3: Lin and Mei won the game");
+});

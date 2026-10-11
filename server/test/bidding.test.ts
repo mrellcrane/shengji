@@ -398,19 +398,22 @@ test("random bidding: every rule holds over many deals", () => {
   assert.ok(declarationsSeen > 300 && allPassed > 20, `declarations ${declarationsSeen}, all passed ${allPassed}`);
 });
 
-test("tables of 6 and 8: every other player must pass after a declaration, everyone without one", () => {
+test("tables of 5 to 9: every other player must pass after a declaration, everyone without one", () => {
   const rng = seededRandom(68);
   const seen = { declarations: 0, allPassed: 0, sets: 0 };
-  for (let n = 0; n < 240; n++) {
-    const table = E.tableSize(n % 2 === 0 ? 6 : 8);
+  for (let n = 0; n < 300; n++) {
+    const table = E.tableSize([6, 8, 5, 7, 9][n % 5]);
     const players = table.players;
     const rank = E.ALL_RANKS[rng.below(13)];
     const dealer = rng.chance(30) ? null : rng.below(players);
     const round = E.newRound(rank, dealer, rng.shuffle(E.deckCards(table.decks)), table);
     const firstBidder = dealer ?? rng.below(players);
     ok(E.startBidding(round, firstBidder));
-    // Every card but the kitty is dealt: 26 each, a kitty of 6 or 8.
-    assert.deepEqual(round.hands.map((h) => h.length), new Array(players).fill(26));
+    // Every card but the kitty is dealt: 26 each with 6 or 8 (a kitty of 6 or 8), 31 with 5 (7), 30
+    // with 7 (6), 29 with 9 (9).
+    const handSize = E.handSizeOf(round);
+    assert.equal(handSize, { 5: 31, 6: 26, 7: 30, 8: 26, 9: 29 }[players]);
+    assert.deepEqual(round.hands.map((h) => h.length), new Array(players).fill(handSize));
     assert.equal(round.kitty.length, E.kittySizeOf(round));
     let expectedTurn = firstBidder;
     let passes = 0;
@@ -441,7 +444,8 @@ test("tables of 6 and 8: every other player must pass after a declaration, every
     if (declared === null) seen.allPassed++;
     const expectedDealer = dealer ?? declared?.player ?? firstBidder;
     assert.equal(round.dealer, expectedDealer);
-    assert.deepEqual(round.hands.map((h) => h.length), E.allSeats(players).map((s) => (s === expectedDealer ? 26 + E.kittySizeOf(round) : 26)));
+    assert.deepEqual(round.hands.map((h) => h.length),
+      E.allSeats(players).map((s) => (s === expectedDealer ? handSize + E.kittySizeOf(round) : handSize)));
   }
   assert.ok(seen.declarations > 150 && seen.allPassed > 10 && seen.sets > 5, JSON.stringify(seen));
 });

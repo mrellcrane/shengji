@@ -1,7 +1,7 @@
 // Cards, suits, ranks and table sizes. Port of ShengjiCore/Sources/ShengjiCore/Engine/Card.swift.
 //
 // Wire format (DESIGN.md, Online multiplayer): a card is its Swift `Card.id`, an integer equal to
-// `face index + copy * 54`: 0...107 with two decks (4 players), up to 0...215 with four (8 players).
+// `face index + copy * 54`: 0...107 with two decks (4 players), up to 0...269 with five (9 players).
 // Face indices are 0...51 for regular cards (suit * 13 + rank - 2), 52 for the small joker and 53
 // for the big joker. Every face exists once per deck (copy 0, 1, ...). Because face indices are also
 // the ids of the copy-0 cards, every function below that takes a card also accepts a face index.
@@ -12,7 +12,7 @@ export type Suit = 0 | 1 | 2 | 3;
 /** Natural rank 2...14 (11 = jack, 12 = queen, 13 = king, 14 = ace), as Swift `Rank.rawValue`. */
 export type Rank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 
-/** A physical card: its id, 0...107 with two decks, up to 0...215 with four. */
+/** A physical card: its id, 0...107 with two decks, up to 0...269 with five. */
 export type Card = number;
 
 /** What is printed on a card, ignoring the copy: 0...53. Two cards with the same face form a pair. */
@@ -35,8 +35,8 @@ export const BIG_JOKER_FACE: Face = 53;
 export const FACE_COUNT = 54;
 /** Cards in the classic game's two decks (4 players). */
 export const DECK_SIZE = 108;
-/** The most decks a table uses (eight players), and so the number of card ids. */
-export const MAX_DECKS = 4;
+/** The most decks a table uses (nine players), and so the number of card ids. */
+export const MAX_DECKS = 5;
 export const MAX_CARD_COUNT = FACE_COUNT * MAX_DECKS;
 
 // MARK: Suits
@@ -121,7 +121,7 @@ export function advanceRank(rank: Rank, steps: number, cap: Rank = ACE): Rank {
 
 // MARK: Faces and cards
 
-/** True for a card id of any table (0...215); `isCardOf` checks one table's range. */
+/** True for a card id of any table (0...269); `isCardOf` checks one table's range. */
 export function isCard(value: unknown): value is Card {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < MAX_CARD_COUNT;
 }
@@ -242,7 +242,7 @@ export function doubleDeck(): Card[] {
 }
 
 /**
- * `decks` full decks with their jokers (54 cards each, at most 4 decks), deck by deck: the Swift
+ * `decks` full decks with their jokers (54 cards each, at most 5 decks), deck by deck: the Swift
  * `Deck.cards(decks:)` order, which is id order (0 up to 54 * decks - 1).
  */
 export function deckCards(decks: number): Card[] {
@@ -267,27 +267,26 @@ export function isFullDeck(deck: readonly unknown[], decks = 2): deck is Card[] 
 // MARK: Tables
 
 /**
- * How many play and with how many decks (Swift `TableSize`). Teams sit alternately (team = seat % 2),
- * so every size keeps two fixed teams: 4 players use 2 decks, 6 use 3 and 8 use 4.
+ * How many play and with how many decks (Swift `TableSize`): half a deck per player, rounded up (4
+ * players use 2 decks, 5 and 6 use 3, 7 and 8 use 4, 9 use 5). With an even number of players teams
+ * sit alternately (team = seat % 2). With an odd number nobody has fixed partners: every round the
+ * dealer calls friends (Finding Friends, 找朋友), see `tableFindsFriends` and engine/friends.ts.
  */
 export interface TableSize {
   players: number;
   decks: number;
 }
 
-/** The player counts a table can have. */
-export const TABLE_PLAYERS: readonly number[] = [4, 6, 8];
+/** The player counts a table can have (Swift `TableSize.playerCounts`). */
+export const TABLE_PLAYERS: readonly number[] = [4, 5, 6, 7, 8, 9];
 
 /**
- * The table for `players` seats: 4, 6 or 8 with half a deck each; other counts round to the
- * nearest of those (ties to the smaller), as Swift `TableSize(players:)`.
+ * The table for `players` seats: 4 to 9 with half a deck each, rounded up; other counts are clamped
+ * to that range, as Swift `TableSize(players:)`.
  */
 export function tableSize(players: number): TableSize {
-  let count = 4;
-  for (const option of TABLE_PLAYERS) {
-    if (Math.abs(option - players) < Math.abs(count - players)) count = option;
-  }
-  return { players: count, decks: count / 2 };
+  const count = Number.isFinite(players) ? Math.min(Math.max(Math.trunc(players), 4), 9) : 4;
+  return { players: count, decks: Math.floor((count + 1) / 2) };
 }
 
 /** The classic game: 4 players, 2 decks. */
@@ -303,7 +302,7 @@ export function tableCardCount(table: TableSize): number {
   return FACE_COUNT * table.decks;
 }
 
-/** Cards left for the kitty: 8 with 4 or 8 players, 6 with 6. */
+/** Cards left for the kitty: 8 with 4 or 8 players, 7 with 5, 6 with 6 or 7, 9 with 9. */
 export function tableKittySize(table: TableSize): number {
   let size = tableCardCount(table) % table.players;
   if (size === 0) size = table.players;
@@ -311,7 +310,7 @@ export function tableKittySize(table: TableSize): number {
   return size;
 }
 
-/** Cards dealt to each player: 25 with 4 players, 26 with 6 or 8. */
+/** Cards dealt to each player: 25 with 4 players, 31 with 5, 26 with 6 or 8, 30 with 7, 29 with 9. */
 export function tableHandSize(table: TableSize): number {
   return (tableCardCount(table) - tableKittySize(table)) / table.players;
 }
@@ -319,4 +318,25 @@ export function tableHandSize(table: TableSize): number {
 /** Points in all the cards: 100 per deck. */
 export function tableTotalPoints(table: TableSize): number {
   return 100 * table.decks;
+}
+
+/**
+ * Finding Friends (找朋友): an odd number of players can't split into two fixed teams, so every
+ * round the dealer calls friends by naming cards, and everyone keeps their own level.
+ */
+export function tableFindsFriends(table: TableSize): boolean {
+  return table.players % 2 === 1;
+}
+
+/** Friends the dealer calls: 1 with 5 players, 2 with 7, 3 with 9 (none at a table of fixed teams). */
+export function tableFriendCount(table: TableSize): number {
+  return tableFindsFriends(table) ? Math.floor(table.players / 2) - 1 : 0;
+}
+
+/**
+ * Players per team: half the table, or with Finding Friends the most the dealer's side can hold
+ * (the dealer and every friend called).
+ */
+export function tableTeamSize(table: TableSize): number {
+  return tableFindsFriends(table) ? tableFriendCount(table) + 1 : Math.floor(table.players / 2);
 }

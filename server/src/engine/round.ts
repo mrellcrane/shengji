@@ -24,12 +24,16 @@ import {
   suitOf,
   suitSymbol,
   tableCardCount,
+  tableFindsFriends,
   tableHandSize,
   tableKittySize,
   tableSize,
+  tableTeamSize,
   totalPoints,
 } from "./cards.ts";
 import type { Card, Rank, Suit, TableSize } from "./cards.ts";
+import { copyCall, friendCallProblem, notingFriends, parseFriendCalls, rotateFriendCall, sameCalls } from "./friends.ts";
+import type { FriendCall } from "./friends.ts";
 import {
   HUMAN_SEAT,
   checkThrow,
@@ -46,7 +50,7 @@ import {
   winningIndex,
 } from "./rules.ts";
 import type { FollowViolation, LeadViolation, Play } from "./rules.ts";
-import { kittyMultiplier, scoreOutcome } from "./scoring.ts";
+import { findingFriendsOutcome, kittyMultiplier, scoreOutcome } from "./scoring.ts";
 import type { LevelOutcome } from "./scoring.ts";
 import type { Trump } from "./trump.ts";
 
@@ -176,6 +180,10 @@ export function trickLeader(trick: TrickRecord): number {
 
 export interface RoundResult {
   dealer: number;
+  /**
+   * The dealer's team. With Finding Friends there are no fixed teams and team 0 means seat 0's side
+   * (in a seat view, the viewer's): 0 when seat 0 was on the dealer's side, else 1.
+   */
   declarerTeam: number;
   trump: Trump;
   /** Points the defenders captured in tricks. */
@@ -189,6 +197,58 @@ export interface RoundResult {
   outcome: LevelOutcome;
   kitty: Card[];
   lastTrickWinner: number;
+  /**
+   * Finding Friends only (absent at a table of fixed teams): the dealer's side when the round ended,
+   * the dealer first and then in play order.
+   */
+  declarers?: number[];
+  /** Finding Friends only: the friends the dealer called and who turned out to be each one. */
+  friendCalls?: FriendCall[];
+}
+
+/** True if `seat` was on the dealer's side (with fixed teams: the dealer's team). Swift `RoundResult.isDeclarer`. */
+export function resultIsDeclarer(result: RoundResult, seat: number): boolean {
+  if (result.declarers !== undefined) return result.declarers.includes(seat);
+  return teamOf(seat) === result.declarerTeam;
+}
+
+/**
+ * How team numbers change when `viewer` becomes seat 0: with fixed teams (t + viewer) % 2; with
+ * Finding Friends (team 0 = seat 0's side) they swap when the viewer was on the other side from
+ * seat 0. Swift `RoundResult.teamRotation(of:by:players:)`.
+ */
+export function resultTeamRotation(result: RoundResult, viewer: number, players: number): (team: number) => number {
+  const v = normalizeSeat(viewer, players);
+  if (result.declarers === undefined) return (team) => (team + v) % 2;
+  const sameSide = resultIsDeclarer(result, v) === resultIsDeclarer(result, 0);
+  return (team) => (sameSide ? team : 1 - team);
+}
+
+/**
+ * The same result from `viewer`'s point of view (seats and teams rotated) at a table of `players`.
+ * Swift `RoundResult.rotated(by:players:)`. Always a copy.
+ */
+export function rotateResult(r: RoundResult, viewer: number, players: number): RoundResult {
+  const n = Math.max(players, 1);
+  const v = normalizeSeat(viewer, n);
+  if (v === 0) return structuredClone(r);
+  const seat = (s: number): number => normalizeSeat(s - v, n);
+  const team = resultTeamRotation(r, v, n);
+  const out: RoundResult = {
+    dealer: seat(r.dealer),
+    declarerTeam: team(r.declarerTeam),
+    trump: { rank: r.trump.rank, suit: r.trump.suit },
+    trickPoints: r.trickPoints,
+    kittyPoints: r.kittyPoints,
+    kittyMultiplier: r.kittyMultiplier,
+    defenderPoints: r.defenderPoints,
+    outcome: { declarersHold: r.outcome.declarersHold, levels: r.outcome.levels, summary: r.outcome.summary },
+    kitty: r.kitty.slice(),
+    lastTrickWinner: seat(r.lastTrickWinner),
+  };
+  if (r.declarers !== undefined) out.declarers = r.declarers.map(seat);
+  if (r.friendCalls !== undefined) out.friendCalls = r.friendCalls.map((call) => rotateFriendCall(call, v, n));
+  return out;
 }
 
 /** Outcome of a successful `play`. */
@@ -248,15 +308,15 @@ export interface Bidding {
 
 /**
  * The complete state of one deal, from dealing to scoring. Field meanings match the Swift `Round`.
- * The table (4, 6 or 8 players) is the number of hands (`roundTable`).
+ * The table (4 to 9 players) is the number of hands (`roundTable`).
  */
 export interface Round {
-  /** Trump rank for this round (the dealer team's level). */
+  /** Trump rank for this round (the dealer team's level; with Finding Friends the dealer's own level). */
   trumpRank: Rank;
   /** Dealer (庄家). Null only during the first round's deal, before anyone has declared. */
   dealer: number | null;
   phase: RoundPhase;
-  /** One hand per seat (4, 6 or 8), indexed by seat. Not kept sorted; use `sortCards` for display. */
+  /** One hand per seat (4 to 9), indexed by seat. Not kept sorted; use `sortCards` for display. */
   hands: Card[][];
   /** Cards still to be dealt (dealing phase). */
   undealt: Card[];
@@ -286,6 +346,12 @@ export interface Round {
   result: RoundResult | null;
   /** Online turn-based declaring; null in the offline deal-and-declare flow. */
   bidding: Bidding | null;
+  /**
+   * Finding Friends (tables of 5, 7 or 9): the friends the dealer called when burying (empty before),
+   * each with the seat that played the called copy once it has been played. Absent at tables of
+   * fixed teams (and in rounds stored before Finding Friends existed); read it with `friendCallsOf`.
+   */
+  friendCalls?: FriendCall[];
 }
 
 /**
@@ -305,7 +371,7 @@ export function newRound(trumpRank: Rank, dealer: number | null, deck: readonly 
   if (dealer !== null && !Number.isInteger(dealer)) throw new RangeError(`dealer must be an integer, got ${dealer}`);
   const seat = dealer === null ? null : normalizeSeat(dealer, size.players);
   const dealtCount = count - tableKittySize(size);
-  return {
+  const round: Round = {
     trumpRank,
     dealer: seat,
     phase: "dealing",
@@ -324,11 +390,30 @@ export function newRound(trumpRank: Rank, dealer: number | null, deck: readonly 
     result: null,
     bidding: null,
   };
+  if (tableFindsFriends(size)) round.friendCalls = [];
+  return round;
 }
 
-/** Players and decks at this round's table (from its number of hands: 4, 6 or 8). */
+/** Players and decks at this round's table (from its number of hands: 4 to 9). */
 export function roundTable(round: Round): TableSize {
   return tableSize(round.hands.length);
+}
+
+/**
+ * True at a table with an odd number of players: the dealer calls friends (`friendCallsOf`) instead
+ * of having fixed partners. Swift `Round.isFindingFriends`.
+ */
+export function roundFindsFriends(round: Round): boolean {
+  return tableFindsFriends(roundTable(round));
+}
+
+/**
+ * Finding Friends: the friends the dealer called (empty before burying and at tables of fixed
+ * teams), each with the seat that turned out to be it once the card has been played. Swift
+ * `Round.friendCalls`.
+ */
+export function friendCallsOf(round: Round): FriendCall[] {
+  return round.friendCalls ?? [];
 }
 
 /** Number of seats at the round's table. */
@@ -336,12 +421,12 @@ export function roundPlayers(round: Round): number {
   return roundTable(round).players;
 }
 
-/** Cards the dealer picks up and buries: 8 with 4 or 8 players, 6 with 6. */
+/** Cards the dealer picks up and buries: 8 with 4 or 8 players, 7 with 5, 6 with 6 or 7, 9 with 9. */
 export function kittySizeOf(round: Round): number {
   return tableKittySize(roundTable(round));
 }
 
-/** Cards dealt to each player: 25 with 4 players, 26 with 6 or 8. */
+/** Cards dealt to each player: 25 with 4 players, 31 with 5, 26 with 6 or 8, 30 with 7, 29 with 9. */
 export function handSizeOf(round: Round): number {
   return tableHandSize(roundTable(round));
 }
@@ -612,12 +697,24 @@ export function bid(round: Round, seat: number, choice: Declaration | "pass"): R
 
 /**
  * Dealer buries exactly `kittySizeOf(round)` cards (8 from 33 with 4 players) -> "playing", dealer
- * leads. When `player` is given (online), it must be the dealer (else notYourTurn).
+ * leads. When `player` is given (online), it must be the dealer (else notYourTurn). With Finding
+ * Friends the dealer calls their friends at the same time: exactly `tableFriendCount` `calls` (see
+ * `friendCallProblem`, checked before the cards); at a table of fixed teams `calls` must be empty.
  */
-export function bury(round: Round, cards: readonly Card[], player?: number): RoundError | null {
+export function bury(
+  round: Round,
+  cards: readonly Card[],
+  player?: number,
+  calls: readonly FriendCall[] = [],
+): RoundError | null {
   const seat = round.dealer;
   if (round.phase !== "burying" || seat === null) return { case: "wrongPhase" };
   if (player !== undefined && player !== seat) return { case: "notYourTurn" };
+  // A malformed value (e.g. straight from a client) is refused, never thrown on.
+  const called = parseFriendCalls(calls, Number.MAX_SAFE_INTEGER);
+  if (called === null) return { case: "invalidBury", reason: "Those friend calls are not well formed." };
+  const problem = friendCallProblem(called, roundTable(round), round.trumpRank);
+  if (problem !== null) return { case: "invalidBury", reason: problem };
   const size = kittySizeOf(round);
   if (cards.length !== size) {
     return {
@@ -634,6 +731,7 @@ export function bury(round: Round, cards: readonly Card[], player?: number): Rou
   }
   round.hands[seat] = left;
   round.kitty = cards.slice();
+  if (roundFindsFriends(round)) round.friendCalls = called;
   round.phase = "playing";
   round.leader = seat;
   return null;
@@ -647,15 +745,45 @@ export function turn(round: Round): number | null {
   return (round.leader + round.currentTrick.length) % roundPlayers(round);
 }
 
-/** Team of the dealer (null before the dealer is known). */
+/**
+ * Team of the dealer (null before the dealer is known). With Finding Friends there are no fixed
+ * teams and team 0 means seat 0's side: 0 while seat 0 is the dealer or a friend found so far, else
+ * 1 (see `declarers`).
+ */
 export function declarerTeam(round: Round): number | null {
-  return round.dealer === null ? null : teamOf(round.dealer);
+  if (round.dealer === null) return null;
+  return roundFindsFriends(round) ? (isDeclarer(round, 0) ? 0 : 1) : teamOf(round.dealer);
 }
 
+/**
+ * The dealer's side, the dealer first and then in play order: the dealer's team at a table of fixed
+ * teams; with Finding Friends the dealer and every friend found so far. Empty before the dealer is
+ * known. Swift `Round.declarers`.
+ */
+export function declarers(round: Round): number[] {
+  const dealer = round.dealer;
+  if (dealer === null) return [];
+  const n = roundPlayers(round);
+  const seats = roundFindsFriends(round)
+    ? [dealer, ...friendCallsOf(round).flatMap((call) => (call.friend === null ? [] : [call.friend]))]
+    : Array.from({ length: n }, (_, seat) => seat).filter((seat) => teamOf(seat) === teamOf(dealer));
+  return [...new Set(seats)].sort((a, b) => normalizeSeat(a - dealer, n) - normalizeSeat(b - dealer, n));
+}
+
+/** True if `player` is on the dealer's side (with Finding Friends: the dealer or a friend found so far). */
+export function isDeclarer(round: Round, player: number): boolean {
+  const dealer = round.dealer;
+  if (dealer === null) return false;
+  if (roundFindsFriends(round)) return player === dealer || friendCallsOf(round).some((call) => call.friend === player);
+  return teamOf(player) === teamOf(dealer);
+}
+
+/**
+ * True if `player` is against the dealer's side. With Finding Friends a hidden friend counts as a
+ * defender until they play the called card.
+ */
 export function isDefender(round: Round, player: number): boolean {
-  const team = declarerTeam(round);
-  if (team === null) return false;
-  return teamOf(player) !== team;
+  return round.dealer !== null && !isDeclarer(round, player);
 }
 
 /** Cards of the lead of the current trick (empty if none yet). */
@@ -698,6 +826,16 @@ export function play(round: Round, cards: readonly Card[], player: number): Play
     }
   }
 
+  // Finding Friends: a play holding the called copy finds that friend, whose tricks so far move to
+  // the dealer's side.
+  const calls = round.friendCalls;
+  if (roundFindsFriends(round) && calls !== undefined && calls.some((call) => call.friend === null)) {
+    const noted = notingFriends(calls, played, player, playedCards(round));
+    if (!sameCalls(noted, calls)) {
+      round.friendCalls = noted;
+      recountDefenderPoints(round);
+    }
+  }
   round.hands[player] = removeCards(round.hands[player], played) ?? round.hands[player];
   round.currentTrick.push({ player, cards: played });
   if (round.currentTrick.length === roundPlayers(round)) completeTrick(round);
@@ -721,12 +859,22 @@ function completeTrick(round: Round): void {
   const winner = plays[winningIndex(plays, round.trump)].player;
   let points = 0;
   for (const p of plays) points += totalPoints(p.cards);
-  if (isDefender(round, winner)) round.defenderTrickPoints += points;
   const lead = plays[0].cards;
   round.tricks.push({ plays, winner, points });
+  recountDefenderPoints(round);
   round.currentTrick = [];
   round.leader = winner;
   if (round.hands.every((hand) => hand.length === 0)) finishRound(round, lead, winner);
+}
+
+/**
+ * Points the defenders hold now: every finished trick won by a player not (yet) on the dealer's
+ * side. With Finding Friends a friend's tricks move to the dealer's side when the friend is found.
+ */
+function recountDefenderPoints(round: Round): void {
+  let points = 0;
+  for (const trick of round.tricks) if (isDefender(round, trick.winner)) points += trick.points;
+  round.defenderTrickPoints = points;
 }
 
 function finishRound(round: Round, lastLead: readonly Card[], lastWinner: number): void {
@@ -734,17 +882,27 @@ function finishRound(round: Round, lastLead: readonly Card[], lastWinner: number
   const multiplier = isDefender(round, lastWinner) ? kittyMultiplier(lastLead, round.trump) : 0;
   const defenderPoints = round.defenderTrickPoints + kittyPoints * multiplier;
   const seat = round.dealer ?? 0;
-  round.result = {
+  const table = roundTable(round);
+  const friends = tableFindsFriends(table);
+  const side = declarers(round);
+  let outcome = scoreOutcome(defenderPoints, table.decks);
+  if (friends) outcome = findingFriendsOutcome(outcome, side.length, tableTeamSize(table));
+  const result: RoundResult = {
     dealer: seat,
-    declarerTeam: teamOf(seat),
+    declarerTeam: declarerTeam(round) ?? teamOf(seat),
     trump: { rank: round.trump.rank, suit: round.trump.suit },
     trickPoints: round.defenderTrickPoints,
     kittyPoints,
     kittyMultiplier: multiplier,
     defenderPoints,
-    outcome: scoreOutcome(defenderPoints, roundTable(round).decks),
+    outcome,
     kitty: round.kitty.slice(),
     lastTrickWinner: lastWinner,
   };
+  if (friends) {
+    result.declarers = side;
+    result.friendCalls = friendCallsOf(round).map(copyCall);
+  }
+  round.result = result;
   round.phase = "finished";
 }
