@@ -41,12 +41,18 @@ struct CardOrder {
 /// One seat's view of the table, plus the card values the strategies share.
 /// Built only from a `SeatView`, so only from what the seat may know (`BotKnowledge`): its own hand,
 /// the cards played, its own buried kitty and the voids other players have shown. Seats are
-/// viewer-relative: this seat is 0, its partner 2, the opponents 1 (next to play) and 3.
+/// viewer-relative: this seat is 0, its partner 2, the opponents 1 (next to play) and 3. With 6 or
+/// 8 players the partners are every even seat and the opponents every odd one.
 struct BotTable {
     let view: SeatView
     /// Always 0: the viewer.
     let seat: Int
+    /// Seats at the table (4, 6 or 8).
+    let players: Int
+    /// The partner opposite with 4 players (seat 2); with more, the first partner after this seat.
     let partner: Int
+    /// Every partner, in play order after this seat (just seat 2 with 4 players).
+    let teammates: [Int]
     /// The seat the texts are written from: other players get the compass names of a table where
     /// seat 0 is South, as seen from this seat (`Bot.seat`; 0 for hints, so the viewer is South).
     let compassSeat: Int
@@ -77,8 +83,11 @@ struct BotTable {
         let trump = view.trump
         self.view = view
         self.seat = 0
+        let players = view.playerCount
+        self.players = players
         self.partner = Seats.partner(of: 0)
-        self.compassSeat = ((compassSeat % 4) + 4) % 4
+        self.teammates = Seats.teammates(of: 0, players: players)
+        self.compassSeat = Seats.normalized(compassSeat, players: players)
         self.trump = trump
         let order = CardOrder(trump)
         self.order = order
@@ -137,32 +146,45 @@ extension BotTable {
     var isLeading: Bool { view.currentTrick.isEmpty }
 
     /// How the texts name `player` (viewer-relative): "you", "your partner", or a compass name
-    /// (the player's name instead with `usesPlayerNames`).
+    /// (the player's name instead with `usesPlayerNames`). With 6 or 8 players a partner is "your
+    /// partner Northeast" (or "your partner Lin").
     func name(_ player: Int) -> String {
-        playerName(player) ?? BotText.name(absolute(player), from: compassSeat)
+        if let name = playerName(player) {
+            return isTeammate(player) ? "your partner \(name)" : name
+        }
+        return BotText.name(absolute(player), from: compassSeat, players: players)
     }
 
     /// "your", "your partner's", "East's" (or "Lin's").
     func possessive(_ player: Int) -> String {
-        playerName(player).map { $0 + "'s" } ?? BotText.possessive(absolute(player), from: compassSeat)
+        if Seats.normalized(player, players: players) == seat { return "your" }
+        return name(player) + "'s"
     }
 
-    /// An opponent's name from the view, with `usesPlayerNames` (you and your partner keep "you" and
-    /// "your partner"); nil for a compass name.
+    /// A player's name from the view, with `usesPlayerNames`; nil for a compass name. You and, with 4
+    /// players, your partner keep "you" and "your partner".
     private func playerName(_ player: Int) -> String? {
-        let p = ((player % 4) + 4) % 4
-        guard usesPlayerNames, p != seat, p != partner, view.players.indices.contains(p) else { return nil }
+        let p = Seats.normalized(player, players: players)
+        guard usesPlayerNames, p != seat, players > 4 || p != partner, view.players.indices.contains(p) else {
+            return nil
+        }
         let name = view.players[p].name.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? nil : name
     }
 
     /// The compass seat of viewer-relative `player`.
-    private func absolute(_ player: Int) -> Int { (((player % 4) + 4) % 4 + compassSeat) % 4 }
+    private func absolute(_ player: Int) -> Int { Seats.normalized(player + compassSeat, players: players) }
 
-    /// The two opponents, the one after this seat first.
-    var opponents: [Int] { [(seat + 1) % 4, (seat + 3) % 4] }
+    /// The opponents, in play order after this seat (two with 4 players: East, then West).
+    var opponents: [Int] { Seats.opponents(of: seat, players: players) }
 
     func isOpponent(_ player: Int) -> Bool { Seats.team(of: player) != Seats.team(of: seat) }
+
+    /// A partner of this seat (not this seat itself).
+    func isTeammate(_ player: Int) -> Bool {
+        let p = Seats.normalized(player, players: players)
+        return p != seat && Seats.team(of: p) == Seats.team(of: seat)
+    }
 
     /// Own cards of a group, lowest first.
     func cards(in group: SuitGroup) -> [Card] { handGroups[group] ?? [] }
@@ -174,21 +196,44 @@ extension BotTable {
     /// Late in the round: few cards left in hand.
     var isLate: Bool { hand.count <= 8 }
 
-    /// Own cards of a group as one card per face (`singles`, lowest copy) and the faces held
-    /// twice (`pairs`), lowest first. Same cards as `Combos.components(of: .single/.pair, ...)`.
+    /// Own cards of a group as one card per face (`singles`, lowest copy) and the faces held at
+    /// least twice (`pairs`, their two lowest copies), lowest first. Same cards as
+    /// `Combos.components(of: .single/.pair, ...)`.
     func pieces(in group: SuitGroup) -> (singles: [Card], pairs: [[Card]]) {
         var singles: [Card] = []
         var pairs: [[Card]] = []
         var previous: Card?
+        var run = 0
         for card in cards(in: group) {
             if let last = previous, last.face == card.face {
-                pairs.append([last, card])
+                run += 1
+                if run == 2 { pairs.append([last, card]) }
             } else {
                 singles.append(card)
+                run = 1
             }
             previous = card
         }
         return (singles, pairs)
+    }
+
+    /// Own sets of three or more identical cards in a group (triples, four of a kind), widest first,
+    /// then lowest first. Empty with two decks.
+    func sets(in group: SuitGroup) -> [Component] {
+        let mine = cards(in: group)
+        let widest = Combos.maxCopies(mine)
+        guard widest >= 3 else { return [] }
+        var out: [Component] = []
+        for width in stride(from: widest, through: 3, by: -1) {
+            out += Combos.components(of: .set(width), in: mine, trump: trump)
+            let run = Combos.longestRun(in: mine, width: width, trump: trump)
+            if run >= 2 {
+                for length in 2...run {
+                    out += Combos.components(of: .setTractor(width: width, length: length), in: mine, trump: trump)
+                }
+            }
+        }
+        return out
     }
 
     /// Same answer as `Rules.canBeat(component, with: knowledge.unseen, trump:)`: some unseen
@@ -199,7 +244,7 @@ extension BotTable {
             return (topUnseen[group] ?? -1) > strength
         case .pair:
             return (topUnseenPair[group] ?? -1) > strength
-        case .tractor:
+        case .tractor, .set, .setTractor:
             let probe = Component(shape: shape, cards: [], group: group, topStrength: strength)
             return Rules.canBeat(probe, with: unseen(in: group), trump: trump)
         }

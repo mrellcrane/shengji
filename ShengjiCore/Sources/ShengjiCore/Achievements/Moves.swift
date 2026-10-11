@@ -252,10 +252,10 @@ public enum MoveDetector {
 
     /// True if no cards outside `seen` (and the component itself) could form a component of the same shape and
     /// suit that beats `component`: a higher single, a higher pair, or a higher tractor of the same length.
-    static func isSureWinner(_ component: Component, seen: [Card], trump: Trump) -> Bool {
+    static func isSureWinner(_ component: Component, seen: [Card], trump: Trump, decks: Int = 2) -> Bool {
         var known = Set(seen.map(\.id))
         for card in component.cards { known.insert(card.id) }
-        let unseen: [Card] = Deck.double().filter { !known.contains($0.id) && trump.group($0) == component.group }
+        let unseen: [Card] = Deck.cards(decks: decks).filter { !known.contains($0.id) && trump.group($0) == component.group }
         return !Rules.canBeat(component, with: unseen, trump: trump)
     }
 
@@ -271,9 +271,11 @@ public enum MoveDetector {
         let leadComponents = Combos.decompose(lead, trump: trump)
         let iLed = myIndex == 0
         let iWon = trick.winner == player
+        // Every seat plays to a trick, so its plays tell the table size.
+        let players = TableSize(players: plays.count).players
         let myTeam = Seats.team(of: player)
         let teamWon = Seats.team(of: trick.winner) == myTeam
-        let partnerWon = trick.winner == Seats.partner(of: player)
+        let partnerWon = trick.winner != player && teamWon
         let myGroup = Combos.group(of: mine, trump: trump)
         let wonPoints = trick.points
         var events: [MoveEvent] = []
@@ -286,7 +288,7 @@ public enum MoveDetector {
                     && Rules.matchesStructure(play.cards, lead: lead, trump: trump)
             }
             if let ruffer = earlierRuff {
-                let detail = "Overruff! \(Seats.name(ruffer.player)) trumped the \(ledSuit.singularName) lead, but your higher trump took the trick"
+                let detail = "Overruff! \(Seats.name(ruffer.player, players: players)) trumped the \(ledSuit.singularName) lead, but your higher trump took the trick"
                     + pointsTail(wonPoints, prefix: " and ") + "."
                 events.append(MoveEvent(kind: .overruff, detail: detail, points: wonPoints))
             } else {
@@ -299,7 +301,8 @@ public enum MoveDetector {
         // Feeding the partner.
         let fed = mine.points
         if !iLed, partnerWon, fed >= feedPoints {
-            let detail = "Point feed! You gave Partner \(pointsText(fed)) (\(trump.sorted(mine.filter { $0.points > 0 }).shortText)) in a trick they won."
+            let partner = players > 4 ? Seats.name(trick.winner, players: players) : "Partner"
+            let detail = "Point feed! You gave \(partner) \(pointsText(fed)) (\(trump.sorted(mine.filter { $0.points > 0 }).shortText)) in a trick they won."
             events.append(MoveEvent(kind: .feedPartner, detail: detail, points: fed))
         }
 
@@ -328,7 +331,7 @@ public enum MoveDetector {
 
         // A sure winner led in a plain suit: it won, and from what you had seen nobody could have beaten it.
         if iLed, iWon, !ledGroup.isTrump, leadComponents.count == 1, let component = leadComponents.first,
-           isSureWinner(component, seen: seen, trump: trump) {
+           isSureWinner(component, seen: seen, trump: trump, decks: TableSize(players: players).decks) {
             let detail = "Top card! Nobody could beat your \(trump.sorted(lead).shortText)"
                 + pointsTail(wonPoints, prefix: ", and it won ", bare: ", so you keep the lead") + "."
             events.append(MoveEvent(kind: .topCard, detail: detail, points: wonPoints))

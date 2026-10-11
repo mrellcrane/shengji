@@ -2,12 +2,30 @@ import Foundation
 
 /// Seats: 0 = South (the human), 1 = East, 2 = North (human's partner), 3 = West.
 /// Play goes 0 → 1 → 2 → 3 → 0 (counter-clockwise, as in China). Partners sit opposite.
+/// Bigger tables (6 or 8 players) go on round the same way: teams alternate, so the human's team is
+/// every even seat (team = seat % 2) and the seat opposite the human is a partner with 8 players and
+/// an opponent with 6. Functions without `players` are for the classic 4-player table.
 public enum Seats {
     public static let human = 0
     public static let all = [0, 1, 2, 3]
+    public static func all(players: Int) -> [Int] { Array(0..<max(players, 1)) }
     public static func team(of player: Int) -> Int { player % 2 }
     public static func partner(of player: Int) -> Int { (player + 2) % 4 }
     public static func next(after player: Int) -> Int { (player + 1) % 4 }
+    public static func next(after player: Int, players: Int) -> Int { normalized(player + 1, players: players) }
+    /// `player` as a seat in 0..<players.
+    public static func normalized(_ player: Int, players: Int) -> Int {
+        let n = max(players, 1)
+        return ((player % n) + n) % n
+    }
+    /// The other seats of `player`'s team, in play order after `player`.
+    public static func teammates(of player: Int, players: Int) -> [Int] {
+        stride(from: 2, to: players, by: 2).map { normalized(player + $0, players: players) }
+    }
+    /// The seats of the other team, in play order after `player`.
+    public static func opponents(of player: Int, players: Int) -> [Int] {
+        stride(from: 1, to: players, by: 2).map { normalized(player + $0, players: players) }
+    }
     /// Display names from the human's point of view.
     public static func name(_ player: Int) -> String {
         switch player {
@@ -15,6 +33,34 @@ public enum Seats {
         case 1: return "East"
         case 2: return "Partner"
         default: return "West"
+        }
+    }
+    /// Display names from the human's point of view at a table of `players`: the classic names with 4,
+    /// compass points round the table with 6 or 8 (you are South).
+    public static func name(_ player: Int, players: Int) -> String {
+        if players <= 4 { return name(normalized(player, players: 4)) }
+        let seat = normalized(player, players: players)
+        if seat == human { return "You" }
+        return compassName(seat, players: players)
+    }
+    /// Compass point of a seat when seat 0 is South: South, East, North, West with 4; South, Southeast,
+    /// Northeast, North, Northwest, Southwest with 6; the eight points with 8.
+    public static func compassName(_ player: Int, players: Int) -> String {
+        let seat = normalized(player, players: players)
+        switch players {
+        case 6: return ["South", "Southeast", "Northeast", "North", "Northwest", "Southwest"][seat]
+        case 8: return ["South", "Southeast", "East", "Northeast", "North", "Northwest", "West", "Southwest"][seat]
+        default: return ["South", "East", "North", "West"][normalized(seat, players: 4)]
+        }
+    }
+    /// Short labels for crowded tables: "You", "SE", "NE", ... (the classic names with 4 players).
+    public static func shortName(_ player: Int, players: Int) -> String {
+        if players <= 4 { return name(normalized(player, players: 4)) }
+        let seat = normalized(player, players: players)
+        if seat == human { return "You" }
+        switch players {
+        case 6: return ["S", "SE", "NE", "N", "NW", "SW"][seat]
+        default: return ["S", "SE", "E", "NE", "N", "NW", "W", "SW"][normalized(seat, players: 8)]
         }
     }
 }
@@ -60,6 +106,12 @@ public enum FollowViolation: Equatable, Sendable {
     case mustPlayTractor(length: Int)
     /// The player had to play at least `required` pairs from the led group.
     case mustPlayPairs(required: Int)
+    /// Three or more decks: the player holds a tractor of sets of `width` identical cards (a tractor of
+    /// triples) of the needed length in the led group but didn't play one.
+    case mustPlaySetTractor(width: Int, length: Int)
+    /// Three or more decks: the player had to play at least `required` sets of `width` identical cards
+    /// (triples, four of a kind) from the led group.
+    case mustPlaySets(width: Int, required: Int)
 
     public var explanation: String {
         switch self {
@@ -91,6 +143,26 @@ public enum FollowViolation: Equatable, Sendable {
                     + "(two identical cards)."
             }
             return "The lead contains pairs and you have pairs in that suit, so you must play at least \(required) pairs."
+        case let .mustPlaySetTractor(width, length):
+            let name = ComboShape.setTractor(width: width, length: length).name
+            return "A \(name) was led and you hold one in that suit, so you must play it."
+        case let .mustPlaySets(width, required):
+            if required <= 1 {
+                let one = width == 3 ? "a triple (three identical cards)" : "\(FollowViolation.count(width)) identical cards"
+                return "The lead calls for \(one), and you hold that in the suit led, so you must play it."
+            }
+            let many = width == 3 ? "triples" : "sets of \(FollowViolation.count(width)) identical cards"
+            return "The lead calls for \(required) \(many), and you hold that many in the suit led, so you must play them."
+        }
+    }
+
+    /// "three", "four", or the digits.
+    static func count(_ n: Int) -> String {
+        switch n {
+        case 2: return "two"
+        case 3: return "three"
+        case 4: return "four"
+        default: return String(n)
         }
     }
 }
@@ -101,10 +173,26 @@ public struct FollowRequirement: Equatable, Sendable {
     public var tractorLengths: [Int]
     /// Minimum number of pairs (counting the pairs inside required tractors) the play must contain.
     public var totalPairs: Int
+    /// Every combination the play must contain, disjoint: the tractors, then the sets (each pair
+    /// once). With two decks these are the `tractorLengths` tractors and the pairs outside them; with
+    /// more decks they can include triples, four of a kind and tractors of them.
+    public var units: [ComboShape]
+
     public init(tractorLengths: [Int], totalPairs: Int) {
         self.tractorLengths = tractorLengths
         self.totalPairs = totalPairs
+        let loose = max(0, totalPairs - tractorLengths.reduce(0, +))
+        self.units = tractorLengths.map { ComboShape.tractor($0) } + Array(repeating: .pair, count: loose)
     }
+
+    public init(units: [ComboShape]) {
+        self.units = units
+        self.tractorLengths = units.filter { $0.width == 2 && $0.isTractor }.map(\.length)
+        self.totalPairs = units.filter { $0.width == 2 }.reduce(0) { $0 + $1.length }
+    }
+
+    /// True when only pairs and tractors of pairs are owed (always the case with two decks).
+    public var isClassic: Bool { units.allSatisfy { $0.width <= 2 } }
 }
 
 /// Result of checking a multi-component lead ("throw", 甩牌).
@@ -134,10 +222,11 @@ public enum Rules {
     /// with higher strength (single: any higher card; pair: a higher pair; tractor(n): a tractor
     /// of n pairs with a higher top). Returns `.ok` for non-throws.
     public static func checkThrow(_ cards: [Card], leader: Int, hands: [[Card]], trump: Trump) -> ThrowCheck {
-        let leaderSeat = ((leader % 4) + 4) % 4
+        let seats = max(4, hands.count)
+        let leaderSeat = ((leader % seats) + seats) % seats
         var opponents: [(seat: Int, cards: [Card])] = []
-        for step in 1..<4 {
-            let seat = (leaderSeat + step) % 4
+        for step in 1..<seats {
+            let seat = (leaderSeat + step) % seats
             if hands.indices.contains(seat) { opponents.append((seat, hands[seat])) }
         }
         return throwCheck(cards, opponents: opponents, trump: trump)
@@ -157,8 +246,13 @@ public enum Rules {
         // A single card asks for no structure.
         if lead.count < 2 { return FollowRequirement(tractorLengths: [], totalPairs: 0) }
         let components = Combos.decompose(lead, trump: trump)
-        let walk = requirementWalk(components[...], remaining: suitCards, trump: trump)
-        return FollowRequirement(tractorLengths: walk.tractors, totalPairs: walk.pairs)
+        if Combos.maxCopies(lead) <= 2 && Combos.maxCopies(suitCards) <= 2 {
+            let walk = requirementWalk(components[...], remaining: suitCards, trump: trump)
+            return FollowRequirement(tractorLengths: walk.tractors, totalPairs: walk.pairs)
+        }
+        // Three or more decks: the same walk over sets of any width.
+        let walk = unitWalk(components[...], remaining: suitCards, trump: trump)
+        return FollowRequirement(units: walk.tractors + walk.sets)
     }
 
     /// Full follow legality. Returns nil if legal.
@@ -179,6 +273,9 @@ public enum Rules {
         guard held.count >= n else { return nil }
 
         let requirement = followRequirement(lead: lead, suitCards: held, trump: trump)
+        if !requirement.isClassic || Combos.maxCopies(held) > 2 {
+            return unitViolation(cards, units: requirement.units, trump: trump)
+        }
         let lengths = requirement.tractorLengths
         if !lengths.isEmpty && !containsDisjointTractors(cards, lengths: lengths, trump: trump) {
             var missing = lengths[0]
@@ -269,6 +366,10 @@ extension Rules {
             return Combos.tractors(in: own, length: length, trump: trump).contains { tractor in
                 topStrength(of: tractor, trump: trump) > component.topStrength
             }
+        case .set, .setTractor:
+            return Combos.units(of: component.shape, in: own, trump: trump).contains { unit in
+                topStrength(of: unit, trump: trump) > component.topStrength
+            }
         }
     }
 
@@ -295,7 +396,8 @@ extension Rules {
         guard let component = components.first else { return ([], 0) }
         let rest = components.dropFirst()
         switch component.shape {
-        case .single:
+        case .single, .set, .setTractor:
+            // Sets of three or more never reach this two-deck walk (see `unitWalk`).
             return requirementWalk(rest, remaining: remaining, trump: trump)
 
         case .pair:
@@ -442,6 +544,10 @@ extension Rules {
         var tractorLengths: [Int]
         /// Number of plain pair components.
         var pairs: Int
+        /// Every component bigger than a single, widest first, then longest (three or more decks).
+        var units: [ComboShape]
+        /// True when the lead is only singles, pairs and tractors of pairs.
+        var isClassic: Bool
 
         init(_ lead: [Card], trump: Trump) {
             cardCount = lead.count
@@ -449,21 +555,28 @@ extension Rules {
             largest = components.first
             var lengths: [Int] = []
             var pairs = 0
+            var units: [ComboShape] = []
             for component in components {
                 switch component.shape {
                 case let .tractor(length): lengths.append(length)
                 case .pair: pairs += 1
-                case .single: break
+                case .single, .set, .setTractor: break
                 }
+                if component.shape != .single { units.append(component.shape) }
             }
             tractorLengths = lengths.sorted(by: >)
             self.pairs = pairs
+            self.units = Rules.sortedUnits(units)
+            isClassic = components.allSatisfy { $0.shape.width <= 2 }
         }
     }
 
     static func structureKey(_ cards: [Card], format: LeadFormat, trump: Trump) -> Int? {
         guard !cards.isEmpty, cards.count == format.cardCount, let largest = format.largest,
               Combos.group(of: cards, trump: trump) != nil else { return nil }
+        if !format.isClassic || Combos.maxCopies(cards) > 2 {
+            return unitStructureKey(cards, format: format, keyShape: largest.shape, trump: trump)
+        }
         let pairsNeeded = format.pairs
 
         switch largest.shape {
@@ -489,6 +602,8 @@ extension Rules {
                 return key >= Trump.bigJokerStrength
             }
             return best
+        case .set, .setTractor:
+            return unitStructureKey(cards, format: format, keyShape: largest.shape, trump: trump)
         }
     }
 }

@@ -144,8 +144,9 @@ public enum Face: Hashable, Codable, Sendable, CustomStringConvertible {
     }
 }
 
-/// A physical card. Shengji uses two full decks (108 cards), so every face exists twice;
-/// `copy` (0 or 1) tells the two apart so each card has a unique identity.
+/// A physical card. Shengji uses two or more full decks (108 cards for four players), so every face
+/// exists more than once; `copy` (0 for the first deck, 1 for the second, ...) tells them apart so
+/// each card has a unique identity.
 public struct Card: Hashable, Codable, Sendable, Identifiable, CustomStringConvertible {
     public let face: Face
     public let copy: Int
@@ -162,12 +163,12 @@ public struct Card: Hashable, Codable, Sendable, Identifiable, CustomStringConve
     public static func smallJoker(copy: Int = 0) -> Card { Card(.smallJoker, copy: copy) }
     public static func bigJoker(copy: Int = 0) -> Card { Card(.bigJoker, copy: copy) }
 
-    /// Unique id 0...107.
+    /// Unique id: 0...107 with two decks, up to 0...215 with four (`face.index + copy × 54`).
     public var id: Int { face.index + copy * 54 }
 
-    /// The card with the given id (0...107), or nil if out of range.
+    /// The card with the given id (0 up to 54 × `Deck.maxDecks` − 1), or nil if out of range.
     public init?(id: Int) {
-        guard (0..<108).contains(id), let face = Face(index: id % 54) else { return nil }
+        guard (0..<(54 * Deck.maxDecks)).contains(id), let face = Face(index: id % 54) else { return nil }
         self.init(face, copy: id / 54)
     }
 
@@ -178,14 +179,15 @@ public struct Card: Hashable, Codable, Sendable, Identifiable, CustomStringConve
     public var description: String { face.description }
 }
 
-/// Wire and storage format: a card is its id (a single integer 0...107). Compact, and the same in the
+/// Wire and storage format: a card is its id (a single integer, 0...107 with two decks). Compact, and the same in the
 /// Swift app, saved games and the online server's JSON.
 extension Card {
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let id = try container.decode(Int.self)
         guard let card = Card(id: id) else {
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Card id \(id) is out of range 0...107")
+            throw DecodingError.dataCorruptedError(
+                in: container, debugDescription: "Card id \(id) is out of range 0...\(54 * Deck.maxDecks - 1)")
         }
         self = card
     }
@@ -230,11 +232,18 @@ public extension Array where Element == Card {
 }
 
 public enum Deck {
+    /// The most decks a table uses (eight players).
+    public static let maxDecks = 4
+
     /// Two full decks including four jokers: 108 cards, in a fixed order.
-    public static func double() -> [Card] {
+    public static func double() -> [Card] { cards(decks: 2) }
+
+    /// `decks` full decks with their jokers (54 cards each), deck by deck, in a fixed order.
+    public static func cards(decks: Int) -> [Card] {
+        let count = min(max(decks, 1), maxDecks)
         var cards: [Card] = []
-        cards.reserveCapacity(108)
-        for copy in 0..<2 {
+        cards.reserveCapacity(54 * count)
+        for copy in 0..<count {
             for s in Suit.allCases {
                 for r in Rank.allCases { cards.append(Card(r, s, copy: copy)) }
             }
@@ -247,6 +256,72 @@ public enum Deck {
     public static func shuffled<G: RandomNumberGenerator>(using rng: inout G) -> [Card] {
         double().shuffled(using: &rng)
     }
+
+    public static func shuffled<G: RandomNumberGenerator>(decks: Int, using rng: inout G) -> [Card] {
+        cards(decks: decks).shuffled(using: &rng)
+    }
+}
+
+/// How many play and with how many decks. Teams sit alternately (team = seat % 2), so every size
+/// keeps two fixed teams: 4 players use 2 decks, 6 use 3 and 8 use 4 (half a deck per player).
+public struct TableSize: Hashable, Codable, Sendable, CustomStringConvertible {
+    public let players: Int
+    public let decks: Int
+
+    /// The classic game: 4 players, 2 decks.
+    public static let four = TableSize(players: 4)
+    public static let six = TableSize(players: 6)
+    public static let eight = TableSize(players: 8)
+    /// Every table the app offers.
+    public static let all: [TableSize] = [.four, .six, .eight]
+
+    /// A table of 4, 6 or 8 players with half a deck each. Other counts round to the nearest of those.
+    public init(players: Int) {
+        let supported = [4, 6, 8]
+        let count = supported.min { abs($0 - players) < abs($1 - players) } ?? 4
+        self.players = count
+        self.decks = count / 2
+    }
+
+    /// The table for `players` seats, or nil when that many is not offered.
+    public init?(exactly players: Int) {
+        guard [4, 6, 8].contains(players) else { return nil }
+        self.init(players: players)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(players: try container.decodeIfPresent(Int.self, forKey: .players) ?? 4)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(players, forKey: .players)
+        try container.encode(decks, forKey: .decks)
+    }
+
+    private enum CodingKeys: String, CodingKey { case players, decks }
+
+    /// Every card in play: 54 per deck.
+    public var cardCount: Int { 54 * decks }
+    /// Cards left for the kitty: 8 with 4 or 8 players, 6 with 6.
+    public var kittySize: Int {
+        var size = cardCount % players
+        if size == 0 { size = players }
+        if size < 5 { size += players }
+        return size
+    }
+    /// Cards dealt to each player: 25 with 4 players, 26 with 6 or 8.
+    public var handSize: Int { (cardCount - kittySize) / players }
+    /// Points in all the cards: 100 per deck.
+    public var totalPoints: Int { 100 * decks }
+    /// Players per team.
+    public var teamSize: Int { players / 2 }
+    /// True for the classic 4-player, 2-deck game.
+    public var isClassic: Bool { players == 4 }
+
+    /// e.g. "6 players, 3 decks"
+    public var description: String { "\(players) players, \(decks) decks" }
 }
 
 /// Small, fast, seedable RNG (SplitMix64) so games, drills and tests are reproducible.

@@ -245,7 +245,7 @@ enum ReferenceRules {
                     totalPairs += 1
                     remaining.remove(cards: pair)
                 }
-            case .single:
+            case .single, .set, .setTractor:
                 break
             }
         }

@@ -33,7 +33,7 @@ struct StandardLead {
     /// unseen void is unlikely.
     private func safeToCash(_ group: SuitGroup) -> Bool {
         for opponent in table.opponents where table.mayRuff(opponent, group) { return false }
-        return !table.isRunningOut(group, count: 1, players: 2)
+        return !table.isRunningOut(group, count: 1, players: table.opponents.count)
     }
 
     // MARK: 1. Throws
@@ -106,6 +106,8 @@ struct StandardLead {
             for pair in pieces.pairs {
                 consider(Component(shape: .pair, cards: pair, group: group, topStrength: trump.strength(pair[0])))
             }
+            // Three or more decks: triples, four of a kind and tractors of them.
+            for set in table.sets(in: group) { consider(set) }
             guard pieces.pairs.contains(where: { table.tractorFaces.contains($0[0].face) }) else { continue }
             let run = Combos.longestRun(in: mine, trump: trump)
             if run >= 2 {
@@ -129,6 +131,8 @@ struct StandardLead {
             reason = "Nobody can hold a higher \(suitWord) pair than \(names), so only a pair of trumps can beat it."
         case .tractor:
             reason = "No \(suitWord) tractor still out can beat \(names), so only trumps can beat it."
+        case .set, .setTractor:
+            reason = "No \(suitWord) \(pick.component.shape.name) still out can beat \(names), so only trumps can beat it."
         }
         if cards.points > 0 {
             reason += " Cash its \(BotText.points(cards.points)) now, before someone runs out of "
@@ -178,25 +182,30 @@ struct StandardLead {
     // MARK: 4. Partner's void
 
     private func partnerVoidLead() -> BotDecision? {
-        guard !table.knowledge.isVoid(table.partner, in: .trump) else { return nil }
-        var best: (card: Card, group: SuitGroup, score: Int)?
-        for suit in Suit.allCases {
-            let group = SuitGroup.plain(suit)
-            guard table.knowledge.isVoid(table.partner, in: group) else { continue }
-            guard !table.opponents.contains(where: { table.mayRuff($0, group) }) else { continue }
-            for card in table.cards(in: group) {
-                let score = table.value(card) + table.pairPenalty(card) + 2 * card.points
-                if let current = best, current.score <= score { continue }
-                best = (card, group, score)
+        var best: (card: Card, group: SuitGroup, partner: Int, score: Int)?
+        for partner in table.teammates where !table.knowledge.isVoid(partner, in: .trump) {
+            for suit in Suit.allCases {
+                let group = SuitGroup.plain(suit)
+                guard table.knowledge.isVoid(partner, in: group) else { continue }
+                guard !table.opponents.contains(where: { table.mayRuff($0, group) }) else { continue }
+                for card in table.cards(in: group) {
+                    let score = table.value(card) + table.pairPenalty(card) + 2 * card.points
+                    if let current = best, current.score <= score { continue }
+                    best = (card, group, partner, score)
+                }
             }
         }
         guard let pick = best else { return nil }
+        let who = BotText.capitalized(table.name(pick.partner))
+        let nudge = table.players > 4
+            ? "Think about which suits your partners have already run out of."
+            : "Think about which suits your partner has already run out of."
         return BotDecision(
             cards: [pick.card],
-            reason: "Your partner is out of \(BotText.plural(pick.group)), so lead \(pick.card) "
+            reason: "\(who) is out of \(BotText.plural(pick.group)), so lead \(pick.card) "
                 + "and let them win it with a trump.",
             concept: "Partner's void",
-            nudge: "Think about which suits your partner has already run out of.",
+            nudge: nudge,
             principle: "Lead a suit your partner is out of, so they can win the trick with a trump.")
     }
 
@@ -254,7 +263,8 @@ struct StandardLead {
             let names = BotText.cards(combo.cards, trump)
             return BotDecision(
                 cards: combo.cards,
-                reason: "Nobody can beat \(names), so lead it: you win the trick and pull trumps from both opponents.",
+                reason: "Nobody can beat \(names), so lead it: you win the trick and pull trumps from "
+                    + (table.opponents.count == 2 ? "both opponents." : "every opponent."),
                 concept: "Sure winner",
                 nudge: "Count the high trumps that are already gone.",
                 principle: "Leading a trump pair nobody can beat wins the trick and makes everyone spend two trumps.")
@@ -321,12 +331,12 @@ struct StandardLead {
         return BotDecision(cards: [card], reason: reason, concept: "Lead trumps", nudge: nudge, principle: principle)
     }
 
-    /// A trump pair or tractor nobody can beat (longest first, then the lowest such).
+    /// A trump pair, set or tractor nobody can beat (most cards first, then the lowest such).
     private func sureTrumpCombo() -> Component? {
         let mine = table.trumps
         let pieces = table.pieces(in: .trump)
         guard !pieces.pairs.isEmpty else { return nil }
-        var shapes: [ComboShape] = [.pair]
+        var shapes: [ComboShape] = [.pair] + table.sets(in: .trump).map(\.shape).uniqued()
         if pieces.pairs.contains(where: { table.tractorFaces.contains($0[0].face) }) {
             let run = Combos.longestRun(in: mine, trump: trump)
             if run >= 2 {
@@ -347,6 +357,15 @@ struct StandardLead {
             }
         }
         return best
+    }
+}
+
+extension Array where Element == ComboShape {
+    /// The shapes in their first order, each once.
+    func uniqued() -> [ComboShape] {
+        var out: [ComboShape] = []
+        for shape in self where !out.contains(shape) { out.append(shape) }
+        return out
     }
 }
 

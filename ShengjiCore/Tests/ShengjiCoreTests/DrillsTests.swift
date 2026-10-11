@@ -1141,7 +1141,8 @@ enum DrillJudge {
         switch violation {
         case .mustFollowSuit: return "follow suit"
         case .mustPlayPairs: return "pairs"
-        case .mustPlayTractor: return "tractor"
+        case .mustPlayTractor, .mustPlaySetTractor: return "tractor"
+        case .mustPlaySets: return "sets"
         case .wrongCount: return "count"
         case .cardsNotInHand: return "not in hand"
         }

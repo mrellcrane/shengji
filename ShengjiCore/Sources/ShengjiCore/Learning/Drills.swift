@@ -336,6 +336,7 @@ private enum DrillText {
         case .single: return "card"
         case .pair: return "pair"
         case .tractor: return "tractor"
+        case .set, .setTractor: return shape.name
         }
     }
 }
@@ -1672,6 +1673,8 @@ private enum TrickDrill {
             return Combos.pairs(in: cards, trump: trump)
         case let .tractor(length):
             return Array(Combos.tractors(in: cards, length: length, trump: trump).prefix(8))
+        case .set, .setTractor:
+            return Array(Combos.units(of: shape, in: cards, trump: trump).prefix(8))
         }
     }
 
@@ -2364,6 +2367,7 @@ private enum ScoringDrills {
             case .single: shown = "this card"
             case .pair: shown = "this pair"
             case .tractor: shown = "this tractor"
+            case .set, .setTractor: shown = "this \((largest?.shape ?? .single).name)"
             }
         }
         // At most 89 characters: who won and how the trick was led, then the kitty, then the question.
@@ -2396,6 +2400,7 @@ private enum ScoringDrills {
         case .single: return "single"
         case .pair: return "pair"
         case let .tractor(length): return length == 2 ? "two-pair tractor" : "\(length)-pair tractor"
+        case .set, .setTractor: return shape.name
         }
     }
 }

@@ -190,6 +190,7 @@ struct FollowBuilder {
             return held + BotPick.cheapest(others, count - held.count, costs)
         }
         if count == 1 { return BotPick.cheapest(held, 1, costs) }
+        if needsSets { return buildWithSets(costs) }
         var pool = held
         var play: [Card] = []
         let lengths = requirement.tractorLengths.sorted(by: >)
@@ -263,6 +264,18 @@ struct FollowBuilder {
     func fallback() -> [Card] {
         if held.count <= count { return held + Array(others.prefix(count - held.count)) }
         guard count > 1 else { return Array(held.prefix(1)) }
+        if needsSets {
+            var play: [Card] = []
+            var pool = held
+            Rules.searchUnits(held, shapes: Rules.sortedUnits(requirement.units)[...], trump: trump, chosen: []) { _, chosen in
+                for unit in chosen {
+                    play += unit.cards
+                    pool.remove(cards: unit.cards)
+                }
+                return true
+            }
+            return play + pool.prefix(max(0, count - play.count))
+        }
         var pool = held
         var play: [Card] = []
         var found: [[Card]] = []
@@ -283,6 +296,60 @@ struct FollowBuilder {
         }
         play += pool.prefix(max(0, count - play.count))
         return play
+    }
+
+    // MARK: Three or more decks
+
+    /// True when the owed structure holds triples or more, or the cards held do (three or more decks):
+    /// the plays are then built from `requirement.units`.
+    var needsSets: Bool { !requirement.isClassic || Combos.maxCopies(held) > 2 }
+
+    private struct UnitPick {
+        var cost: Int
+        var cards: [Card]
+    }
+
+    /// `build` with sets of any width: the cheapest disjoint set of owed combinations (bounded
+    /// search), then the cheapest filler from the led group.
+    private func buildWithSets(_ costs: CostModel) -> [Card] {
+        let shapes = Rules.sortedUnits(requirement.units)
+        var play: [Card] = []
+        if !shapes.isEmpty {
+            var best: UnitPick?
+            var budget = 300
+            searchUnits(held, shapes[...], [], 0, nil, costs, &best, &budget)
+            if best == nil {
+                Rules.searchUnits(held, shapes: shapes[...], trump: trump, chosen: []) { _, chosen in
+                    best = UnitPick(cost: 0, cards: chosen.flatMap(\.cards))
+                    return true
+                }
+            }
+            guard let pick = best else { return [] }
+            play = pick.cards
+        }
+        var pool = held
+        pool.remove(cards: play)
+        return play + BotPick.cheapest(pool, count - play.count, costs)
+    }
+
+    private func searchUnits(_ cards: [Card], _ shapes: ArraySlice<ComboShape>, _ chosen: [Card], _ cost: Int,
+                             _ previous: (shape: ComboShape, lowest: Int)?, _ costs: CostModel,
+                             _ best: inout UnitPick?, _ budget: inout Int) {
+        guard budget > 0 else { return }
+        budget -= 1
+        guard let shape = shapes.first else {
+            if let current = best, current.cost <= cost { return }
+            best = UnitPick(cost: cost, cards: chosen)
+            return
+        }
+        for unit in Combos.units(of: shape, in: cards, trump: trump) {
+            let lowest = unit.map(\.id).min() ?? 0
+            if let previous, previous.shape == shape, lowest <= previous.lowest { continue }
+            var left = cards
+            left.remove(cards: unit)
+            searchUnits(left, shapes.dropFirst(), chosen + unit, cost + costs.pair(unit), (shape, lowest),
+                        costs, &best, &budget)
+        }
     }
 
     // MARK: Tractor choice

@@ -310,8 +310,8 @@ struct TableDescription {
             for component in Combos.decompose(cards, trump: trump) {
                 let text = trump.sorted(component.cards).shortText
                 switch component.shape {
-                case .tractor: tractors.append(text)
-                case .pair: pairs.append(text)
+                case .tractor, .setTractor: tractors.append(text)
+                case .pair, .set: pairs.append(text)
                 case .single: break
                 }
             }
@@ -771,6 +771,7 @@ enum CoachText {
             case .single: return "single \(groupSingular(group))"
             case .pair: return "pair of \(group.name)"
             case let .tractor(n): return n == 2 ? "tractor of \(group.name)" : "\(n)-pair tractor of \(group.name)"
+            case .set, .setTractor: return "\(component.shape.name) of \(group.name)"
             }
         }
         let shapes = components.map(\.shape.name).joined(separator: " + ")

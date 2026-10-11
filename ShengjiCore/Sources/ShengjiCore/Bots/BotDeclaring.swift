@@ -66,10 +66,17 @@ enum BotDeclaring {
         let options = canonical(available)
         // Who holds the declaration comes first, so a pass explains itself the same way with or without options.
         if let current = view.declaration {
-            if current.player == Seats.partner(of: 0) { return Choice(declaration: nil, why: .partnerHolds) }
+            if current.player != 0 && Seats.team(of: current.player) == Seats.team(of: 0) {
+                return Choice(declaration: nil, why: .partnerHolds)
+            }
             if current.player == 0 {
-                let pair = options.first { $0.strength == 2 && $0.suit != nil && $0.suit == current.suit }
-                return Choice(declaration: pair, why: pair == nil ? .ownDeclaration : .reinforce)
+                // Reinforce with more of the same card: a single becomes a pair (with three or more
+                // decks, the most copies held).
+                let more = options.last {
+                    $0.kind == current.kind && $0.suit == current.suit && $0.cardCount > current.cardCount
+                        && ($0.suit != nil || current.kind != .rankCards)
+                }
+                return Choice(declaration: more, why: more == nil ? .ownDeclaration : .reinforce)
             }
         }
         guard !options.isEmpty else { return Choice(declaration: nil, why: .nothingToDeclare) }
@@ -107,23 +114,26 @@ enum BotDeclaring {
         return Double(trumpCount(of: hand, rank: rank, suit: suit)) / Double(hand.count)
     }
 
-    /// Threshold for declaring a suit after receiving `received` cards.
-    static func threshold(received: Int, complete: Bool, tuning: BotTuning = BotTuning()) -> Double {
-        let span = Double(Round.handSize - minimumCards)
+    /// Threshold for declaring a suit after receiving `received` of `handSize` cards.
+    static func threshold(received: Int, complete: Bool, handSize: Int = Round.handSize,
+                          tuning: BotTuning = BotTuning()) -> Double {
+        let span = Double(handSize - minimumCards)
         let progress = complete ? 1.0 : min(1.0, max(0.0, Double(received - minimumCards) / span))
         return tuning.declareEarly - (tuning.declareEarly - tuning.declareLate) * progress
     }
 
-    /// Every card is dealt: online bidding, or offline once all 100 cards are in the hands.
+    /// Every card is dealt: online bidding, or offline once every hand is full (100 cards with 4 players).
     static func isDealComplete(_ view: SeatView) -> Bool {
-        view.phase == .bidding || view.handCounts.reduce(0, +) >= 4 * Round.handSize
+        let table = view.table
+        return view.phase == .bidding || view.handCounts.reduce(0, +) >= table.players * table.handSize
     }
 
     private static func standard(options: [Declaration], view: SeatView, tuning: BotTuning) -> Choice {
         let hand = view.hand
         guard hand.count >= minimumCards else { return Choice(declaration: nil, why: .tooFewCards) }
         let rank = view.trump.rank
-        let bar = threshold(received: hand.count, complete: isDealComplete(view), tuning: tuning)
+        let bar = threshold(received: hand.count, complete: isDealComplete(view), handSize: view.table.handSize,
+                            tuning: tuning)
 
         // Best suit option: highest share, then the stronger declaration (a pair is harder to override).
         var bestSuit: (option: Declaration, share: Double)?
@@ -168,8 +178,11 @@ enum BotDeclaring {
         let rank = view.trump.rank
         let total = hand.count
         func trumps(_ suit: Suit?) -> Int { trumpCount(of: hand, rank: rank, suit: suit) }
-        let seat = ((compassSeat % 4) + 4) % 4
-        let holder = view.declaration.map { BotText.name((($0.player % 4) + 4 + seat) % 4, from: seat) }
+        let players = view.playerCount
+        let seat = Seats.normalized(compassSeat, players: players)
+        let holder = view.declaration.map {
+            BotText.name(Seats.normalized($0.player + seat, players: players), from: seat, players: players)
+        }
         let holderName = BotText.capitalized(holder ?? "someone")
 
         let countNudge = "Count how many of your cards would be trumps with each suit you could declare."
@@ -186,7 +199,7 @@ enum BotDeclaring {
             }
             switch choice.why {
             case .partnerHolds:
-                return pass("Your partner holds the declaration, so pass: their trump suit works for your side too.",
+                return pass("\(holderName) holds the declaration, so pass: their trump suit works for your side too.",
                             nudge: holderNudge,
                             principle: "Never override your partner. Their declaration already serves your side.")
             case .ownDeclaration:
@@ -248,7 +261,10 @@ enum BotDeclaring {
         case .reinforce:
             return BotDecision(
                 cards: cards,
-                reason: "Declare \(names) to make your declaration a pair, which is harder to override.",
+                reason: declaration.cardCount == 2
+                    ? "Declare \(names) to make your declaration a pair, which is harder to override."
+                    : "Declare \(names) to strengthen your declaration with more of the same card, which is harder "
+                        + "to override.",
                 concept: "Reinforce",
                 nudge: "Look at whether you hold a second copy of the card you declared with.",
                 principle: "Strengthen your own single declaration to a pair when you can: it is harder to override.")

@@ -110,14 +110,15 @@ struct StandardFollow {
         for play in trick { points += play.cards.points }
         self.onTable = points
         let position = trick.count
+        let lastPosition = table.players - 1
         var later: [Int] = []
-        if position < 3 {
-            for step in 1...(3 - position) { later.append((table.seat + step) % 4) }
+        if position < lastPosition {
+            for step in 1...(lastPosition - position) { later.append((table.seat + step) % table.players) }
         }
         self.laterOpponents = later.filter { table.isOpponent($0) }
-        self.partnerLater = later.contains(table.partner)
-        self.isLast = position >= 3
-        self.lastPlayerThreat = position == 2 ? table.tuning.lastPlayerThreat : 0
+        self.partnerLater = later.contains { table.isTeammate($0) }
+        self.isLast = position >= lastPosition
+        self.lastPlayerThreat = position == lastPosition - 1 ? table.tuning.lastPlayerThreat : 0
     }
 
     private var trump: Trump { table.trump }
@@ -125,7 +126,7 @@ struct StandardFollow {
     private var seat: Int { table.seat }
 
     func decide() -> BotDecision {
-        let decision = winner == table.partner ? partnerWinning() : opponentWinning()
+        let decision = table.isTeammate(winner) ? partnerWinning() : opponentWinning()
         if builder.isLegal(decision.cards) { return decision }
         BotDiagnostics.shared.noteFallback()
         let cards = builder.fallback()
@@ -238,7 +239,16 @@ struct StandardFollow {
     }
 
     /// The player after this seat when it plays third (the last player), by name.
-    private var lastPlayerName: String { table.name((seat + 1) % 4) }
+    private var lastPlayerName: String { table.name((seat + 1) % table.players) }
+
+    /// "Your partner" or "Your partner Northeast": who is winning when it is a partner.
+    private var winnerSubject: String { BotText.capitalized(table.name(winner)) }
+
+    /// "your partner's" or "your partner Northeast's".
+    private var winnerPossessive: String { table.possessive(winner) }
+
+    /// "Your partner still plays" or, with several partners, "A partner still plays".
+    private var laterPartner: String { table.players > 4 ? "a partner" : "your partner" }
 
     // MARK: Partner winning
 
@@ -265,13 +275,13 @@ struct StandardFollow {
         let certain = isLast || isCertain(winningCards)
         let why: String
         if isLast {
-            why = "You play last and your partner's \(theirs) is winning"
+            why = "You play last and \(winnerPossessive) \(theirs) is winning"
         } else if certain {
-            why = "Nobody after you can beat your partner's \(theirs)"
+            why = "Nobody after you can beat \(winnerPossessive) \(theirs)"
         } else if Combos.group(of: winningCards, trump: trump)?.isTrump == true {
-            why = "Only a higher trump from someone out of \(BotText.plural(ledGroup)) can beat your partner's \(theirs)"
+            why = "Only a higher trump from someone out of \(BotText.plural(ledGroup)) can beat \(winnerPossessive) \(theirs)"
         } else {
-            why = "Only a trump can beat your partner's \(theirs)"
+            why = "Only a trump can beat \(winnerPossessive) \(theirs)"
         }
         let nudge = "Look at who is winning this trick and whether anyone after you can still beat it."
         let principle = "When your partner is sure to win the trick, give them your point cards: fives, tens and kings."
@@ -300,7 +310,7 @@ struct StandardFollow {
         let protect = points > 0 ? ", and protect \(BotText.points(points))" : ""
         return BotDecision(
             cards: candidate.cards,
-            reason: "Your partner's \(theirs) could still be beaten by \(threat), so beat it yourself with "
+            reason: "\(BotText.capitalized(winnerPossessive)) \(theirs) could still be beaten by \(threat), so beat it yourself with "
                 + "\(names), which \(beatPhrase(candidate.cards))\(protect).",
             concept: "Sure winner",
             nudge: "Look at who is winning, who still plays after you, and how many points are at risk.",
@@ -311,7 +321,8 @@ struct StandardFollow {
     private func duckForPartner(_ play: [Card]) -> BotDecision {
         let names = BotText.cards(play, trump)
         let threat = BotText.list(laterOpponents.map { table.name($0) })
-        let opening = "Your partner is winning for now, but \(threat) plays after you and could still beat it"
+        let plays = laterOpponents.count > 1 ? "play" : "plays"
+        let opening = "\(winnerSubject) is winning for now, but \(threat) \(plays) after you and could still beat it"
         let reason: String
         if wouldWin(play) {
             reason = opening + ", so play \(names). It costs you the least and keeps the trick on your side for now."
@@ -407,7 +418,7 @@ struct StandardFollow {
         } else if lastPlayerThreat > 0 {
             reason += ". Win it now, before \(lastPlayerName) can add points for their side."
         } else if partnerLater {
-            reason += ", and your partner can add points after you."
+            reason += ", and \(laterPartner) can add points after you."
         } else {
             reason += "."
         }
@@ -445,13 +456,14 @@ struct StandardFollow {
         let suits = BotText.plural(ledGroup)
         let overruff = Combos.group(of: winningCards, trump: trump)?.isTrump == true
         // The partner led a suit this seat has already shown out of: they want it trumped.
-        let partnerLedVoid = trick.first?.player == table.partner && table.knowledge.isVoid(seat, in: ledGroup)
+        let leader = trick.first?.player
+        let partnerLedVoid = leader.map { table.isTeammate($0) } == true && table.knowledge.isVoid(seat, in: ledGroup)
         var reason: String
         if overruff {
             let who = BotText.capitalized(table.name(winner))
             reason = "\(who) trumped with \(BotText.cards(winningCards, trump)), so beat it with \(names) \(prize)."
-        } else if partnerLedVoid {
-            reason = "Your partner led \(suits) knowing you're out of them, so trump with \(names) \(prize)."
+        } else if partnerLedVoid, let leader {
+            reason = "\(BotText.capitalized(table.name(leader))) led \(suits) knowing you're out of them, so trump with \(names) \(prize)."
         } else {
             reason = "You're out of \(suits), so trump with \(names) \(prize)."
         }
@@ -541,7 +553,7 @@ struct StandardFollow {
         let reason: String
         if canWin && partnerLater {
             let which = play.count == 1 ? "the card" : "the cards"
-            reason = "Your partner still plays after you, so play \(names), \(which) you will miss least, "
+            reason = "\(BotText.capitalized(laterPartner)) still plays after you, so play \(names), \(which) you will miss least, "
                 + "and save your strength."
         } else if canWin {
             reason = "Beating \(winnerPhrase) would cost more than this trick is worth, so play \(names) "
