@@ -251,9 +251,9 @@ enum OnlineGameText {
                                               name: { name($0, players: view.players) })
     }
 
-    /// "Mei, Lin and you": seats of one side, in the order given.
+    /// "Mei, Lin and you": seats of one side, in the order given ("You" when you come first).
     static func names(_ seats: [Int], players: [SeatView.Player]) -> String {
-        list(seats.map { name($0, players: players) })
+        list(seats.enumerated().map { index, seat in index == 0 ? name(seat, players: players) : inlineName(seat, players: players) })
     }
 
     /// Finding Friends: who was on the dealer's side, and what the points did to everyone's levels

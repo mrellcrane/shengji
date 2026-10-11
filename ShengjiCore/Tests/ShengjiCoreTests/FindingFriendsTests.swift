@@ -270,6 +270,7 @@ final class FindingFriendsTests: XCTestCase {
         XCTAssertEqual(summary.advancingTeam, 1)
         XCTAssertEqual(rotated.nextDealer, 0, "seat 5 deals next: the viewer")
         XCTAssertTrue(rotated.explanation.contains("You deal next"), rotated.explanation)
+        XCTAssertTrue(rotated.explanation.hasPrefix("Northwest, you and Southeast played together"), rotated.explanation)
     }
 
     func testSavedGamesAndRoundsRoundTrip() throws {

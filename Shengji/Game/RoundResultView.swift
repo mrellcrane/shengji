@@ -101,7 +101,7 @@ struct RoundResultView: View {
                 Text(friendsSideLine)
                 ForEach(Array((result.friendCalls ?? []).enumerated()), id: \.offset) { _, call in
                     HStack {
-                        Text(call.unfound.description.prefix(1).uppercased() + call.unfound.description.dropFirst())
+                        Text(FriendCallText.short(call))
                         Spacer()
                         Text(answer(call))
                             .fontWeight(.semibold)
@@ -121,12 +121,15 @@ struct RoundResultView: View {
 
     /// "East dealt. East, Northeast and you played together." / "You dealt and played alone."
     private var friendsSideLine: String {
-        let side = (result.declarers ?? [result.dealer]).map(name)
-        let list = side.count <= 1 ? (side.first ?? name(result.dealer))
-            : side.dropLast().joined(separator: ", ") + " and " + (side.last ?? "")
-        if side.count <= 1 {
+        let seats = result.declarers ?? [result.dealer]
+        guard seats.count > 1 else {
             return "\(name(result.dealer)) dealt and played alone: no friend joined."
         }
+        // "you" inside the sentence; the dealer comes first, so the list starts capitalised.
+        let names = seats.enumerated().map { index, seat in
+            seat == Seats.human && index > 0 ? "you" : name(seat)
+        }
+        let list = names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
         return "\(name(result.dealer)) dealt. \(list) played together."
     }
 

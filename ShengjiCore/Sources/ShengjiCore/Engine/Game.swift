@@ -202,8 +202,11 @@ public struct GameState: Codable, Sendable {
         let scored = kittyBonus > 0
             ? "The defenders scored \(points) points (including \(kittyBonus) from the kitty)"
             : "The defenders scored \(points) points"
+        /// "East, you and Northwest": seat 0 is "you" inside the list, "You" when it comes first.
         func names(_ seats: [Int]) -> String {
-            let list = seats.map { Seats.name($0, players: n) }
+            let list = seats.enumerated().map { index, seat in
+                seat == Seats.human && index > 0 ? "you" : Seats.name(seat, players: n)
+            }
             switch list.count {
             case 0: return "Nobody"
             case 1: return list[0]
