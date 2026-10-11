@@ -4,7 +4,9 @@ import Foundation
 /// Play goes 0 → 1 → 2 → 3 → 0 (counter-clockwise, as in China). Partners sit opposite.
 /// Bigger tables (6 or 8 players) go on round the same way: teams alternate, so the human's team is
 /// every even seat (team = seat % 2) and the seat opposite the human is a partner with 8 players and
-/// an opponent with 6. Functions without `players` are for the classic 4-player table.
+/// an opponent with 6. Odd tables (5, 7 or 9 players) have no fixed teams (Finding Friends: the dealer's
+/// side is the dealer plus the friends found, see `Round.declarers`), so `team`, `partner`, `teammates`
+/// and `opponents` only apply to even tables. Functions without `players` are for the classic 4-player table.
 public enum Seats {
     public static let human = 0
     public static let all = [0, 1, 2, 3]
@@ -44,23 +46,41 @@ public enum Seats {
         return compassName(seat, players: players)
     }
     /// Compass point of a seat when seat 0 is South: South, East, North, West with 4; South, Southeast,
-    /// Northeast, North, Northwest, Southwest with 6; the eight points with 8.
+    /// Northeast, North, Northwest, Southwest with 6; the eight points with 8. Odd tables: South, East,
+    /// Northeast, Northwest, West with 5; South, Southeast, East, Northeast, Northwest, West, Southwest
+    /// with 7; with 9 the two top seats are North-northeast and North-northwest.
     public static func compassName(_ player: Int, players: Int) -> String {
-        let seat = normalized(player, players: players)
-        switch players {
-        case 6: return ["South", "Southeast", "Northeast", "North", "Northwest", "Southwest"][seat]
-        case 8: return ["South", "Southeast", "East", "Northeast", "North", "Northwest", "West", "Southwest"][seat]
-        default: return ["South", "East", "North", "West"][normalized(seat, players: 4)]
-        }
+        let names = compassNames(players: players)
+        return names[normalized(player, players: names.count)]
     }
     /// Short labels for crowded tables: "You", "SE", "NE", ... (the classic names with 4 players).
     public static func shortName(_ player: Int, players: Int) -> String {
         if players <= 4 { return name(normalized(player, players: 4)) }
         let seat = normalized(player, players: players)
         if seat == human { return "You" }
+        let names = shortCompassNames(players: players)
+        return names[normalized(seat, players: names.count)]
+    }
+
+    static func compassNames(players: Int) -> [String] {
         switch players {
-        case 6: return ["S", "SE", "NE", "N", "NW", "SW"][seat]
-        default: return ["S", "SE", "E", "NE", "N", "NW", "W", "SW"][normalized(seat, players: 8)]
+        case 5: return ["South", "East", "Northeast", "Northwest", "West"]
+        case 6: return ["South", "Southeast", "Northeast", "North", "Northwest", "Southwest"]
+        case 7: return ["South", "Southeast", "East", "Northeast", "Northwest", "West", "Southwest"]
+        case 8: return ["South", "Southeast", "East", "Northeast", "North", "Northwest", "West", "Southwest"]
+        case 9: return ["South", "Southeast", "East", "Northeast", "North-northeast", "North-northwest", "Northwest",
+                        "West", "Southwest"]
+        default: return ["South", "East", "North", "West"]
+        }
+    }
+
+    static func shortCompassNames(players: Int) -> [String] {
+        switch players {
+        case 5: return ["S", "E", "NE", "NW", "W"]
+        case 6: return ["S", "SE", "NE", "N", "NW", "SW"]
+        case 7: return ["S", "SE", "E", "NE", "NW", "W", "SW"]
+        case 9: return ["S", "SE", "E", "NE", "NNE", "NNW", "NW", "W", "SW"]
+        default: return ["S", "SE", "E", "NE", "N", "NW", "W", "SW"]
         }
     }
 }

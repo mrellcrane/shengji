@@ -32,8 +32,8 @@ final class BiggerTableTests: XCTestCase {
             XCTAssertEqual(table.players * table.handSize + table.kittySize, table.cardCount, "\(table)")
         }
         XCTAssertEqual(TableSize(players: 3), .four)
-        XCTAssertEqual(TableSize(players: 12), .eight)
-        XCTAssertNil(TableSize(exactly: 5))
+        XCTAssertEqual(TableSize(players: 12), .nine)
+        XCTAssertNil(TableSize(exactly: 10))
         XCTAssertEqual(TableSize(exactly: 6), .six)
     }
 
@@ -260,7 +260,8 @@ final class BiggerTableTests: XCTestCase {
                 round.finishDealing()
                 let dealer = try XCTUnwrap(round.dealer)
                 XCTAssertEqual(round.hands[dealer].count, table.handSize + table.kittySize)
-                try round.bury(Array(round.hands[dealer].shuffled(using: &rng).prefix(table.kittySize)))
+                let buried = Array(round.hands[dealer].shuffled(using: &rng).prefix(table.kittySize))
+                try round.bury(buried, calls: Bot(seat: dealer).friendCalls(in: round, buried: buried))
                 var moves = 0
                 while round.phase == .playing && moves < 600 {
                     guard let seat = round.turn else { break }
@@ -276,7 +277,12 @@ final class BiggerTableTests: XCTestCase {
                 XCTAssertTrue(round.tricks.allSatisfy { $0.plays.count == table.players })
                 let allPoints = round.tricks.reduce(0) { $0 + $1.points } + round.kitty.points
                 XCTAssertEqual(allPoints, table.totalPoints)
-                XCTAssertEqual(result.outcome, Scoring.outcome(defenderPoints: result.defenderPoints, decks: table.decks))
+                var outcome = Scoring.outcome(defenderPoints: result.defenderPoints, decks: table.decks)
+                if table.findsFriends {
+                    outcome = Scoring.findingFriendsOutcome(outcome, declarers: round.declarers.count,
+                                                            fullSide: table.teamSize)
+                }
+                XCTAssertEqual(result.outcome, outcome)
             }
         }
     }

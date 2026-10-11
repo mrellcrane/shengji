@@ -42,7 +42,9 @@ struct CardOrder {
 /// Built only from a `SeatView`, so only from what the seat may know (`BotKnowledge`): its own hand,
 /// the cards played, its own buried kitty and the voids other players have shown. Seats are
 /// viewer-relative: this seat is 0, its partner 2, the opponents 1 (next to play) and 3. With 6 or
-/// 8 players the partners are every even seat and the opponents every odd one.
+/// 8 players the partners are every even seat and the opponents every odd one. With Finding Friends
+/// (an odd number of players) the partners are the players this seat knows share its side
+/// (`FriendsPlan`); everyone else counts as an opponent.
 struct BotTable {
     let view: SeatView
     /// Always 0: the viewer.
@@ -53,6 +55,8 @@ struct BotTable {
     let partner: Int
     /// Every partner, in play order after this seat (just seat 2 with 4 players).
     let teammates: [Int]
+    /// Finding Friends: which side this seat is on and how it can show it (nil at tables of fixed teams).
+    let friends: FriendsPlan?
     /// The seat the texts are written from: other players get the compass names of a table where
     /// seat 0 is South, as seen from this seat (`Bot.seat`; 0 for hints, so the viewer is South).
     let compassSeat: Int
@@ -86,15 +90,19 @@ struct BotTable {
         let players = view.playerCount
         self.players = players
         self.partner = Seats.partner(of: 0)
-        self.teammates = Seats.teammates(of: 0, players: players)
+        let order = CardOrder(trump)
+        let hand = order.sorted(view.hand)
+        let friends = view.findsFriends ? FriendsPlan(view: view, hand: hand) : nil
+        self.friends = friends
+        self.teammates = friends.map { plan in (1..<players).filter { plan.allies.contains($0) } }
+            ?? Seats.teammates(of: 0, players: players)
         self.compassSeat = Seats.normalized(compassSeat, players: players)
         self.trump = trump
-        let order = CardOrder(trump)
         self.order = order
-        self.hand = order.sorted(view.hand)
+        self.hand = hand
         let knowledge = BotKnowledge(view: view)
         self.knowledge = knowledge
-        self.isDeclarer = view.declarerTeam == Seats.team(of: 0)
+        self.isDeclarer = friends?.onDealerSide ?? (view.declarerTeam == Seats.team(of: 0))
 
         var groups: [SuitGroup: [Card]] = [:]
         var counts: [Face: Int] = [:]
@@ -152,6 +160,12 @@ extension BotTable {
         if let name = playerName(player) {
             return isTeammate(player) ? "your partner \(name)" : name
         }
+        if friends != nil {
+            // No fixed teams: only the players this seat knows share its side are partners.
+            if Seats.normalized(player, players: players) == seat { return "you" }
+            let compass = Seats.compassName(absolute(player), players: players)
+            return isTeammate(player) ? "your partner \(compass)" : compass
+        }
         return BotText.name(absolute(player), from: compassSeat, players: players)
     }
 
@@ -176,13 +190,21 @@ extension BotTable {
     private func absolute(_ player: Int) -> Int { Seats.normalized(player + compassSeat, players: players) }
 
     /// The opponents, in play order after this seat (two with 4 players: East, then West).
-    var opponents: [Int] { Seats.opponents(of: seat, players: players) }
+    var opponents: [Int] {
+        guard let friends else { return Seats.opponents(of: seat, players: players) }
+        return (1..<players).filter { !friends.allies.contains($0) }
+    }
 
-    func isOpponent(_ player: Int) -> Bool { Seats.team(of: player) != Seats.team(of: seat) }
+    func isOpponent(_ player: Int) -> Bool {
+        guard let friends else { return Seats.team(of: player) != Seats.team(of: seat) }
+        let p = Seats.normalized(player, players: players)
+        return p != seat && !friends.allies.contains(p)
+    }
 
     /// A partner of this seat (not this seat itself).
     func isTeammate(_ player: Int) -> Bool {
         let p = Seats.normalized(player, players: players)
+        if let friends { return friends.allies.contains(p) }
         return p != seat && Seats.team(of: p) == Seats.team(of: seat)
     }
 
@@ -291,5 +313,48 @@ extension BotTable {
     func pairPenalty(_ card: Card) -> Int {
         guard pairFaces.contains(card.face) else { return 0 }
         return 16 + trump.strength(card) + (tractorFaces.contains(card.face) ? 10 : 0)
+    }
+}
+
+/// Finding Friends: the sides as one seat (the viewer, seat 0) can work them out. The dealer and the
+/// friends found so far are on the dealer's side. A player holding the card that answers a call not
+/// found yet is a hidden friend: they know they are on the dealer's side before anyone else does.
+/// Everyone else is a defender, but a defender can only be sure who plays with them once every
+/// called card has been played, so until then they count only themselves.
+struct FriendsPlan {
+    /// The viewer is the dealer, a friend found, or a hidden friend.
+    let onDealerSide: Bool
+    /// Hidden friend: the call this seat answers and the cards that answer it (the copies still needed
+    /// to reach the called one).
+    let reveal: (call: FriendCall, cards: [Card])?
+    /// Seats known to share the viewer's side (never the viewer).
+    let allies: Set<Int>
+
+    init(view: SeatView, hand: [Card]) {
+        let n = view.playerCount
+        let calls = view.friendCalls ?? []
+        var reveal: (call: FriendCall, cards: [Card])?
+        if view.dealer != nil, !view.isDeclarer(0) {
+            let played = view.playedCards
+            for call in calls where call.friend == nil {
+                let before = played.reduce(0) { $0 + ($1.face == call.face ? 1 : 0) }
+                let need = call.ordinal - before
+                let mine = hand.filter { $0.face == call.face }.sorted { $0.id < $1.id }
+                if need >= 1, mine.count >= need {
+                    reveal = (call, Array(mine.prefix(need)))
+                    break
+                }
+            }
+        }
+        self.reveal = reveal
+        let onDealerSide = view.isDeclarer(0) || reveal != nil
+        self.onDealerSide = onDealerSide
+        if onDealerSide {
+            allies = Set(view.declarers.filter { $0 != 0 })
+        } else if view.dealer != nil, view.friendsToFind == 0, !calls.isEmpty {
+            allies = Set((1..<n).filter { !view.isDeclarer($0) })
+        } else {
+            allies = []
+        }
     }
 }

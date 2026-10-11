@@ -194,7 +194,11 @@ public enum MoveDetector {
         let buried = round.dealer == player ? round.kitty : []
         let seen = seenBefore(trickIndex, tricks: round.tricks, current: round.currentTrick, hand: hand,
                               buried: buried, player: player)
-        return trickMoves(round.tricks[trickIndex], trump: round.trump, player: player, seen: seen)
+        let sameSide = round.isFindingFriends
+            ? knownSide(of: player, players: round.players, isDeclarer: round.isDeclarer,
+                        allFound: round.friendCalls.allSatisfy(\.isFound))
+            : nil
+        return trickMoves(round.tricks[trickIndex], trump: round.trump, player: player, seen: seen, sameSide: sameSide)
     }
 
     /// Moves in a completed trick of a seat view (online play): the viewer is seat 0.
@@ -203,7 +207,19 @@ public enum MoveDetector {
         let buried = view.dealer == Seats.human ? (view.kitty ?? []) : []
         let seen = seenBefore(trickIndex, tricks: view.tricks, current: view.currentTrick, hand: view.hand,
                               buried: buried, player: Seats.human)
-        return trickMoves(view.tricks[trickIndex], trump: view.trump, player: Seats.human, seen: seen)
+        let sameSide = view.findsFriends
+            ? knownSide(of: Seats.human, players: view.playerCount, isDeclarer: view.isDeclarer,
+                        allFound: view.friendsToFind == 0)
+            : nil
+        return trickMoves(view.tricks[trickIndex], trump: view.trump, player: Seats.human, seen: seen, sameSide: sameSide)
+    }
+
+    /// Finding Friends: who `player` knows is on their side right now. On the dealer's side: the dealer and
+    /// the friends found. A defender: the other defenders once every called card has been played, else nobody.
+    static func knownSide(of player: Int, players: Int, isDeclarer: @escaping (Int) -> Bool,
+                          allFound: Bool) -> (Int) -> Bool {
+        if isDeclarer(player) { return { isDeclarer($0) } }
+        return { seat in seat == player || (allFound && !isDeclarer(seat)) }
     }
 
     /// Moves when the round is finished (`round.result` set): kittyRaid, holdDeal, shutout, takeOver.
@@ -263,7 +279,9 @@ public enum MoveDetector {
 
     /// Moves `player` made in `trick`. `seen` is what they had seen when the trick began (see `seenBefore`);
     /// only the top-card check uses it.
-    static func trickMoves(_ trick: TrickRecord, trump: Trump, player: Int, seen: [Card] = []) -> [MoveEvent] {
+    /// `sameSide` says who is on `player`'s side (Finding Friends); nil = fixed teams (team = seat % 2).
+    static func trickMoves(_ trick: TrickRecord, trump: Trump, player: Int, seen: [Card] = [],
+                           sameSide: ((Int) -> Bool)? = nil) -> [MoveEvent] {
         let plays = trick.plays
         guard let leadPlay = plays.first, let firstCard = leadPlay.cards.first,
               let myIndex = plays.firstIndex(where: { $0.player == player }) else { return [] }
@@ -276,7 +294,8 @@ public enum MoveDetector {
         // Every seat plays to a trick, so its plays tell the table size.
         let players = TableSize(players: plays.count).players
         let myTeam = Seats.team(of: player)
-        let teamWon = Seats.team(of: trick.winner) == myTeam
+        let onMySide = sameSide ?? { Seats.team(of: $0) == myTeam }
+        let teamWon = onMySide(trick.winner)
         let partnerWon = trick.winner != player && teamWon
         let myGroup = Combos.group(of: mine, trump: trump)
         let wonPoints = trick.points
@@ -285,7 +304,7 @@ public enum MoveDetector {
         // Ruff and overruff.
         if !ledGroup.isTrump, !iLed, iWon, myGroup == .trump, case let .plain(ledSuit) = ledGroup {
             let earlierRuff = plays[1..<myIndex].first { play in
-                Seats.team(of: play.player) != myTeam
+                !onMySide(play.player)
                     && Combos.group(of: play.cards, trump: trump) == .trump
                     && Rules.matchesStructure(play.cards, lead: lead, trump: trump)
             }
@@ -357,12 +376,11 @@ public enum MoveDetector {
     // MARK: - Round end
 
     static func roundMoves(_ result: RoundResult, player: Int) -> [MoveEvent] {
-        let myTeam = Seats.team(of: player)
-        let weDeclared = result.declarerTeam == myTeam
+        let weDeclared = result.isDeclarer(player)
         let defenders = result.defenderPoints
         var events: [MoveEvent] = []
 
-        if !weDeclared, Seats.team(of: result.lastTrickWinner) == myTeam {
+        if !weDeclared, !result.isDeclarer(result.lastTrickWinner) {
             let bonus = result.kittyPoints * result.kittyMultiplier
             let detail: String
             if result.kittyPoints > 0 {
@@ -395,7 +413,8 @@ public enum MoveDetector {
         let myTeam = Seats.team(of: player)
         for (index, declaration) in history.enumerated() where index > 0 && declaration.player == player {
             let previous = history[index - 1]
-            guard Seats.team(of: previous.player) != myTeam else { continue }
+            // Finding Friends has no partners while declaring: every earlier declaration was an opponent's.
+            guard players % 2 == 1 || Seats.team(of: previous.player) != myTeam else { continue }
             let beaten = previous.suit.map { "\($0.symbol) declaration" } ?? "no-trump declaration"
             let shown = (2...4).contains(declaration.strength) ? "a " + shownText(declaration) : shownText(declaration)
             let detail = "Override! You beat \(CoachText.possessive(previous.player, players: players)) \(beaten) with \(shown)."

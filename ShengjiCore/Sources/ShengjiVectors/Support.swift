@@ -42,6 +42,33 @@ enum Cards {
 
     /// The tables with three or more decks, the ones the bigger-table vectors cover.
     static let bigTables: [TableSize] = [.six, .eight]
+    /// The odd tables (Finding Friends: 3, 4 and 5 decks), the ones the odd-table vectors cover.
+    static let oddTables: [TableSize] = [.five, .seven, .nine]
+
+    /// Friend calls for a dealer at `table` (`table.friendCount` of them, all legal): mostly aces and
+    /// kings so friends are often found, sometimes any card or a later copy, sometimes a card the
+    /// dealer holds (so the dealer can turn out to be their own friend).
+    static func randomCalls(table: TableSize, trumpRank: Rank, dealerHand: [Card], rand: inout Rand) -> [FriendCall] {
+        var calls: [FriendCall] = []
+        var guardCount = 0
+        while calls.count < table.friendCount && guardCount < 200 {
+            guardCount += 1
+            let face: Face
+            let roll = rand.below(100)
+            if roll < 15, let card = rand.pick(dealerHand.filter { !$0.isJoker && $0.rank != trumpRank }) {
+                face = card.face
+            } else if roll < 70 {
+                face = .regular(Suit.allCases[rand.below(4)], rand.percent(70) ? .ace : .king)
+            } else {
+                face = .regular(Suit.allCases[rand.below(4)], Rank.allCases[rand.below(13)])
+            }
+            guard face.rank != trumpRank else { continue }
+            let ordinal = rand.percent(75) ? 1 : rand.between(1, table.decks)
+            let call = FriendCall(face: face, ordinal: ordinal)
+            if !calls.contains(call) { calls.append(call) }
+        }
+        return calls
+    }
 
     static func card(_ id: Int) -> Card {
         guard let card = Card(id: id) else { fatalError("bad card id \(id)") }

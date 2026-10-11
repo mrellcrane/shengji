@@ -68,6 +68,18 @@ public enum Scoring {
                             summary: "Defenders scored \(points) (\(line) or more): \(effect)")
     }
 
+    /// Finding Friends: a dealer's side that keeps the deal with fewer players than it could have had (the
+    /// dealer played a card they called, or a called card was never played) goes up 1 more level.
+    /// `declarers` = players on the dealer's side at the end, `fullSide` = the dealer plus every friend called.
+    public static func findingFriendsOutcome(_ outcome: LevelOutcome, declarers: Int, fullSide: Int) -> LevelOutcome {
+        guard outcome.declarersHold, declarers < fullSide else { return outcome }
+        let levels = outcome.levels + 1
+        var summary = outcome.summary
+        if summary.hasSuffix(".") { summary.removeLast() }
+        summary += ", plus 1 for playing short-handed (\(declarers) of \(fullSide)): \(levelPhrase(levels)) in all."
+        return LevelOutcome(declarersHold: true, levels: levels, summary: summary)
+    }
+
     /// Kitty multiplier when the defenders win the last trick: 2 × the number of cards in the
     /// largest component of the last trick's lead (single ×2, pair ×4, triple ×6, 2-pair tractor ×8, 3-pair ×12).
     public static func kittyMultiplier(lastLead: [Card], trump: Trump) -> Int {

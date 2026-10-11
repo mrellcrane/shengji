@@ -106,10 +106,10 @@ final class SeatViewTests: XCTestCase {
     }
 
     func testCardIdRoundTripAndRange() {
-        for id in 0..<216 { XCTAssertEqual(Card(id: id)?.id, id) }
+        for id in 0..<270 { XCTAssertEqual(Card(id: id)?.id, id) }
         XCTAssertNil(Card(id: -1))
-        XCTAssertNil(Card(id: 216))
-        XCTAssertThrowsError(try JSONDecoder().decode([Card].self, from: Data("[216]".utf8)))
+        XCTAssertNil(Card(id: 270))
+        XCTAssertThrowsError(try JSONDecoder().decode([Card].self, from: Data("[270]".utf8)))
     }
 
     func testRotatedSummaryRewritesExplanation() {

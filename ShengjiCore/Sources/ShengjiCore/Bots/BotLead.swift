@@ -6,6 +6,9 @@ import Foundation
 /// 3. declarers with many trumps draw trumps (top pairs, else low singles);
 /// 4. a suit the partner is out of, so the partner can ruff;
 /// 5. a low non-point card (or low pair) from a short plain suit; last resort, the lowest trump.
+/// Finding Friends adds two leads before these: a hidden friend leads the called card to show
+/// themselves, and the dealer's side (after any guaranteed throw) leads a low card of a called card's
+/// suit so the friend not found yet can win it with the called card.
 /// A point card that something unseen can beat is never led while a lead without points exists
 /// (leading into the partner's void aside). Reasons for plain-suit winners say "only a trump can
 /// beat it" rather than promising the trick: someone may be out of the suit without having shown it.
@@ -17,7 +20,9 @@ struct StandardLead {
     }
 
     private func choose() -> BotDecision {
+        if let decision = revealLead() { return decision }
         if let decision = throwLead() { return decision }
+        if let decision = findFriendLead() { return decision }
         if table.tuning.drawBeforeCashing, let decision = drawTrumps() { return decision }
         if let decision = sureWinnerLead() { return decision }
         if let decision = drawTrumps() { return decision }
@@ -34,6 +39,50 @@ struct StandardLead {
     private func safeToCash(_ group: SuitGroup) -> Bool {
         for opponent in table.opponents where table.mayRuff(opponent, group) { return false }
         return !table.isRunningOut(group, count: 1, players: table.opponents.count)
+    }
+
+    // MARK: Finding Friends
+
+    /// A hidden friend leads the called card (the copies still needed to reach the called one, which
+    /// are identical cards: a single, pair or set), unless it holds points something unseen could beat.
+    private func revealLead() -> BotDecision? {
+        guard let reveal = table.friends?.reveal else { return nil }
+        guard reveal.cards.points == 0
+            || !Combos.decompose(reveal.cards, trump: trump).contains(where: { table.unseenCanBeat($0) }) else { return nil }
+        let names = BotText.cards(reveal.cards, trump)
+        return BotDecision(
+            cards: reveal.cards,
+            reason: "The dealer called \(reveal.call), and you hold it: lead \(names) to show you are their friend.",
+            concept: "Find friends",
+            nudge: "Look at the cards the dealer called.",
+            principle: "If you hold a card the dealer called, play it early: then everyone knows which side you are on.")
+    }
+
+    /// The dealer's side looks for a friend not found yet: a low card without points from the suit of a
+    /// called plain-suit card, lower than it, so the friend can win the trick with the called card.
+    private func findFriendLead() -> BotDecision? {
+        guard let plan = table.friends, plan.onDealerSide, plan.reveal == nil else { return nil }
+        var best: (card: Card, call: FriendCall, score: Int)?
+        for call in table.view.friendCalls ?? [] where call.friend == nil {
+            guard let suit = call.face.suit, let rank = call.face.rank else { continue }
+            let called = Card(rank, suit)
+            guard !trump.isTrump(called) else { continue }
+            let strength = trump.strength(called)
+            for card in table.cards(in: trump.group(called))
+            where card.points == 0 && trump.strength(card) < strength {
+                let score = table.value(card) + table.pairPenalty(card)
+                if let current = best, current.score <= score { continue }
+                best = (card, call, score)
+            }
+        }
+        guard let pick = best else { return nil }
+        return BotDecision(
+            cards: [pick.card],
+            reason: "Nobody has played \(pick.call) yet, so lead \(pick.card): whoever holds it can win "
+                + "the trick with it and join your side.",
+            concept: "Find friends",
+            nudge: "Think about how your friends can show themselves.",
+            principle: "Lead low in the suit of a card you called, so the friend holding it can win the trick and show themselves.")
     }
 
     // MARK: 1. Throws

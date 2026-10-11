@@ -10,15 +10,19 @@ import ShengjiCore
 /// with only its last history entry, which is all a view reads, and the `Round`) and the four
 /// views exactly as the Swift `SeatView` Codable encodes them (absent optionals are left out).
 /// After them come `bigGames` games at tables of 6 and 8 players: 6 or 8 players and views, and the
-/// game's settings carry its `table`.
+/// game's settings carry its `table`. Last, `oddGames` games at tables of 5, 7 and 9 (Finding Friends:
+/// the round carries `friendCalls`, levels are per seat).
 enum ViewVectors {
-    static func make(games: Int, bigGames: Int) -> [(String, JSON)] {
+    static func make(games: Int, bigGames: Int, oddGames: Int) -> [(String, JSON)] {
         var cases: [JSON] = []
         for index in 0..<games {
             cases += game(seed: UInt64(7000 + index))
         }
         for index in 0..<bigGames {
             cases += game(seed: UInt64(17_000 + index), table: Cards.bigTables[index % 2])
+        }
+        for index in 0..<oddGames {
+            cases += game(seed: UInt64(18_000 + index), table: Cards.oddTables[index % 3])
         }
         return [
             ("format", .int(1)),
@@ -34,9 +38,10 @@ enum ViewVectors {
         let names = rand.shuffled(humanNames)
         return (0..<count).map { seat in
             if seat == 0 || rand.percent(55) {
-                return SeatView.Player(name: names[seat], isBot: false, userID: "u_test\(seat)\(rand.below(1000))")
+                let name = seat < names.count ? names[seat] : "Kai"
+                return SeatView.Player(name: name, isBot: false, userID: "u_test\(seat)\(rand.below(1000))")
             }
-            return SeatView.Player(name: botNames[seat], isBot: true, userID: nil)
+            return SeatView.Player(name: seat < botNames.count ? botNames[seat] : "Bee Bot", isBot: true, userID: nil)
         }
     }
 
@@ -73,7 +78,10 @@ enum ViewVectors {
             let hand = round.hands[dealer]
             let pointsFirst = hand.filter { $0.points > 0 } + rand.shuffled(hand.filter { $0.points == 0 })
             do {
-                try round.bury(rand.percent(35) ? Array(pointsFirst.prefix(table.kittySize)) : rand.sample(hand, table.kittySize))
+                let buried = rand.percent(35) ? Array(pointsFirst.prefix(table.kittySize)) : rand.sample(hand, table.kittySize)
+                let calls = table.findsFriends
+                    ? Cards.randomCalls(table: table, trumpRank: round.trumpRank, dealerHand: hand, rand: &rand) : []
+                try round.bury(buried, calls: calls)
             } catch {
                 fatalError("bury failed: \(error)")
             }
@@ -180,7 +188,7 @@ enum ViewVectors {
             ("trumpFromKitty", ShengjiVectors.json(round.trumpFromKitty)),
             ("result", round.result.map { ShengjiVectors.json($0) } ?? .null),
             ("bidding", .null),
-        ])
+        ] + (round.isFindingFriends ? [("friendCalls", ShengjiVectors.json(round.friendCalls))] : []))
     }
 
     // MARK: The view as the Swift Codable writes it

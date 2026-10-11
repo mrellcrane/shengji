@@ -5,7 +5,8 @@ import Foundation
 /// (no suit symbols, ranks, digits or joker codes); `reason` always names the chosen cards.
 enum BotText {
     /// How `seat` refers to `player` at a table of `players`: "you", "your partner", or a compass
-    /// name. With 6 or 8 players there are several partners, so they are "your partner Northeast".
+    /// name. With 6 or 8 players there are several partners, so they are "your partner Northeast"; with
+    /// an odd number nobody has a fixed partner, so everyone gets their compass name.
     static func name(_ player: Int, from seat: Int, players: Int = 4) -> String {
         let n = max(players, 4)
         let p = Seats.normalized(player, players: n)
@@ -16,6 +17,8 @@ enum BotText {
             return Seats.compassName(p, players: 4)
         }
         let compass = Seats.compassName(p, players: n)
+        // Finding Friends (odd tables): no fixed partners to name.
+        if n % 2 == 1 { return compass }
         return Seats.team(of: p) == Seats.team(of: me) ? "your partner \(compass)" : compass
     }
 

@@ -17,14 +17,18 @@ import ShengjiCore
 /// only rounds in which the standard bot ruffs a throw, or ruffs a suit too short for the
 /// opponents still to play to follow, are kept (both rare at random, and both have their own logic).
 /// Then come rounds and deals at tables of 6 and 8 players (a `players` field): `bigOnline` and
-/// `bigOffline` rounds after the others in `rounds`, `bigDeals` after the others in `deals`.
+/// `bigOffline` rounds after the others in `rounds`, `bigDeals` after the others in `deals`. Last come
+/// tables of 5, 7 and 9 (Finding Friends): `oddOnline` and `oddOffline` rounds, `oddDeals` deals. Their
+/// burying step also has the friends each bot calls (`standardCalls`, `beginnerCalls`) and a random
+/// seat's calls (`moveCalls`).
 enum BotVectors {
     enum Controller: String {
         case standard, beginner, random
     }
 
     static func make(online: Int, offline: Int, deals: Int, ruffRounds: Int,
-                     bigOnline: Int, bigOffline: Int, bigDeals: Int) -> [(String, JSON)] {
+                     bigOnline: Int, bigOffline: Int, bigDeals: Int,
+                     oddOnline: Int, oddOffline: Int, oddDeals: Int) -> [(String, JSON)] {
         var rounds: [JSON] = []
         for index in 0..<online { rounds.append(entry(seed: UInt64(9000 + index), online: true)) }
         for index in 0..<offline { rounds.append(entry(seed: UInt64(9500 + index), online: false)) }
@@ -44,6 +48,12 @@ enum BotVectors {
         for index in 0..<bigOffline {
             rounds.append(entry(seed: UInt64(31_000 + index), online: false, table: Cards.bigTables[index % 2]))
         }
+        for index in 0..<oddOnline {
+            rounds.append(entry(seed: UInt64(33_000 + index), online: true, table: Cards.oddTables[index % 3]))
+        }
+        for index in 0..<oddOffline {
+            rounds.append(entry(seed: UInt64(34_000 + index), online: false, table: Cards.oddTables[index % 3]))
+        }
         var short: [JSON] = []
         for index in 0..<deals {
             short.append(entry(seed: UInt64(10_000 + index), online: index % 4 != 3, playOut: false))
@@ -51,6 +61,10 @@ enum BotVectors {
         for index in 0..<bigDeals {
             short.append(entry(seed: UInt64(32_000 + index), online: index % 4 != 3, playOut: false,
                                table: Cards.bigTables[index % 2]))
+        }
+        for index in 0..<oddDeals {
+            short.append(entry(seed: UInt64(35_000 + index), online: index % 4 != 3, playOut: false,
+                               table: Cards.oddTables[index % 3]))
         }
         return [
             ("format", .int(1)),
@@ -264,8 +278,22 @@ enum BotVectors {
             move = rand.percent(50) ? Array(pointsFirst.prefix(round.kittySize)) : rand.sample(hand, round.kittySize)
             fields.append(("move", json(move)))
         }
+        var calls: [FriendCall] = []
+        if round.isFindingFriends {
+            let standardCalls = Bot(seat: seat, level: .standard).friendCalls(view: view, buried: standard)
+            let beginnerCalls = Bot(seat: seat, level: .beginner).friendCalls(view: view, buried: beginner)
+            fields += [("standardCalls", json(standardCalls)), ("beginnerCalls", json(beginnerCalls))]
+            switch controllers[seat] {
+            case .standard: calls = standardCalls
+            case .beginner: calls = beginnerCalls
+            case .random:
+                calls = Cards.randomCalls(table: round.table, trumpRank: round.trumpRank, dealerHand: round.hands[seat],
+                                          rand: &rand)
+                fields.append(("moveCalls", json(calls)))
+            }
+        }
         do {
-            try round.bury(move)
+            try round.bury(move, calls: calls)
         } catch {
             fatalError("bury refused: \(error)")
         }

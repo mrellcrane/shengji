@@ -230,6 +230,7 @@ struct TableDescription {
     }
 
     func gameLine() -> String? {
+        if view.findsFriends { return friendsGameLine() }
         guard levelsKnown, view.teamLevels.count == 2 else { return nil }
         let ours = view.teamLevels[0].label
         let theirs = view.teamLevels[1].label
@@ -265,7 +266,23 @@ struct TableDescription {
         }
     }
 
+    /// Finding Friends: everyone's own level.
+    func friendsGameLine() -> String? {
+        guard levelsKnown, view.teamLevels.count == players else { return nil }
+        let levels = Seats.all(players: players).map { seat in
+            "\(seat == Seats.human ? "you" : name(seat)) \(view.teamLevels[seat].label)"
+        }
+        var line = "Round \(view.roundNumber) of this game. Levels (everyone climbs on their own): "
+            + levels.joined(separator: ", ")
+            + " (the game is won by the dealer's side holding the deal while the dealer is at \(view.targetRank.label))."
+        if let winner = view.gameWinnerTeam {
+            line += winner == 0 ? " You were on the side that won the game!" : " The game is over: the other side won it."
+        }
+        return line
+    }
+
     func teamsLine() -> String {
+        if view.findsFriends { return friendsTeamsLine() }
         if players > 4 { return bigTeamsLine() }
         guard let dealer = view.dealer else {
             return "Seats: you (South), East, Partner (North, your partner), West. Dealer: not decided yet. In the first round, whoever wins the declaration deals."
@@ -300,13 +317,57 @@ struct TableDescription {
         return line
     }
 
+    /// Finding Friends: no fixed teams; the friends called and found so far.
+    func friendsTeamsLine() -> String {
+        let order = Seats.all(players: players).map { $0 == Seats.human ? "you (South)" : name($0) }
+        let friends = table.friendCount
+        var line = "Seats in order of play: \(order.joined(separator: ", ")). This table has \(players) players and "
+            + "\(table.decks) decks (\(table.cardCount) cards, \(table.totalPoints) points), so it plays Finding Friends "
+            + "(找朋友 zhǎo péngyou): nobody has fixed partners. After burying, the dealer calls \(friends) "
+            + (friends == 1 ? "friend" : "friends") + " by naming cards (such as the first A♠); whoever plays a called "
+            + "card joins the dealer's side, and nobody knows who the friends are until then. Everyone else defends. "
+            + "Every card exists \(table.decks) times, so triples and bigger sets are combinations too, "
+            + "\(Scoring.takeoverThreshold(decks: table.decks)) points take over the deal, and each level is worth "
+            + "\(Scoring.stepSize(decks: table.decks)) points. A dealer's side that holds the deal with fewer players than "
+            + "it could have had goes up 1 extra level."
+        guard let dealer = view.dealer else {
+            return line + " Dealer: not decided yet. In the first round, whoever wins the declaration deals."
+        }
+        line += " Dealer: \(dealer == Seats.human ? "you" : name(dealer))."
+        guard let calls = view.friendCalls, !calls.isEmpty else {
+            return line + (view.phase == .burying ? " The dealer calls their friends when they bury." : "")
+        }
+        let called = calls.map { call -> String in
+            guard let friend = call.friend else { return "\(call) (not played yet)" }
+            if friend == dealer { return "\(call) (played by the dealer, so no friend)" }
+            return "\(call) (played by \(friend == Seats.human ? "you" : name(friend)))"
+        }
+        line += " Friends called: \(CoachText.list(called))."
+        let side = view.declarers.map { $0 == Seats.human ? "you" : name($0) }
+        line += " The dealer's side so far: \(CoachText.list(side))."
+        let held = calls.filter { call in call.friend == nil && view.hand.contains { $0.face == call.face } }
+        if !held.isEmpty, !view.isDeclarer(Seats.human) {
+            line += " You hold \(CoachText.list(held.map { "a copy of \($0.face)" })): play the called copy and you join the dealer's side."
+        } else if view.isDeclarer(Seats.human) {
+            line += " You are on the dealer's side."
+        } else {
+            line += " You are a defender unless you play a called card."
+        }
+        return line
+    }
+
     func pointsLine() -> String? {
         guard view.phase == .playing else { return nil }
         let defenders = view.defenderTrickPoints
         let played = view.playedCards.points
         let threshold = Scoring.takeoverThreshold(decks: table.decks)
         let need = max(0, threshold - defenders)
-        let who = view.isDefender(Seats.human) ? "your team (the defenders)" : "the defenders (\(otherTeam))"
+        let who: String
+        if view.findsFriends {
+            who = view.isDefender(Seats.human) ? "the defenders (your side unless you play a called card)" : "the defenders"
+        } else {
+            who = view.isDefender(Seats.human) ? "your team (the defenders)" : "the defenders (\(otherTeam))"
+        }
         var line = "Points: \(who) have \(defenders) so far; \(threshold) takes over the deal"
         line += need > 0 ? " (\(need) more needed)." : " (already reached)."
         line += " Points in the cards played so far: \(played) of \(table.totalPoints)."
@@ -536,7 +597,13 @@ struct TableDescription {
         parts.append("Outcome: " + CoachText.plain(result.outcome.summary))
         let ourTeamDeclared = result.declarerTeam == Seats.team(of: Seats.human)
         let weWon = ourTeamDeclared == result.outcome.declarersHold
-        parts.append(weWon ? "Your team won this round." : "Your team lost this round.")
+        if let declarers = result.declarers {
+            let side = declarers.map { $0 == Seats.human ? "you" : name($0) }
+            parts.append("The dealer's side was \(CoachText.list(side)).")
+            parts.append(weWon ? "Your side won this round." : "Your side lost this round.")
+        } else {
+            parts.append(weWon ? "Your team won this round." : "Your team lost this round.")
+        }
         if let summary = view.lastRoundSummary, summary.result == result {
             parts.append("What happens next: " + CoachText.plain(summary.explanation))
         }

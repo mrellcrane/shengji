@@ -49,7 +49,7 @@ enum BotHarness {
         let before = round.declaration
         let choice = stats.time { bot.declaration(in: round) }
         guard let declaration = choice else { return }
-        if let before = before, before.player != bot.seat,
+        if let before = before, before.player != bot.seat, !round.isFindingFriends,
            Seats.team(of: before.player) == Seats.team(of: bot.seat) {
             stats.problems.append("seat \(bot.seat) overrode its partner")
         }
@@ -72,12 +72,16 @@ enum BotHarness {
         if decision.cards.count != round.kittySize || !hand.containsAll(decision.cards) {
             stats.problems.append("bad bury \(decision.cards.shortText)")
         }
+        let calls = bots[dealer].friendCalls(in: round, buried: decision.cards)
+        if let problem = FriendCall.problem(with: calls, table: round.table, trumpRank: round.trumpRank) {
+            stats.problems.append("bad friend calls \(calls): \(problem)")
+        }
         do {
-            try round.bury(decision.cards)
+            try round.bury(decision.cards, calls: calls)
             stats.burials += 1
         } catch {
             stats.problems.append("bury rejected: \(error)")
-            try? round.bury(Array(hand.prefix(round.kittySize)))
+            try? round.bury(Array(hand.prefix(round.kittySize)), calls: calls)
         }
     }
 

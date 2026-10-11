@@ -126,6 +126,7 @@ struct StandardFollow {
     private var seat: Int { table.seat }
 
     func decide() -> BotDecision {
+        if let decision = revealFollow(), builder.isLegal(decision.cards) { return decision }
         let decision = table.isTeammate(winner) ? partnerWinning() : opponentWinning()
         if builder.isLegal(decision.cards) { return decision }
         BotDiagnostics.shared.noteFallback()
@@ -240,6 +241,22 @@ struct StandardFollow {
 
     /// The player after this seat when it plays third (the last player), by name.
     private var lastPlayerName: String { table.name((seat + 1) % table.players) }
+
+    /// Finding Friends: a hidden friend follows with the called card when the lead lets them (as many
+    /// cards as were led, all of the led group), to show which side they are on. Points go only to a
+    /// partner winning the trick, or with cards that take the lead.
+    private func revealFollow() -> BotDecision? {
+        guard let reveal = table.friends?.reveal, reveal.cards.count == count,
+              reveal.cards.allSatisfy({ trump.group($0) == ledGroup }) else { return nil }
+        guard reveal.cards.points == 0 || table.isTeammate(winner) || judge.wins(reveal.cards) else { return nil }
+        let names = BotText.cards(reveal.cards, trump)
+        return BotDecision(
+            cards: reveal.cards,
+            reason: "The dealer called \(reveal.call), and you hold it: play \(names) to show you are their friend.",
+            concept: "Find friends",
+            nudge: "Look at the cards the dealer called.",
+            principle: "If you hold a card the dealer called, play it early: then everyone knows which side you are on.")
+    }
 
     /// "Your partner" or "Your partner Northeast": who is winning when it is a partner.
     private var winnerSubject: String { BotText.capitalized(table.name(winner)) }

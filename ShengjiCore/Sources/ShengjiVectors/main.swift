@@ -26,12 +26,13 @@ do {
 let outputs: [(name: String, make: () -> [(String, JSON)])] = [
     ("combos.json", { CombosVectors.make() }),
     ("rules.json", { RulesVectors.make(positions: 1200, bigPositions: 200) }),
-    ("rounds.json", { RoundVectors.make(count: 200, bigCount: 40) }),
+    ("rounds.json", { RoundVectors.make(count: 200, bigCount: 40, oddCount: 45) }),
     ("games.json", { GameVectors.make() }),
     ("edges.json", { EdgeVectors.make(count: 200, bigCount: 100) }),
-    ("views.json", { ViewVectors.make(games: 20, bigGames: 10) }),
+    ("views.json", { ViewVectors.make(games: 20, bigGames: 10, oddGames: 12) }),
     ("bots.json", { BotVectors.make(online: 240, offline: 60, deals: 400, ruffRounds: 80,
-                                    bigOnline: 40, bigOffline: 20, bigDeals: 80) }),
+                                    bigOnline: 40, bigOffline: 20, bigDeals: 80,
+                                    oddOnline: 45, oddOffline: 15, oddDeals: 60) }),
 ]
 
 var total = 0

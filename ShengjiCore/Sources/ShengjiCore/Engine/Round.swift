@@ -102,6 +102,8 @@ public struct TrickRecord: Hashable, Codable, Sendable {
 
 public struct RoundResult: Hashable, Codable, Sendable {
     public var dealer: Int
+    /// The dealer's team. With Finding Friends there are no fixed teams and team 0 means seat 0's side
+    /// (in a seat view, the viewer's): 0 when seat 0 was on the dealer's side, else 1.
     public var declarerTeam: Int
     public var trump: Trump
     /// Points the defenders captured in tricks.
@@ -115,9 +117,15 @@ public struct RoundResult: Hashable, Codable, Sendable {
     public var outcome: LevelOutcome
     public var kitty: [Card]
     public var lastTrickWinner: Int
+    /// Finding Friends only (nil at a table of fixed teams): the dealer's side when the round ended, the
+    /// dealer first and then in play order.
+    public var declarers: [Int]?
+    /// Finding Friends only: the friends the dealer called and who turned out to be each one.
+    public var friendCalls: [FriendCall]?
 
     public init(dealer: Int, declarerTeam: Int, trump: Trump, trickPoints: Int, kittyPoints: Int,
-                kittyMultiplier: Int, defenderPoints: Int, outcome: LevelOutcome, kitty: [Card], lastTrickWinner: Int) {
+                kittyMultiplier: Int, defenderPoints: Int, outcome: LevelOutcome, kitty: [Card], lastTrickWinner: Int,
+                declarers: [Int]? = nil, friendCalls: [FriendCall]? = nil) {
         self.dealer = dealer
         self.declarerTeam = declarerTeam
         self.trump = trump
@@ -128,6 +136,14 @@ public struct RoundResult: Hashable, Codable, Sendable {
         self.outcome = outcome
         self.kitty = kitty
         self.lastTrickWinner = lastTrickWinner
+        self.declarers = declarers
+        self.friendCalls = friendCalls
+    }
+
+    /// True if `seat` was on the dealer's side (with fixed teams: the dealer's team).
+    public func isDeclarer(_ seat: Int) -> Bool {
+        if let declarers { return declarers.contains(seat) }
+        return Seats.team(of: seat) == declarerTeam
     }
 }
 
@@ -144,6 +160,7 @@ public enum RoundError: Error, Equatable, Sendable {
     case illegalLead(LeadViolation)
     case illegalFollow(FollowViolation)
     case invalidDeclaration
+    /// Burying (or, with Finding Friends, the friends called with it) broke a rule; the text says which.
     case invalidBury(String)
 
     /// Learner-facing explanation.
@@ -174,12 +191,12 @@ public struct Round: Codable, Sendable {
     public static let kittySize = 8
     public static let handSize = 25
 
-    /// Trump rank for this round (the dealer team's level).
+    /// Trump rank for this round (the dealer team's level; with Finding Friends the dealer's own level).
     public private(set) var trumpRank: Rank
     /// Dealer (庄家). Nil only during the first round's deal, before anyone has declared.
     public private(set) var dealer: Int?
     public private(set) var phase: RoundPhase
-    /// Four hands, indexed by seat. Not kept sorted; use `trump.sorted` for display.
+    /// One hand per seat, indexed by seat. Not kept sorted; use `trump.sorted` for display.
     public private(set) var hands: [[Card]]
     /// Cards still to be dealt (dealing phase).
     public private(set) var undealt: [Card]
@@ -207,11 +224,19 @@ public struct Round: Codable, Sendable {
     public private(set) var result: RoundResult?
     /// Players and decks; absent in rounds saved before bigger tables existed (4 players, 2 decks).
     private var tableSize: TableSize?
+    /// Finding Friends: the friends the dealer called when burying (absent otherwise).
+    private var calls: [FriendCall]?
 
     /// Players and decks at this table.
     public var table: TableSize { tableSize ?? .four }
-    /// Number of seats (4, 6 or 8).
+    /// Number of seats (4 to 9).
     public var players: Int { table.players }
+    /// True at a table with an odd number of players: the dealer calls friends (`friendCalls`) instead
+    /// of having fixed partners.
+    public var isFindingFriends: Bool { table.findsFriends }
+    /// Finding Friends: the friends the dealer called (empty before burying and at tables of fixed
+    /// teams), each with the seat that turned out to be it once the card has been played.
+    public var friendCalls: [FriendCall] { calls ?? [] }
     /// Cards the dealer picks up and buries: 8 with 4 or 8 players, 6 with 6.
     public var kittySize: Int { table.kittySize }
     /// Cards dealt to each player: 25 with 4 players, 26 with 6 or 8.
@@ -343,8 +368,13 @@ public struct Round: Codable, Sendable {
     // MARK: Burying
 
     /// Dealer buries exactly `kittySize` cards (8 from 33 with 4 players) → `.playing`, dealer leads.
-    public mutating func bury(_ cards: [Card]) throws {
+    /// With Finding Friends the dealer calls their friends at the same time: exactly `table.friendCount`
+    /// calls (see `FriendCall.problem`); at a table of fixed teams `calls` must be empty.
+    public mutating func bury(_ cards: [Card], calls: [FriendCall] = []) throws {
         guard phase == .burying, let seat = dealer else { throw RoundError.wrongPhase }
+        if let problem = FriendCall.problem(with: calls, table: table, trumpRank: trumpRank) {
+            throw RoundError.invalidBury(problem)
+        }
         guard cards.count == kittySize else {
             throw RoundError.invalidBury("Choose exactly \(kittySize) cards to bury (you chose \(cards.count)).")
         }
@@ -356,6 +386,7 @@ public struct Round: Codable, Sendable {
         }
         hands[seat].remove(cards: cards)
         kitty = cards
+        if isFindingFriends { self.calls = calls.map(\.unfound) }
         phase = .playing
         leader = seat
     }
@@ -368,12 +399,36 @@ public struct Round: Codable, Sendable {
         return (leader + currentTrick.count) % players
     }
 
-    /// Team of the dealer (nil before the dealer is known).
-    public var declarerTeam: Int? { dealer.map { Seats.team(of: $0) } }
+    /// Team of the dealer (nil before the dealer is known). With Finding Friends there are no fixed teams
+    /// and team 0 means seat 0's side: 0 while seat 0 is the dealer or a friend found so far, else 1
+    /// (see `declarers`).
+    public var declarerTeam: Int? {
+        guard let dealer else { return nil }
+        return isFindingFriends ? (isDeclarer(0) ? 0 : 1) : Seats.team(of: dealer)
+    }
 
+    /// The dealer's side, the dealer first and then in play order: the dealer's team at a table of fixed
+    /// teams; with Finding Friends the dealer and every friend found so far. Empty before the dealer is known.
+    public var declarers: [Int] {
+        guard let dealer else { return [] }
+        let n = players
+        let seats = isFindingFriends
+            ? [dealer] + friendCalls.compactMap(\.friend)
+            : Seats.all(players: n).filter { Seats.team(of: $0) == Seats.team(of: dealer) }
+        return Array(Set(seats)).sorted { Seats.normalized($0 - dealer, players: n) < Seats.normalized($1 - dealer, players: n) }
+    }
+
+    /// True if `player` is on the dealer's side (with Finding Friends: the dealer or a friend found so far).
+    public func isDeclarer(_ player: Int) -> Bool {
+        guard let dealer else { return false }
+        if isFindingFriends { return player == dealer || friendCalls.contains { $0.friend == player } }
+        return Seats.team(of: player) == Seats.team(of: dealer)
+    }
+
+    /// True if `player` is against the dealer's side. With Finding Friends a hidden friend counts as a
+    /// defender until they play the called card.
     public func isDefender(_ player: Int) -> Bool {
-        guard let team = declarerTeam else { return false }
-        return Seats.team(of: player) != team
+        dealer != nil && !isDeclarer(player)
     }
 
     /// Cards of the lead of the current trick (empty if none yet).
@@ -408,6 +463,13 @@ public struct Round: Codable, Sendable {
             outcome = .throwFailed(forced: forced.cards, blocker: blocker)
         }
 
+        if isFindingFriends, let calls, calls.contains(where: { $0.friend == nil }) {
+            let noted = calls.noting(played, by: player, playedBefore: playedCards)
+            if noted != calls {
+                self.calls = noted
+                recountDefenderPoints()
+            }
+        }
         hands[player].remove(cards: played)
         currentTrick.append(Play(player: player, cards: played))
         if currentTrick.count == players { completeTrick() }
@@ -427,12 +489,18 @@ public struct Round: Codable, Sendable {
         let winnerIndex = Rules.winningIndex(currentTrick, trump: trump)
         let winner = currentTrick[winnerIndex].player
         let points = currentTrick.reduce(0) { $0 + $1.cards.points }
-        if isDefender(winner) { defenderTrickPoints += points }
         let lead = currentLead
         tricks.append(TrickRecord(plays: currentTrick, winner: winner, points: points))
+        recountDefenderPoints()
         currentTrick = []
         leader = winner
         if hands.allSatisfy({ $0.isEmpty }) { finishRound(lastLead: lead, lastWinner: winner) }
+    }
+
+    /// Points the defenders hold now: every finished trick won by a player not (yet) on the dealer's side.
+    /// With Finding Friends a friend's tricks move to the dealer's side when the friend is found.
+    private mutating func recountDefenderPoints() {
+        defenderTrickPoints = tricks.reduce(0) { $0 + (isDefender($1.winner) ? $1.points : 0) }
     }
 
     private mutating func finishRound(lastLead: [Card], lastWinner: Int) {
@@ -440,11 +508,15 @@ public struct Round: Codable, Sendable {
         let multiplier = isDefender(lastWinner) ? Scoring.kittyMultiplier(lastLead: lastLead, trump: trump) : 0
         let defenderPoints = defenderTrickPoints + kittyPoints * multiplier
         let seat = dealer ?? 0
+        var outcome = Scoring.outcome(defenderPoints: defenderPoints, decks: table.decks)
+        if isFindingFriends {
+            outcome = Scoring.findingFriendsOutcome(outcome, declarers: declarers.count, fullSide: table.teamSize)
+        }
         result = RoundResult(
-            dealer: seat, declarerTeam: Seats.team(of: seat), trump: trump,
+            dealer: seat, declarerTeam: declarerTeam ?? Seats.team(of: seat), trump: trump,
             trickPoints: defenderTrickPoints, kittyPoints: kittyPoints, kittyMultiplier: multiplier,
-            defenderPoints: defenderPoints, outcome: Scoring.outcome(defenderPoints: defenderPoints, decks: table.decks),
-            kitty: kitty, lastTrickWinner: lastWinner)
+            defenderPoints: defenderPoints, outcome: outcome, kitty: kitty, lastTrickWinner: lastWinner,
+            declarers: isFindingFriends ? declarers : nil, friendCalls: isFindingFriends ? friendCalls : nil)
         phase = .finished
     }
 

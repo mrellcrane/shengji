@@ -163,7 +163,7 @@ public struct Card: Hashable, Codable, Sendable, Identifiable, CustomStringConve
     public static func smallJoker(copy: Int = 0) -> Card { Card(.smallJoker, copy: copy) }
     public static func bigJoker(copy: Int = 0) -> Card { Card(.bigJoker, copy: copy) }
 
-    /// Unique id: 0...107 with two decks, up to 0...215 with four (`face.index + copy × 54`).
+    /// Unique id: 0...107 with two decks, up to 0...269 with five (`face.index + copy × 54`).
     public var id: Int { face.index + copy * 54 }
 
     /// The card with the given id (0 up to 54 × `Deck.maxDecks` − 1), or nil if out of range.
@@ -232,8 +232,8 @@ public extension Array where Element == Card {
 }
 
 public enum Deck {
-    /// The most decks a table uses (eight players).
-    public static let maxDecks = 4
+    /// The most decks a table uses (nine players).
+    public static let maxDecks = 5
 
     /// Two full decks including four jokers: 108 cards, in a fixed order.
     public static func double() -> [Card] { cards(decks: 2) }
@@ -262,30 +262,36 @@ public enum Deck {
     }
 }
 
-/// How many play and with how many decks. Teams sit alternately (team = seat % 2), so every size
-/// keeps two fixed teams: 4 players use 2 decks, 6 use 3 and 8 use 4 (half a deck per player).
+/// How many play and with how many decks: half a deck per player, rounded up (4 players use 2 decks,
+/// 5 and 6 use 3, 7 and 8 use 4, 9 use 5). With an even number of players teams sit alternately
+/// (team = seat % 2). With an odd number nobody has fixed partners: every round the dealer calls
+/// friends (Finding Friends, 找朋友), see `findsFriends`.
 public struct TableSize: Hashable, Codable, Sendable, CustomStringConvertible {
     public let players: Int
     public let decks: Int
 
     /// The classic game: 4 players, 2 decks.
     public static let four = TableSize(players: 4)
+    public static let five = TableSize(players: 5)
     public static let six = TableSize(players: 6)
+    public static let seven = TableSize(players: 7)
     public static let eight = TableSize(players: 8)
+    public static let nine = TableSize(players: 9)
     /// Every table the app offers.
-    public static let all: [TableSize] = [.four, .six, .eight]
+    public static let all: [TableSize] = [.four, .five, .six, .seven, .eight, .nine]
+    /// Seat counts the app offers.
+    public static let playerCounts = 4...9
 
-    /// A table of 4, 6 or 8 players with half a deck each. Other counts round to the nearest of those.
+    /// A table of 4 to 9 players with half a deck each (rounded up). Other counts are clamped to that range.
     public init(players: Int) {
-        let supported = [4, 6, 8]
-        let count = supported.min { abs($0 - players) < abs($1 - players) } ?? 4
+        let count = min(max(players, TableSize.playerCounts.lowerBound), TableSize.playerCounts.upperBound)
         self.players = count
-        self.decks = count / 2
+        self.decks = (count + 1) / 2
     }
 
     /// The table for `players` seats, or nil when that many is not offered.
     public init?(exactly players: Int) {
-        guard [4, 6, 8].contains(players) else { return nil }
+        guard TableSize.playerCounts.contains(players) else { return nil }
         self.init(players: players)
     }
 
@@ -304,23 +310,29 @@ public struct TableSize: Hashable, Codable, Sendable, CustomStringConvertible {
 
     /// Every card in play: 54 per deck.
     public var cardCount: Int { 54 * decks }
-    /// Cards left for the kitty: 8 with 4 or 8 players, 6 with 6.
+    /// Cards left for the kitty: 8 with 4 or 8 players, 7 with 5, 6 with 6 or 7, 9 with 9.
     public var kittySize: Int {
         var size = cardCount % players
         if size == 0 { size = players }
         if size < 5 { size += players }
         return size
     }
-    /// Cards dealt to each player: 25 with 4 players, 26 with 6 or 8.
+    /// Cards dealt to each player: 25 with 4 players, 31 with 5, 26 with 6 or 8, 30 with 7, 29 with 9.
     public var handSize: Int { (cardCount - kittySize) / players }
     /// Points in all the cards: 100 per deck.
     public var totalPoints: Int { 100 * decks }
-    /// Players per team.
-    public var teamSize: Int { players / 2 }
+    /// Players per team: half the table, or with Finding Friends the most the dealer's side can hold
+    /// (the dealer and every friend called).
+    public var teamSize: Int { findsFriends ? friendCount + 1 : players / 2 }
+    /// Finding Friends (找朋友): an odd number of players can't split into two fixed teams, so every
+    /// round the dealer calls friends by naming cards, and everyone keeps their own level.
+    public var findsFriends: Bool { players % 2 == 1 }
+    /// Friends the dealer calls: 1 with 5 players, 2 with 7, 3 with 9 (none at a table of fixed teams).
+    public var friendCount: Int { findsFriends ? players / 2 - 1 : 0 }
     /// True for the classic 4-player, 2-deck game.
     public var isClassic: Bool { players == 4 }
 
-    /// e.g. "6 players, 3 decks"
+    /// e.g. "6 players, 3 decks", "9 players, 5 decks"
     public var description: String { "\(players) players, \(decks) decks" }
 }
 

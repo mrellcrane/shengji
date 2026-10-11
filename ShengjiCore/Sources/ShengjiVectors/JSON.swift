@@ -238,8 +238,22 @@ func json(_ result: RoundResult) -> JSON {
         ("outcome", json(result.outcome)),
         ("kitty", json(result.kitty)),
         ("lastTrickWinner", .int(result.lastTrickWinner)),
-    ])
+    ] + friendFields(result))
 }
+
+/// Finding Friends only (absent at tables of fixed teams): the dealer's side and the calls.
+func friendFields(_ result: RoundResult) -> [(String, JSON)] {
+    var fields: [(String, JSON)] = []
+    if let declarers = result.declarers { fields.append(("declarers", .array(declarers.map { .int($0) }))) }
+    if let calls = result.friendCalls { fields.append(("friendCalls", json(calls))) }
+    return fields
+}
+
+func json(_ call: FriendCall) -> JSON {
+    .object([("face", .int(call.face.index)), ("ordinal", .int(call.ordinal)), ("friend", json(call.friend))])
+}
+
+func json(_ calls: [FriendCall]) -> JSON { .array(calls.map { json($0) }) }
 
 func json(_ value: Int?) -> JSON { value.map { .int($0) } ?? .null }
 

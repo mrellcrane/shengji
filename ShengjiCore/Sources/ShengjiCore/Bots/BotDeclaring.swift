@@ -66,7 +66,8 @@ enum BotDeclaring {
         let options = canonical(available)
         // Who holds the declaration comes first, so a pass explains itself the same way with or without options.
         if let current = view.declaration {
-            if current.player != 0 && Seats.team(of: current.player) == Seats.team(of: 0) {
+            // Finding Friends has no partners while declaring: anyone else's declaration is fair game.
+            if current.player != 0 && !view.findsFriends && Seats.team(of: current.player) == Seats.team(of: 0) {
                 return Choice(declaration: nil, why: .partnerHolds)
             }
             if current.player == 0 {

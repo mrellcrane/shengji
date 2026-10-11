@@ -347,7 +347,9 @@ struct TableChips {
         if let winner = view.gameWinnerTeam {
             // The game is over: there is no next round to ask about.
             let ours = winner == Seats.team(of: Seats.human)
-            let who = ours ? "My team" : "\(CoachText.seatName(1, in: view)) and \(CoachText.seatName(3, in: view))"
+            let who = ours ? (view.findsFriends ? "My side" : "My team")
+                : view.findsFriends ? "The other side"
+                : "\(CoachText.seatName(1, in: view)) and \(CoachText.seatName(3, in: view))"
             chips.append(SuggestedQuestions.make("table.gameOver", ours ? "How did we win the game?" : "How did they win the game?",
                                                  "\(who) just won the whole game. How does a team win the game in Shengji, and what decided it this round?"))
         } else {
@@ -395,7 +397,11 @@ struct TableChips {
 
     func ourGoal() -> SuggestedQuestion {
         let prompt: String
-        if let dealer = view.dealer, Seats.team(of: dealer) == Seats.team(of: Seats.human) {
+        if view.findsFriends {
+            prompt = view.isDeclarer(Seats.human)
+                ? "I'm on the dealer's side this round. What do we need to do, and how should I play?"
+                : "How does finding friends work, and how can I tell who is on my side this round?"
+        } else if let dealer = view.dealer, Seats.team(of: dealer) == Seats.team(of: Seats.human) {
             prompt = "My team are the declarers this round. What do we need to do, and how should I play?"
         } else if view.dealer != nil {
             prompt = "My team are defending this round. How many points do we need, and how do we get them?"
