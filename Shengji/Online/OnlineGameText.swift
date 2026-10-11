@@ -301,11 +301,16 @@ enum OnlineGameText {
         return "Waiting"
     }
 
-    /// "Round 3 · Us 4, Them 3 · to A".
+    /// "Round 3 · Us 4, Them 3 · to A" (with "· 6 players" at a bigger table).
     static func rowDetail(_ game: OnlineGameSummary) -> String {
         let us = game.level(of: 0)?.label ?? "?"
         let them = game.level(of: 1)?.label ?? "?"
-        return "Round \(game.roundNumber) · Us \(us), Them \(them) · to \(game.targetRank.label)"
+        return "Round \(game.roundNumber) · Us \(us), Them \(them) · to \(game.targetRank.label)" + tableNote(game)
+    }
+
+    /// " · 6 players" for a table of 6 or 8, nothing for the classic four.
+    static func tableNote(_ game: OnlineGameSummary) -> String {
+        game.players.count > 4 ? " · \(game.players.count) players" : ""
     }
 
     // MARK: Club games you are not in
@@ -347,7 +352,7 @@ enum OnlineGameText {
 
     /// "Round 3 · to A" for a game you are not in (neither team is "Us").
     static func othersGameDetail(_ game: OnlineGameSummary) -> String {
-        "Round \(game.roundNumber) · to \(game.targetRank.label)"
+        "Round \(game.roundNumber) · to \(game.targetRank.label)" + tableNote(game)
     }
 
     /// "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago".
