@@ -292,10 +292,11 @@ several players are in the app. Offline learning, practice and bot games stay as
   CI regenerates the vectors and fails if they drift from the Swift engine or bots.
 - Card wire format: `Card.id` (face index + copy × 54: 0...107 with 2 decks, up to 215 with 4). Seats 0...3 as
   offline (0...5 or 0...7 at a table of 6 or 8); each player sees the table rotated so they are "You".
-- Declaring online is turn-based: all 25 cards are dealt at once, then from the first bidder (the dealer, or the
-  game creator's seat in round 1) each player in turn declares (same strength rules as offline) or passes.
-  Bidding ends when the three other players have passed since the last declaration, or when all four pass with no
-  declaration (then the kitty flip rule sets trump). Round 1: the winning declarer deals.
+- Declaring online is turn-based: all 25 cards (26 at a table of 6 or 8) are dealt at once, then from the first
+  bidder (the dealer, or the game creator's seat in round 1) each player in turn declares (same strength rules as
+  offline) or passes. Bidding ends when every other player has passed since the last declaration (three with 4
+  players), or when everyone passes with no declaration (then the kitty flip rule sets trump). Round 1: the winning
+  declarer deals.
 - Privacy: a player's view never contains other hands, the undealt deck, or the kitty (unless they are the dealer
   holding or having buried it, or the round is finished).
 - Accounts are provider-agnostic: internal user ids with linked identities. Sign in with Apple now (identity token

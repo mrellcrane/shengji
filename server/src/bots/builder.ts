@@ -4,9 +4,28 @@
 
 import { cardPoints, faceOf, without } from "../engine/cards.ts";
 import type { Card, Face } from "../engine/cards.ts";
-import { SINGLE, componentsOf, decompose, groupOfCards, pairsIn, shapeCardCount, tractorsIn } from "../engine/combos.ts";
-import type { Component } from "../engine/combos.ts";
-import { followRequirement, searchTractors, validateFollow } from "../engine/rules.ts";
+import {
+  SINGLE,
+  componentsOf,
+  decompose,
+  groupOfCards,
+  maxCopies,
+  pairsIn,
+  shapeCardCount,
+  shapesEqual,
+  tractorsIn,
+  unitsOf,
+} from "../engine/combos.ts";
+import type { ComboShape, Component } from "../engine/combos.ts";
+import {
+  classicRequirement,
+  followRequirement,
+  isClassicRequirement,
+  searchTractors,
+  searchUnits,
+  sortedUnits,
+  validateFollow,
+} from "../engine/rules.ts";
 import type { FollowRequirement } from "../engine/rules.ts";
 import { groupOf, isTrump, strength } from "../engine/trump.ts";
 import type { SuitGroup, Trump } from "../engine/trump.ts";
@@ -142,6 +161,11 @@ interface TractorSearch {
   budget: number;
 }
 
+interface UnitSearch {
+  best: { cost: number; cards: Card[] } | null;
+  budget: number;
+}
+
 /**
  * Builds legal follows: the cards owed by `followRequirement` first, then filler, each chosen by a
  * cost function. Swift `FollowBuilder`.
@@ -170,7 +194,7 @@ export class FollowBuilder {
     this.requirement =
       this.held.length >= lead.length && lead.length >= 2
         ? followRequirement(lead, this.held, trump)
-        : { tractorLengths: [], totalPairs: 0 };
+        : classicRequirement([], 0);
     this.leadComponents =
       lead.length === 1
         ? [{ shape: SINGLE, cards: lead.slice(), group, topStrength: strength(trump, lead[0]) }]
@@ -193,6 +217,7 @@ export class FollowBuilder {
     const { held, others, count } = this;
     if (held.length <= count) return [...held, ...cheapest(others, count - held.length, costs)];
     if (count === 1) return cheapest(held, 1, costs);
+    if (this.needsSets) return this.buildWithSets(costs);
     let pool = held.slice();
     const play: Card[] = [];
     const lengths = this.requirement.tractorLengths.slice().sort((a, b) => b - a);
@@ -267,6 +292,18 @@ export class FollowBuilder {
     const { held, others, count } = this;
     if (held.length <= count) return [...held, ...others.slice(0, count - held.length)];
     if (count <= 1) return held.slice(0, 1);
+    if (this.needsSets) {
+      const play: Card[] = [];
+      let pool = held.slice();
+      searchUnits(held, sortedUnits(this.requirement.units), 0, this.trump, [], (_, chosen) => {
+        for (const unit of chosen) {
+          play.push(...unit.cards);
+          pool = without(pool, unit.cards);
+        }
+        return true;
+      });
+      return [...play, ...pool.slice(0, Math.max(0, count - play.length))];
+    }
     let pool = held.slice();
     const play: Card[] = [];
     let found: Card[][] = [];
@@ -288,6 +325,64 @@ export class FollowBuilder {
     }
     play.push(...pool.slice(0, Math.max(0, count - play.length)));
     return play;
+  }
+
+  // MARK: Three or more decks
+
+  /**
+   * True when the owed structure holds triples or more, or the cards held do (three or more decks):
+   * the plays are then built from `requirement.units`.
+   */
+  get needsSets(): boolean {
+    return !isClassicRequirement(this.requirement) || maxCopies(this.held) > 2;
+  }
+
+  /**
+   * `build` with sets of any width: the cheapest disjoint set of owed combinations (bounded search),
+   * then the cheapest filler from the led group.
+   */
+  private buildWithSets(costs: CostModel): Card[] {
+    const shapes = sortedUnits(this.requirement.units);
+    let play: Card[] = [];
+    if (shapes.length > 0) {
+      const search: UnitSearch = { best: null, budget: 300 };
+      this.searchUnits(this.held, shapes, 0, [], 0, null, costs, search);
+      if (search.best === null) {
+        searchUnits(this.held, shapes, 0, this.trump, [], (_, chosen) => {
+          search.best = { cost: 0, cards: chosen.flatMap((unit) => unit.cards) };
+          return true;
+        });
+      }
+      if (search.best === null) return [];
+      play = search.best.cards;
+    }
+    const pool = without(this.held, play);
+    return [...play, ...cheapest(pool, this.count - play.length, costs)];
+  }
+
+  private searchUnits(
+    cards: readonly Card[],
+    shapes: readonly ComboShape[],
+    index: number,
+    chosen: Card[],
+    cost: number,
+    previous: { shape: ComboShape; lowest: number } | null,
+    costs: CostModel,
+    search: UnitSearch,
+  ): void {
+    if (search.budget <= 0) return;
+    search.budget -= 1;
+    if (index >= shapes.length) {
+      if (search.best !== null && search.best.cost <= cost) return;
+      search.best = { cost, cards: chosen };
+      return;
+    }
+    const shape = shapes[index];
+    for (const unit of unitsOf(shape, cards, this.trump)) {
+      const lowest = unit.length > 0 ? Math.min(...unit) : 0;
+      if (previous !== null && shapesEqual(previous.shape, shape) && lowest <= previous.lowest) continue;
+      this.searchUnits(without(cards, unit), shapes, index + 1, [...chosen, ...unit], cost + costs.pair(unit), { shape, lowest }, costs, search);
+    }
   }
 
   // MARK: Tractor choice

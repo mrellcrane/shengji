@@ -46,8 +46,8 @@ Two kinds of Durable Objects, both SQLite-backed (`new_sqlite_classes`):
   never wake the GameRooms.
 - **GameRoom**, one per game (named by the game id): the authoritative `GameState` and `Round`
   with a version that grows with every change, seat assignments (a user id or a bot level per
-  absolute seat), an action log of every move (bots too) and every deck dealt, and the live
-  WebSockets (hibernation API, so idle sockets cost nothing).
+  absolute seat: 4, 6 or 8 of them), an action log of every move (bots too) and every deck dealt,
+  and the live WebSockets (hibernation API, so idle sockets cost nothing).
 
 The logic lives in plain modules over a tiny `Sql` interface (`exec`, `transaction`), so the tests
 run the real SQL on node:sqlite; the Durable Object classes only forward RPC calls. Every request:
@@ -66,11 +66,18 @@ updates, every delete a 500). A rename is a new version too (clients
 keep only newer versions). Each person keeps at most 4 live sockets per game (src/room/sockets.ts):
 a fifth replaces their oldest (close code 4001), so sockets a phone left behind never fill a game.
 
+**Tables of 4, 6 or 8.** `POST /v1/games` takes 4, 6 or 8 seats (teams alternate: the even seats
+against the odd ones) and the game is played with half a deck per player: 2 decks with 4 players,
+3 with 6, 4 with 8 (`GameSettings.table`; `GameDeps.deck(table)` deals that many cards, and card
+ids in a request are checked against the table's range before anything else). Bots get names by
+absolute seat (Panda, Tiger, Crane, Dragon, then Koi, Fox, Owl and Yak Bot), and summaries, event
+lines and pushes name a team of 3 or 4 in full ("Mei, Lin and Sam").
+
 **Privacy.** Every view is built by `toSeatView` from what that seat may see (DESIGN.md); game
 summaries and their `lastEvent` lines come from public facts only. test/privacy.test.ts checks
-every state a client can receive in many random games, for all four seats and every message
-(replies, WebSocket updates, summaries), and that shuffling a seat's hidden cards never changes
-what it receives.
+every state a client can receive in many random games, for every seat (tables of 4, 6 and 8) and
+every message (replies, WebSocket updates, summaries), and that shuffling a seat's hidden cards
+never changes what it receives.
 
 **Bots** play exactly like the app's bots. `src/bots/` is a port of the Swift bots
 (`ShengjiCore/Sources/ShengjiCore/Bots`, DESIGN.md §Bot strategy), both levels, choices only (the
@@ -81,8 +88,8 @@ same view the server sends that seat: `declaration(view, available, level)` whil
 follow. They are deterministic: there is no randomness, and ties are broken as in Swift (stable sorts
 over the same orders). `src/game/bots.ts` fits them to the online game: `chooseBotAction(view,
 level)` turns a decision into an action in the client protocol's terms, and `safeActions(round,
-seat)` are plain legal moves from the rules alone (pass; bury the 8 lowest cards; lead the lowest
-card; the rules-built follow). After each move `runAutomatic` (online.ts) asks each bot due to act
+seat)` are plain legal moves from the rules alone (pass; bury the lowest cards, as many as the
+kitty holds; lead the lowest card; the rules-built follow). After each move `runAutomatic` (online.ts) asks each bot due to act
 for its choice from its own view; should the engine ever refuse it, `applyBotTurn` makes the first
 safe move the engine accepts instead and logs both with `console.error` (kept by Workers
 observability), so a bot can never stall a game silently.
@@ -95,10 +102,22 @@ store it as is. Functions that change a round (`dealNext`, `declare`, `bid`, `bu
 mutate it in place like the Swift mutating methods and return an error value instead of throwing;
 when they return an error they have not changed anything. `cloneRound` makes a copy.
 
-- Cards are their Swift `Card.id`, 0...107 (face index + copy x 54; 52/53 are the small and big
-  joker). Suits and ranks are the Swift raw values (suits 0 = spades, 1 = hearts, 2 = clubs,
-  3 = diamonds; ranks 2...14). A suit group is `"trump"` or a suit. Shapes are
-  `{type: "single" | "pair" | "tractor", pairs}`.
+- Cards are their Swift `Card.id`, face index + copy x 54 (52/53 are the small and big joker):
+  0...107 with 2 decks, up to 0...215 with 4. Suits and ranks are the Swift raw values (suits
+  0 = spades, 1 = hearts, 2 = clubs, 3 = diamonds; ranks 2...14). A suit group is `"trump"` or a
+  suit. Shapes are `{type: "single" | "pair" | "tractor", pairs}`, and with three or more decks
+  `{type: "set", width}` (a triple, four of a kind) and `{type: "setTractor", width, length}`.
+- Tables: `TableSize` is `{players, decks}` (4 and 2, 6 and 3, 8 and 4; `tableSize`, with
+  `tableKittySize` 8, 6, 8 and `tableHandSize` 25, 26, 26). A `Round` has one hand per seat and
+  its table is the number of hands (`roundTable`); `newRound(rank, dealer, deck, table)` takes the
+  table (default 4 players) and a game keeps it in `settings.table` (absent in games stored
+  before bigger tables: 4 players). Seats go round the table and teams alternate (`teammatesOf`,
+  `opponentsOf`, `seatName(seat, viewer, players)` with compass names for 6 or 8).
+- Three or more decks follow Engine/RulesSets.swift: `decompose` takes the widest sets first when a
+  face appears 3+ times, `followRequirement` returns `units` (every owed combination) besides the
+  two-deck `tractorLengths` and `totalPairs`, and the violations `mustPlaySetTractor` and
+  `mustPlaySets` join the others. The two-deck code paths are untouched and still run whenever no
+  face appears more than twice.
 - Errors and outcomes are tagged unions mirroring the Swift enums (`{case: "illegalFollow",
   violation: {case: "mustFollowSuit", group: 1}}`), with the same learner-facing text from
   `roundErrorExplanation`, `followViolationExplanation`, `leadViolationExplanation`,
@@ -108,7 +127,7 @@ when they return an error they have not changed anything. `cloneRound` makes a c
 - Additions for online play: `seatName`, `declarationDescription` and `explainRound` take an
   optional `viewer` seat so each player reads "You" for themselves (seat 0 gives the Swift text);
   `bury` takes an optional seat and rejects anyone but the dealer; `newRound` rejects a deck that
-  is not exactly the 108 cards; `parseDeclaration` checks the shape of a client message (a
+  is not exactly the table's cards; `parseDeclaration` checks the shape of a client message (a
   missing `suit` means no trump suit, which is how the Swift app's `Codable` sends a joker pair),
   and `declare` and `bid` run it too, so a malformed declaration is refused with
   `invalidDeclaration` instead of throwing.
@@ -117,7 +136,8 @@ when they return an error they have not changed anything. `cloneRound` makes a c
 
 ### Online bidding (no Swift counterpart)
 
-`startBidding(round, firstBidder)` deals all 100 cards at once and opens turn-based declaring at
+`startBidding(round, firstBidder)` deals every card but the kitty at once (100 with 4 players, 156
+with 6, 208 with 8) and opens turn-based declaring at
 `firstBidder` (the dealer, or the game creator's seat in round 1; `startOnlineRound(game, deck,
 creatorSeat)` does both steps). Then, in seat order:
 
@@ -125,13 +145,14 @@ creatorSeat)` does both steps). Then, in seat order:
   declare now (exactly the offline `availableDeclarations`: strictly stronger than the current
   declaration) and is empty for everyone else.
 - `bid(round, seat, declaration | "pass")`. A declaration resets the pass count.
-- Bidding ends when the three other players have passed since the last declaration, or when all
-  four pass with no declaration at all (then the kitty flip sets trump, as offline). The round then
+- Bidding ends when every other player has passed since the last declaration (three with 4
+  players, five with 6, seven with 8), or when everyone passes with no declaration at all (then the
+  kitty flip sets trump, as offline). The round then
   moves to burying exactly as `finishDealing` does. In round 1 the winning declarer deals; if
   nobody declared, the first bidder deals.
-- Because three passes in a row after a declaration end the bidding, the current declarer never
-  gets another turn while holding the declaration, so the offline "reinforce your own single to a
-  pair" move cannot arise online; declaring a pair straight away is the stronger bid. A player
+- Because a pass from every other player after a declaration ends the bidding, the current
+  declarer never gets another turn while holding the declaration, so the offline "reinforce your
+  own single to a pair" move cannot arise online; declaring a pair straight away is the stronger bid. A player
   whose declaration was overridden may override back with anything stronger.
 - While bidding is open, `declare` returns `wrongPhase` and `finishDealing` does nothing.
 
@@ -140,7 +161,7 @@ creatorSeat)` does both steps). Then, in seat order:
 `toSeatView(game, round, seat, players)` (seatview.ts) is the wire view: a port of Swift
 `Round.seatView(for:players:game:)`, rotated so the viewer is seat 0, plus the online bidding state
 (`bidding`: turn, history, and the viewer's own options on their turn). views.json proves the
-JSON is identical to the Swift `SeatView` Codable for all four seats.
+JSON is identical to the Swift `SeatView` Codable for every seat, at tables of 4, 6 and 8.
 
 `viewFor(round, seat)` (view.ts) is the older absolute-seat view of one round: its own hand (sorted
 for display), every hand's card count, the trump, dealer and declarers, declarations and bids,
@@ -163,31 +184,51 @@ otherwise), then make `npm test` pass again. `test/vectors.test.ts` replays ever
 prints the first differing paths of each mismatch; `test/bots.parity.test.ts` replays bots.json.
 Field names match the TypeScript types.
 
+Every file covers tables of 6 and 8 players (3 and 4 decks) too: their entries come after the
+classic ones in the same lists (or in a list of their own in combos.json) and carry a `players`
+field (`decks` where only the decks matter); an entry without one is a 4-player, 2-deck case, so
+the classic entries are exactly what they were before bigger tables existed. They are drawn from
+their own seeds and are rich in faces held three or four times, so they hold triples, four of a
+kind and tractors of them in leads, follows, throws, ruffs and declarations. A follow requirement
+carries `units` (every owed combination) only when it says more than `tractorLengths` and
+`totalPairs`, which is only ever with three or more copies of a face.
+
 - `combos.json`: suit, rank (including `advanced(by:cap:)`), face, group and shape tables; for
   every trump context (13 ranks x 5 suit choices) the trump membership, group, strength and sort
   key of every face, the trump order and the sorted deck; and 1200 card sets biased to tricky
   cases (pairs of off-suit rank cards, tractors across the skipped rank, jokers, no trump, mixed
   groups) with `decompose`, `shape`, pairs, tractors of each length, singles, `isThrow` and the
-  kitty multiplier.
+  kitty multiplier. The shape table ends with set shapes (triple, four of a kind, "5 of a kind" and
+  tractors of them). `setCases`: 400 card sets from 3 or 4 decks (`decks`) with `maxCopies`,
+  `decompose`, `shape`, pairs, tractors, for widths 3 and 4 the sets, their longest run and every
+  tractor of them, and `units(of:)` for seven shapes.
 - `rules.json`: 1200 positions (trump, four hands, leader). Each has lead attempts with
   `validateLead` and its explanation, `isThrow`, `checkThrow` against the hands and against a
   card pool; for each follower the `followRequirement` and several plays (legal ones built from
   the rules, ruffs, and many illegal ones) with `validateFollow` (absent = legal, else the
   violation and its explanation) and `matchesStructure`; and tricks with `winningIndex` for every
-  prefix, including probe tricks of pair-rich plays against tractor leads.
+  prefix, including probe tricks of pair-rich plays against tractor leads. Then 200 positions at
+  tables of 6 and 8 (`players`, 6 or 8 hands): leads of sets and tractors of sets (sometimes only
+  part of a set), throws with sets, follows built from the owed units and attempts that miss one
+  of them (`mustPlaySets`, `mustPlaySetTractor`), and tricks of 6 or 8 plays with set-rich probes.
 - `rounds.json`: 200 rounds driven through the `Round` API: deck order, dealer (or null), trump
   rank and an action list (dealing, declarations with every seat's `availableDeclarations`,
   state snapshots, `finishDealing`, bury attempts, every play attempt with its error and
   explanation, or its outcome (absent = played) and the finished trick's winner and points),
-  then the `RoundResult`.
+  then the `RoundResult`. Then 40 rounds at tables of 6 and 8 (`players`; the deck is 162 or 216
+  cards): declarations of three and four cards (descriptions named for the table), kitties of 6 and
+  8, set-rich deals.
 - `games.json`: the scoring table, and 30 games of `GameState` progression (levels, next dealer,
   winner, `RoundSummary` and its explanation) over many rounds, from played rounds or synthetic
-  results that reach every outcome band.
+  results that reach every outcome band. Then the scoring table for 3 and 4 decks (`decks`) and 16
+  games at tables of 6 and 8 (`players`): the next dealer two seats on, the line at 40 points per
+  deck, "The other team", compass names.
 - `views.json`: about 100 points of up to 40 rounds in 20 games (just after the deal closes, after
   burying, mid-play often mid-trick, finished, and finished and recorded, sometimes winning the
   game), each with its inputs (players, the `GameState` with its last history entry, the `Round`)
   and the four views exactly as Swift's `JSONEncoder` writes `SeatView`. The test compares parsed
-  objects, treating an absent optional as null.
+  objects, treating an absent optional as null. Then about 50 points of 10 games at tables of 6 and
+  8, with 6 or 8 players and views (the game's settings carry its `table`).
 - `edges.json`: targeted cases for branches the random files reach rarely. The declaration text
   for every strength (0...5), suit and card variant (including no cards). 200 kitty flips through
   `finishDealing` (a trump-rank card or a joker first, the only one coming late, the highest card
@@ -196,7 +237,11 @@ Field names match the TypeScript types.
   trump-rank cards, so display order picks the forced one), some with leader seats outside 0...3
   and short hand lists. 200 follows to leads of two or three tractors, with plays that hold only
   some of the required tractors (which length `mustPlayTractor` names). 200 tricks where a
-  plain-suit lead, often a throw, is ruffed and over-ruffed.
+  plain-suit lead, often a throw, is ruffed and over-ruffed. Each list then goes on with tables of 6
+  and 8: declaration texts for strengths 5...11 with three and four cards (`players`, for
+  `Declaration.description(players:)`), 100 kitty flips of 6 and 8 cards, 100 throws against 6 or 8
+  hands (with odd leader seats and short hand lists), 100 follows to leads of sets and tractors of
+  sets (`decks`), and 100 ruffed tricks of 6 or 8 plays.
 - `bots.json`: what the Swift bots choose, standard and beginner, at every decision of 380 whole
   rounds (240 with the server's turn-based bidding, 60 declaring while the cards are dealt, as the
   app does, and 80 kept from further seeds because the standard bot ruffs a throw in them, or a
@@ -211,7 +256,9 @@ Field names match the TypeScript types.
   TypeScript engine and each view with `toSeatView`, requires the same cards in the same order
   from both levels (a mismatch names the round, step, seat and level, both choices and the
   situation), checks the round's `RoundResult`, and asserts how many of each kind of decision the
-  file covers.
+  file covers. Then 60 rounds (40 online, 20 offline) and 80 deals at tables of 6 and 8 (`players`:
+  6 or 8 controllers, set-rich and joker-rich decks, bidding that ends after 5 or 7 passes, kitties
+  of 6 and 8), about 0.7 MB more.
 
 ## Testing
 
@@ -227,10 +274,13 @@ Field names match the TypeScript types.
 - api.test.ts and games.test.ts: the whole HTTP API on the in-process "cloud" (test/cloud.ts: the
   real router, Hub and GameRooms over node:sqlite, with RPC-style cloning): sign-in, rate limits,
   body limits, validation, a whole round with bots, a game played to the end with pushes, stale
-  versions, illegal moves with the engine's explanation, failed throws, nudges, renames, deletion;
-- privacy.test.ts (see above), bots.test.ts (150 all-bot rounds decided from each seat's view:
-  every move legal, deterministic, no failed throws; the safe moves are legal; a refused choice
-  falls back to a safe move and is reported),
+  versions, illegal moves with the engine's explanation, failed throws, nudges, renames, deletion,
+  and tables of 6 and 8 (seat counts, card ids of the table, whole rounds with bots, team names, a
+  failed throw's blocker);
+- privacy.test.ts (see above), bots.test.ts (150 all-bot rounds decided from each seat's view, and
+  30 more at tables of 6 and 8: every move legal, deterministic, no failed throws; the safe moves
+  are legal; a refused choice falls back to a safe move and is reported), bidding.test.ts (every
+  rule of turn-based bidding, with 4, 6 and 8 players),
   seatview.test.ts (bidding views, summaries, event lines), push.test.ts (ES256 provider tokens
   signed with a generated P-256 key and verified, the 50-minute cache, one signing for a burst of
   pushes, the token kept across Hub restarts, APNs requests and replies with fetch mocked, device

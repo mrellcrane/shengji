@@ -2,12 +2,12 @@
 // put away) often leaves its old socket open on the server until the connection times out, and
 // reconnects with a new one; without a per-person cap those piled up until the game's socket
 // limit refused everyone. Each person keeps their newest few; the oldest are closed (code
-// CLOSE_REPLACED). Four seats times the per-person cap stays below the game's cap, so a seated
-// player is never refused. Also how a client's close is answered (closeReplyCode).
+// CLOSE_REPLACED). Eight seats (the biggest table) times the per-person cap stays below the game's
+// cap, so a seated player is never refused. Also how a client's close is answered (closeReplyCode).
 
 /** At most this many live sockets per person per game (a phone and a tablet, with room for stale ones). */
 export const MAX_SOCKETS_PER_USER = 4;
-/** At most this many live sockets per game (a safety limit, never reached by four seats). */
+/** At most this many live sockets per game (a safety limit, never reached by eight seats). */
 export const MAX_SOCKETS = 40;
 /** Close code for a socket replaced by a newer connection of the same person. */
 export const CLOSE_REPLACED = 4001;

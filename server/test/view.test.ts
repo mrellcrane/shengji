@@ -73,23 +73,27 @@ function permuteHidden(round: Round, seat: number, rng: Rng): Round {
   return copy;
 }
 
-/** Snapshots of random rounds at every stage: dealing (offline), bidding, burying, playing, finished. */
-function randomStates(seed: number, count: number): Round[] {
+/**
+ * Snapshots of random rounds at every stage: dealing (offline), bidding, burying, playing, finished.
+ * `tables` cycle (4 players by default; 6 and 8 for the bigger-table checks).
+ */
+function randomStates(seed: number, count: number, tables: readonly E.TableSize[] = [E.TABLE_FOUR]): Round[] {
   const rng = seededRandom(seed);
   const states: Round[] = [];
   for (let n = 0; n < count; n++) {
-    const dealer = rng.chance(25) ? null : rng.below(4);
-    const round = E.newRound(E.ALL_RANKS[rng.below(13)], dealer, rng.shuffle(E.doubleDeck()));
+    const table = tables[n % tables.length];
+    const dealer = rng.chance(25) ? null : rng.below(table.players);
+    const round = E.newRound(E.ALL_RANKS[rng.below(13)], dealer, rng.shuffle(E.deckCards(table.decks)), table);
     if (rng.chance(15)) {
       // Offline-style dealing part way, with undealt cards.
       for (let k = rng.below(100); k > 0; k--) E.dealNext(round);
-      const seat = rng.below(4);
+      const seat = rng.below(table.players);
       const options = E.availableDeclarations(round, seat);
       if (options.length > 0) assert.equal(E.declare(round, rng.pick(options)), null);
       states.push(E.cloneRound(round));
       continue;
     }
-    const firstBidder = dealer ?? rng.below(4);
+    const firstBidder = dealer ?? rng.below(table.players);
     assert.equal(E.startBidding(round, firstBidder), null);
     // Part way through bidding.
     for (let k = rng.below(6); k > 0 && E.biddingTurn(round) !== null; k--) {
@@ -238,7 +242,37 @@ test("views are JSON data and share nothing with the round", () => {
   }
 });
 
-test("viewFor rejects a seat outside 0...3", () => {
+test("viewFor rejects a seat outside the table", () => {
   const round = E.newRound(2, 0, E.doubleDeck());
   for (const seat of [-1, 4, 0.5]) assert.throws(() => E.viewFor(round, seat), RangeError);
+  const six = E.newRound(2, 0, E.deckCards(3), E.tableSize(6));
+  for (const seat of [-1, 6]) assert.throws(() => E.viewFor(six, seat), RangeError);
+  assert.equal(E.viewFor(six, 5).seat, 5);
+});
+
+test("tables of 6 and 8: every seat sees only its own hand and public cards, and nothing that depends on hidden ones", () => {
+  const rng = seededRandom(68);
+  const states = randomStates(69, 40, [E.tableSize(6), E.tableSize(8)]);
+  const phases = new Set(states.map((s) => s.phase));
+  for (const phase of ["burying", "dealing", "finished", "playing"]) assert.ok(phases.has(phase as E.RoundPhase), phase);
+  let checked = 0;
+  for (const round of states) {
+    const players = round.hands.length;
+    for (let seat = 0; seat < players; seat++) {
+      const view = E.viewFor(round, seat);
+      assert.equal(view.handCounts.length, players);
+      const hidden = new Set(hiddenCards(round, seat));
+      for (const card of cardsInView(view)) {
+        assert.ok(!hidden.has(card), `seat ${seat} of ${players} sees hidden card ${card} in phase ${round.phase}`);
+      }
+      // The declaring team: the dealer, then every other seat of the dealer's team in play order.
+      if (round.dealer !== null) {
+        assert.deepEqual(view.declarers, E.allSeats(players).filter((s) => s % 2 === round.dealer! % 2)
+          .sort((a, b) => ((a - round.dealer! + players) % players) - ((b - round.dealer! + players) % players)));
+      }
+      assert.deepEqual(E.viewFor(permuteHidden(round, seat, rng), seat), view, `seat ${seat}: the view depends on hidden cards`);
+      checked++;
+    }
+  }
+  assert.ok(checked >= 800, `${checked} views`);
 });

@@ -8,6 +8,7 @@
 import { cardDescription, rankLabel, suitSymbol } from "../engine/cards.ts";
 import type { Card, Rank } from "../engine/cards.ts";
 import { levelPhrase } from "../engine/scoring.ts";
+import { declarationDetail } from "../engine/round.ts";
 import type { Declaration } from "../engine/round.ts";
 import { relativeSeat, relativeTeam } from "../engine/seatview.ts";
 import type { SeatPlayer } from "../engine/seatview.ts";
@@ -42,7 +43,7 @@ export interface GameSnapshot {
   updatedAt: string;
   status: GameStatus;
   version: number;
-  /** Absolute seat order. */
+  /** Absolute seat order (4, 6 or 8 seats). */
   players: SeatPlayer[];
   /** Levels per absolute team. */
   levels: Rank[];
@@ -87,27 +88,21 @@ function nameOf(players: readonly SeatPlayer[], seat: number, viewer: number | n
   return players[seat]?.name ?? "Someone";
 }
 
-/** "your team", or the two players' names ("Mei and Lin"). */
+/**
+ * "your team", or the team's players by name in seat order: "Mei and Lin" with 4 players, "Mei, Lin
+ * and Sam" with 6, four names with 8. A team is every even or every odd seat.
+ */
 export function teamName(players: readonly SeatPlayer[], team: number, viewer: number | null): string {
   if (viewer !== null && viewer % 2 === team) return "your team";
-  return `${nameOf(players, team, null)} and ${nameOf(players, team + 2, null)}`;
+  const names: string[] = [];
+  for (let seat = team; seat < Math.max(players.length, 4); seat += 2) names.push(nameOf(players, seat, null));
+  return names.length <= 1 ? (names[0] ?? "Someone") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+/** "♥ (pair of 2♥)", "no trump (three small jokers)". */
 function declarationText(d: Declaration): string {
   const what = d.suit === null ? "no trump" : suitSymbol(d.suit);
-  const shown = d.cards.length > 0 ? cardDescription(d.cards[0]) : null;
-  switch (d.strength) {
-    case 1:
-      return `${what} (one ${shown ?? "trump-rank card"})`;
-    case 2:
-      return `${what} (pair of ${shown ?? "trump-rank cards"})`;
-    case 3:
-      return `${what} (pair of small jokers)`;
-    case 4:
-      return `${what} (pair of big jokers)`;
-    default:
-      return what;
-  }
+  return d.strength >= 1 ? `${what} (${declarationDetail(d)})` : what;
 }
 
 /**
@@ -147,8 +142,9 @@ export function eventText(event: GameEvent, players: readonly SeatPlayer[], view
  */
 export function summarize(snapshot: GameSnapshot, viewer: number | null): GameSummary {
   const v = viewer ?? 0;
-  const players = [0, 1, 2, 3].map((i) => {
-    const p = snapshot.players[(i + v) % 4];
+  const n = snapshot.players.length;
+  const players = snapshot.players.map((_, i) => {
+    const p = snapshot.players[(i + v) % n];
     return { name: p.name, isBot: p.isBot, userID: p.userID };
   });
   const teamLevels = snapshot.levels.length === 2 ? [snapshot.levels[v % 2], snapshot.levels[(v + 1) % 2]] : snapshot.levels.slice();
@@ -163,7 +159,7 @@ export function summarize(snapshot: GameSnapshot, viewer: number | null): GameSu
     targetRank: snapshot.targetRank,
     roundNumber: snapshot.roundNumber,
     phase: snapshot.phase,
-    turn: snapshot.turn === null ? null : relativeSeat(snapshot.turn, v),
+    turn: snapshot.turn === null ? null : relativeSeat(snapshot.turn, v, n),
     yourTurn: viewer !== null && snapshot.status === "active" && snapshot.turn === viewer,
     winnerTeam: snapshot.winner === null ? null : relativeTeam(snapshot.winner, v),
     lastEvent: snapshot.lastEvent === null ? null : eventText(snapshot.lastEvent, snapshot.players, viewer),

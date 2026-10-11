@@ -1,6 +1,8 @@
 // Checks on SeatView JSON as a client receives it, used by the unit tests and by the smoke test
 // (which only sees what the server sends, so it checks structure and cross-checks two players).
 
+import { tableCardCount, tableKittySize } from "../src/engine/cards.ts";
+import { viewTable } from "../src/engine/seatview.ts";
 import type { SeatView } from "../src/engine/seatview.ts";
 
 /** The exact key set of a SeatView (the Swift Codable). Nothing else may travel in a view. */
@@ -55,6 +57,11 @@ export function checkSeatView(view: SeatView): string[] {
   const keys = Object.keys(view).sort();
   if (keys.join(",") !== SEAT_VIEW_KEYS.join(",")) problems.push(`unexpected keys: ${keys.join(",")}`);
   if (view.hand.length !== view.handCounts[0]) problems.push("hand size differs from handCounts[0]");
+  if (![4, 6, 8].includes(view.handCounts.length) || view.players.length !== view.handCounts.length) {
+    problems.push(`${view.players.length} players and ${view.handCounts.length} hand counts`);
+  }
+  const table = viewTable(view);
+  const cardCount = tableCardCount(table);
   if (new Set(view.hand).size !== view.hand.length) problems.push("a card appears twice in the hand");
   const kittyAllowed =
     view.phase === "finished" || ((view.phase === "burying" || view.phase === "playing") && view.dealer === 0);
@@ -63,18 +70,18 @@ export function checkSeatView(view: SeatView): string[] {
   for (const t of view.tricks) for (const p of t.plays) for (const c of p.cards) played.add(c);
   for (const p of view.currentTrick) for (const c of p.cards) played.add(c);
   for (const card of view.hand) if (played.has(card)) problems.push(`card ${card} is both in hand and played`);
-  // Every card is somewhere: in a hand (counted), played, or in the kitty (8, or 0 while the
-  // dealer holds it during burying).
+  // Every card is somewhere: in a hand (counted), played, or in the kitty (8, or 6 with 6 players;
+  // none while the dealer holds it during burying).
   const inHands = view.handCounts.reduce((a, b) => a + b, 0);
-  const kittySize = view.phase === "burying" ? 0 : 8;
-  if (view.phase !== "finished" && inHands + played.size + kittySize !== 108) {
+  const kittySize = view.phase === "burying" ? 0 : tableKittySize(table);
+  if (view.phase !== "finished" && inHands + played.size + kittySize !== cardCount) {
     problems.push(`cards do not add up: ${inHands} in hands, ${played.size} played`);
   }
   if (view.bidding !== null && view.bidding !== undefined && view.bidding.turn !== 0 && view.bidding.available.length > 0) {
     problems.push("bids offered when it is not the viewer's turn");
   }
   for (const card of roundCardsOf(view)) {
-    if (!Number.isInteger(card) || card < 0 || card > 107) problems.push(`bad card id ${card}`);
+    if (!Number.isInteger(card) || card < 0 || card >= cardCount) problems.push(`bad card id ${card}`);
   }
   return problems;
 }

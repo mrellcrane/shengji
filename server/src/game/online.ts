@@ -7,8 +7,9 @@
 // bidding at the next dealer); when a team wins, the game is finished and the last round stays
 // on the table. Bots decide from their own seat's view with the app's bot logic (src/bots).
 
-import type { Card, Rank } from "../engine/cards.ts";
-import { newGame, recordRound, startOnlineRound } from "../engine/game.ts";
+import { tableCardCount, tableSizeExactly } from "../engine/cards.ts";
+import type { Card, Rank, TableSize } from "../engine/cards.ts";
+import { gameTable, newGame, recordRound, startOnlineRound } from "../engine/game.ts";
 import type { GameState } from "../engine/game.ts";
 import { bid, biddingTurn, bury, play, roundErrorExplanation, turn as playTurn } from "../engine/round.ts";
 import type { Declaration, PlayOutcome, Round, RoundError } from "../engine/round.ts";
@@ -71,15 +72,19 @@ export interface Notification {
 }
 
 export interface GameDeps {
-  /** A full 108-card deck in a fresh random order. */
-  deck(): Card[];
+  /** Every card of the table's decks (108 for 4 players, 162 for 6, 216 for 8) in a fresh random order. */
+  deck(table: TableSize): Card[];
   now(): Date;
 }
 
-/** Bot turns run per request at most (a whole round is about 110); stops a runaway loop. */
+/**
+ * Bot turns run per request at most (a whole round is about 110 with 4 players, 230 with 8); stops
+ * a runaway loop.
+ */
 export const MAX_AUTOMATIC_STEPS = 600;
 
-const BOT_NAMES = ["Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot"];
+/** Bots are named by absolute seat (up to 8 seats). */
+const BOT_NAMES = ["Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot", "Koi Bot", "Fox Bot", "Owl Bot", "Yak Bot"];
 
 export function botName(seat: number): string {
   return BOT_NAMES[seat] ?? "Bot";
@@ -91,6 +96,11 @@ export function actingSeat(round: Round): number | null {
   if (bidder !== null) return bidder;
   if (round.phase === "burying") return round.dealer;
   return playTurn(round);
+}
+
+/** Card ids of this game's table: 0 up to 54 per deck (0...107 with 4 players, 0...215 with 8). */
+export function cardCountOf(state: OnlineGame): number {
+  return tableCardCount(gameTable(state.game));
 }
 
 export function playersOf(state: OnlineGame): SeatPlayer[] {
@@ -111,15 +121,20 @@ export interface NewGameInput {
   targetRank: Rank;
 }
 
-/** A new game with its first round dealt and bidding open at the creator's seat. */
+/**
+ * A new game with its first round dealt and bidding open at the creator's seat. The table has as
+ * many players as seats (4, 6 or 8; teams alternate: the even seats against the odd ones).
+ */
 export function newOnlineGame(
   input: NewGameInput,
   deps: GameDeps,
 ): { state: OnlineGame; log: LogEntry[]; events: GameEvent[] } {
+  const table = tableSizeExactly(input.seats.length);
+  if (table === null) throw new RangeError("a table has 4, 6 or 8 seats");
   const creatorSeat = input.seats.findIndex((s) => s.userId === input.createdBy);
   if (creatorSeat < 0) throw new RangeError("the creator must hold a seat");
-  const game = newGame({ startRank: 2, targetRank: input.targetRank });
-  const deck = deps.deck();
+  const game = newGame({ startRank: 2, targetRank: input.targetRank, table });
+  const deck = deps.deck(table);
   const round = startOnlineRound(game, deck, creatorSeat);
   const at = deps.now().toISOString();
   const state: OnlineGame = {
@@ -277,7 +292,7 @@ function runAutomatic(state: OnlineGame, deps: GameDeps, events: GameEvent[], lo
         state.status = "finished";
         break;
       }
-      const deck = deps.deck();
+      const deck = deps.deck(gameTable(state.game));
       state.round = startOnlineRound(state.game, deck, state.creatorSeat);
       state.version += 1;
       log.push({ version: state.version, seat: null, kind: "deal", data: { round: state.game.roundsPlayed + 1, deck } });

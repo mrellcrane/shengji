@@ -9,11 +9,16 @@ import ShengjiCore
 /// Each case carries its inputs in the TypeScript engine's field names (players, the `GameState`
 /// with only its last history entry, which is all a view reads, and the `Round`) and the four
 /// views exactly as the Swift `SeatView` Codable encodes them (absent optionals are left out).
+/// After them come `bigGames` games at tables of 6 and 8 players: 6 or 8 players and views, and the
+/// game's settings carry its `table`.
 enum ViewVectors {
-    static func make(games: Int) -> [(String, JSON)] {
+    static func make(games: Int, bigGames: Int) -> [(String, JSON)] {
         var cases: [JSON] = []
         for index in 0..<games {
             cases += game(seed: UInt64(7000 + index))
+        }
+        for index in 0..<bigGames {
+            cases += game(seed: UInt64(17_000 + index), table: Cards.bigTables[index % 2])
         }
         return [
             ("format", .int(1)),
@@ -23,11 +28,11 @@ enum ViewVectors {
     }
 
     static let humanNames = ["Mei", "Lin", "Sam", "Ana", "小明", "Jo", "Priya", "Tom"]
-    static let botNames = ["Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot"]
+    static let botNames = ["Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot", "Koi Bot", "Fox Bot", "Owl Bot", "Yak Bot"]
 
-    static func players(_ rand: inout Rand) -> [SeatView.Player] {
+    static func players(_ rand: inout Rand, count: Int = 4) -> [SeatView.Player] {
         let names = rand.shuffled(humanNames)
-        return (0..<4).map { seat in
+        return (0..<count).map { seat in
             if seat == 0 || rand.percent(55) {
                 return SeatView.Player(name: names[seat], isBot: false, userID: "u_test\(seat)\(rand.below(1000))")
             }
@@ -35,14 +40,14 @@ enum ViewVectors {
         }
     }
 
-    static func game(seed: UInt64) -> [JSON] {
+    static func game(seed: UInt64, table: TableSize = .four) -> [JSON] {
         var rand = Rand(seed)
         let starts: [Rank] = [.two, .two, .five, .ten, .king, .ace]
         let start = starts[rand.below(starts.count)]
         // Low targets end games quickly, so finished games and capped levels show up.
         let target = rand.percent(40) ? start.advanced(by: rand.between(0, 1)) : .ace
-        var state = GameState(settings: GameSettings(startRank: start, targetRank: target))
-        let seats = players(&rand)
+        var state = GameState(settings: GameSettings(startRank: start, targetRank: target, table: table))
+        let seats = players(&rand, count: table.players)
         var out: [JSON] = []
 
         // A few recorded rounds first (synthetic results), so views carry a previous round's summary.
@@ -51,12 +56,13 @@ enum ViewVectors {
         }
 
         for _ in 0..<2 {
-            var round = Round(trumpRank: state.nextTrumpRank, dealer: state.nextDealer, deck: rand.shuffled(Cards.all))
+            var round = Round(trumpRank: state.nextTrumpRank, dealer: state.nextDealer,
+                              deck: rand.shuffled(Cards.deck(table.decks)), table: table)
             round.dealAll()
             // No declaration a quarter of the time: the kitty flip fixes trump (`trumpFromKitty`).
             if !rand.percent(25) {
                 for _ in 0..<rand.between(1, 4) {
-                    let seat = rand.below(4)
+                    let seat = rand.below(table.players)
                     if let option = rand.pick(round.availableDeclarations(for: seat)) { try? round.declare(option) }
                 }
             }
@@ -67,7 +73,7 @@ enum ViewVectors {
             let hand = round.hands[dealer]
             let pointsFirst = hand.filter { $0.points > 0 } + rand.shuffled(hand.filter { $0.points == 0 })
             do {
-                try round.bury(rand.percent(35) ? Array(pointsFirst.prefix(8)) : rand.sample(hand, 8))
+                try round.bury(rand.percent(35) ? Array(pointsFirst.prefix(table.kittySize)) : rand.sample(hand, table.kittySize))
             } catch {
                 fatalError("bury failed: \(error)")
             }
@@ -78,9 +84,15 @@ enum ViewVectors {
             while round.phase == .playing, let player = round.turn {
                 if plays == stopAt { out.append(entry("playing", seats, state, round)) }
                 let own = round.hands[player]
-                let cards = round.currentTrick.isEmpty
-                    ? Plays.randomLead(hand: own, trump: round.trump, rand: &rand, throwPercent: 20)
-                    : Plays.follow(hand: own, lead: round.currentLead, trump: round.trump, rand: &rand)
+                let cards: [Card]
+                if !round.currentTrick.isEmpty {
+                    cards = Plays.follow(hand: own, lead: round.currentLead, trump: round.trump, rand: &rand)
+                } else if table.isClassic {
+                    cards = Plays.randomLead(hand: own, trump: round.trump, rand: &rand, throwPercent: 20)
+                } else {
+                    let others = (1..<table.players).map { round.hands[(player + $0) % table.players] }
+                    cards = Plays.setLead(hand: own, others: others, trump: round.trump, rand: &rand)
+                }
                 do {
                     try round.play(cards, by: player)
                 } catch {
@@ -109,7 +121,7 @@ enum ViewVectors {
             })),
             ("game", json(game)),
             ("round", json(round)),
-            ("views", .array((0..<4).map { codable(round.seatView(for: $0, players: players, game: game)) })),
+            ("views", .array((0..<round.players).map { codable(round.seatView(for: $0, players: players, game: game)) })),
         ])
     }
 
@@ -128,13 +140,19 @@ enum ViewVectors {
         ])
     }
 
-    /// The game with only its last history entry (all a view reads).
+    /// The game with only its last history entry (all a view reads); a bigger table's settings
+    /// carry its `table`.
     static func json(_ game: GameState) -> JSON {
-        .object([
-            ("settings", .object([
-                ("startRank", ShengjiVectors.json(game.settings.startRank)),
-                ("targetRank", ShengjiVectors.json(game.settings.targetRank)),
-            ])),
+        var settings: [(String, JSON)] = [
+            ("startRank", ShengjiVectors.json(game.settings.startRank)),
+            ("targetRank", ShengjiVectors.json(game.settings.targetRank)),
+        ]
+        let table = game.settings.table
+        if !table.isClassic {
+            settings.append(("table", .object([("players", .int(table.players)), ("decks", .int(table.decks))])))
+        }
+        return .object([
+            ("settings", .object(settings)),
             ("levels", .array(game.levels.map { ShengjiVectors.json($0) })),
             ("nextDealer", ShengjiVectors.json(game.nextDealer)),
             ("roundsPlayed", .int(game.roundsPlayed)),

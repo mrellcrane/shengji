@@ -11,6 +11,7 @@ import type { Result } from "../api/result.ts";
 import {
   actingSeat,
   batchNotifications,
+  cardCountOf,
   newOnlineGame,
   nudgeNotification,
   renameSeat,
@@ -184,6 +185,13 @@ export class RoomService {
     if (state === null) return NOT_FOUND_GAME();
     const seat = seatOf(state, userId);
     if (seat === null) return NOT_SEATED();
+    // Card ids are checked against this table's decks (0...107 with 4 players, up to 0...215 with 8).
+    const count = cardCountOf(state);
+    const asked = request.action;
+    const cards = asked.type === "bid" ? asked.declaration.cards : asked.type === "pass" ? [] : asked.cards;
+    if (cards.some((card) => card >= count)) {
+      return fail(400, "bad_request", `cards must be card ids of this table (0 to ${count - 1}).`);
+    }
     if (request.version !== state.version) {
       return fail(409, "stale", "The game has moved on. Here is the latest table.", { ...this.response(state, seat) });
     }
@@ -207,7 +215,7 @@ export class RoomService {
       body.outcome = {
         type: "throwFailed",
         forced: result.outcome.forced.slice(),
-        blocker: relativeSeat(result.outcome.blocker, seat),
+        blocker: relativeSeat(result.outcome.blocker, seat, working.seats.length),
       };
     }
     return ok({

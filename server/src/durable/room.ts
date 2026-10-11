@@ -30,7 +30,7 @@ export class GameRoom extends DurableObject<WorkerEnv> implements RoomApi {
 
   constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
-    this.service = new RoomService(durableSql(ctx.storage), { deck: () => shuffledDeck(), now: () => new Date() });
+    this.service = new RoomService(durableSql(ctx.storage), { deck: (table) => shuffledDeck(table), now: () => new Date() });
     // A new Hub stub for every call: a Hub that was reset breaks the stubs made before (roomHub).
     this.hub = roomHub(env.HUB);
     this.host = new RoomHost(this.service, {

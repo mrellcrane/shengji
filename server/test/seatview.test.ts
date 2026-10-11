@@ -145,3 +145,59 @@ test("event lines name people (\"You\" for the viewer) and never more than the e
     assert.ok(!line.includes(String.fromCharCode(0x2014)), "no em dashes in learner-facing text");
   }
 });
+
+test("tables of 6 and 8: summaries rotate every seat, teams are named in full, bids of three or four cards", () => {
+  const six: E.SeatPlayer[] = ["Mei", "Panda Bot", "Lin", "Crane Bot", "Sam", "Koi Bot"].map((name, seat) => ({
+    name,
+    isBot: seat % 2 === 1,
+    userID: seat % 2 === 1 ? null : `u_${name.toLowerCase()}`,
+  }));
+  const sixGame: GameSnapshot = { ...snapshot, players: six, turn: 5, lastEvent: { type: "pass", seat: 4 } };
+  const lin = summarize(sixGame, 2);
+  assert.deepEqual(lin.players.map((p) => p.name), ["Lin", "Crane Bot", "Sam", "Koi Bot", "Mei", "Panda Bot"]);
+  assert.deepEqual([lin.turn, lin.yourTurn, lin.teamLevels], [3, false, [5, 3]]);
+  assert.equal(lin.lastEvent, "Sam passed");
+  const koi = summarize(sixGame, 5);
+  assert.deepEqual([koi.turn, koi.yourTurn, koi.teamLevels], [0, true, [3, 5]]);
+  assert.deepEqual(summarize(sixGame, null).players, six);
+
+  const round = (team: number, gameWinner: number | null): GameEvent => ({
+    type: "round", round: 2, team, tookOver: true, levelsGained: 1, newLevel: 3, gameWinner,
+  });
+  assert.equal(eventText(round(0, null), six, 1), "Round 2: Mei, Lin and Sam took over the deal and went up 1 level to 3");
+  assert.equal(eventText(round(1, null), six, null), "Round 2: Panda Bot, Crane Bot and Koi Bot took over the deal and went up 1 level to 3");
+  assert.equal(eventText(round(0, 0), six, 4), "Round 2: your team won the game");
+  const eight = [...six, { name: "Jo", isBot: false, userID: "u_jo" }, { name: "Yak Bot", isBot: true, userID: null }];
+  assert.equal(eventText(round(1, null), eight, 0), "Round 2: Panda Bot, Crane Bot, Koi Bot and Yak Bot took over the deal and went up 1 level to 3");
+  assert.equal(eventText(round(0, null), eight, null), "Round 2: Mei, Lin, Sam and Jo took over the deal and went up 1 level to 3");
+
+  const three = [0, 1, 2].map((copy) => c(2, 0, copy));
+  assert.equal(eventText({ type: "bid", seat: 6, declaration: { player: 6, cards: three, suit: 0, strength: 5 } }, eight, 0),
+    "Jo declared ♠ (three 2♠)");
+  const jokers = [0, 1, 2, 3].map((copy) => E.smallJoker(copy));
+  assert.equal(eventText({ type: "bid", seat: 6, declaration: { player: 6, cards: jokers, suit: null, strength: 9 } }, eight, 6),
+    "You declared no trump (four small jokers)");
+});
+
+test("tables of 6 and 8: bidding views rotate every seat; the dealer of 6 sees a kitty of 6", () => {
+  const table = E.tableSize(6);
+  const game = E.newGame({ startRank: 2, targetRank: 14, table });
+  const seats: E.SeatPlayer[] = E.allSeats(6).map((seat) => ({ name: `P${seat}`, isBot: false, userID: `u_${seat}` }));
+  const round = E.startOnlineRound(game, E.deckCards(3), 4);
+  assert.equal(E.bid(round, 4, "pass"), null);
+  for (let viewer = 0; viewer < 6; viewer++) {
+    const view = E.toSeatView(game, round, viewer, seats);
+    const rel = (s: number) => (s - viewer + 6) % 6;
+    assert.deepEqual(view.handCounts, [26, 26, 26, 26, 26, 26]);
+    assert.deepEqual(view.players.map((p) => p.name), E.allSeats(6).map((i) => `P${(i + viewer) % 6}`));
+    assert.equal(view.bidding?.turn, rel(5));
+    assert.deepEqual(view.bidding?.history, [{ player: rel(4), declaration: null }]);
+    assert.equal(view.bidding?.available.length === 0, viewer !== 5);
+  }
+  // Everyone passes: the kitty flip sets trump and the first bidder (seat 4) deals.
+  for (const seat of [5, 0, 1, 2, 3]) assert.equal(E.bid(round, seat, "pass"), null);
+  assert.equal(round.phase, "burying");
+  const dealerView = E.toSeatView(game, round, 4, seats);
+  assert.deepEqual([dealerView.dealer, dealerView.turn, dealerView.kitty?.length, dealerView.hand.length], [0, 0, 6, 32]);
+  assert.equal(E.toSeatView(game, round, 1, seats).kitty, null);
+});

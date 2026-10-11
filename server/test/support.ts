@@ -116,29 +116,37 @@ export function seededRandom(seed: number): {
 export type Rng = ReturnType<typeof seededRandom>;
 
 /**
- * A 108-card deck in dealing order (like the Swift tests' EngineTestSupport.deck): `hands[seat]`
- * lists cards that seat must receive (dealt first, in order), `kitty` lists kitty cards, and the
- * rest are filled in from a seeded shuffle. Cards are dealt one at a time from `firstSeat`.
+ * A deck in dealing order (like the Swift tests' EngineTestSupport.deck): `hands[seat]` lists cards
+ * that seat must receive (dealt first, in order), `kitty` lists kitty cards, and the rest are filled
+ * in from a seeded shuffle. Cards are dealt one at a time from `firstSeat`. `players` picks the
+ * table: 4 (108 cards, 25 each, a kitty of 8), 6 (162, 26 each, 6) or 8 (216, 26 each, 8).
  */
 export function buildDeck(
   hands: readonly (readonly number[])[] = [[], [], [], []],
   kitty: readonly number[] = [],
   firstSeat = 0,
   seed = 1,
+  players = 4,
 ): number[] {
-  const spec = [0, 1, 2, 3].map((seat) => (hands[seat] ?? []).slice());
+  const decks = players / 2;
+  const kittySize = players === 6 ? 6 : 8;
+  const handSize = (54 * decks - kittySize) / players;
+  const seats = Array.from({ length: players }, (_, seat) => seat);
+  const spec = seats.map((seat) => (hands[seat] ?? []).slice());
   const used = new Set<number>([...spec.flat(), ...kitty]);
   assert.equal(used.size, spec.flat().length + kitty.length, "duplicate cards in deck spec");
   const rng = seededRandom(seed);
-  const rest = rng.shuffle(Array.from({ length: 108 }, (_, id) => id).filter((id) => !used.has(id)));
+  const rest = rng.shuffle(Array.from({ length: 54 * decks }, (_, id) => id).filter((id) => !used.has(id)));
   for (const hand of spec) {
-    while (hand.length < 25) hand.push(rest.pop() as number);
+    while (hand.length < handSize) hand.push(rest.pop() as number);
   }
   const fullKitty = kitty.slice();
-  while (fullKitty.length < 8) fullKitty.push(rest.pop() as number);
+  while (fullKitty.length < kittySize) fullKitty.push(rest.pop() as number);
   assert.equal(rest.length, 0);
-  assert.ok(spec.every((hand) => hand.length === 25), "a hand spec has more than 25 cards");
+  assert.ok(spec.every((hand) => hand.length === handSize), `a hand spec has more than ${handSize} cards`);
   const deck: number[] = [];
-  for (let index = 0; index < 100; index++) deck.push(spec[(firstSeat + index) % 4][Math.floor(index / 4)]);
+  for (let index = 0; index < players * handSize; index++) {
+    deck.push(spec[(firstSeat + index) % players][Math.floor(index / players)]);
+  }
   return [...deck, ...fullKitty];
 }

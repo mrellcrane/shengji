@@ -13,7 +13,12 @@ import type { BotAction, BotLevel } from "../src/game/bots.ts";
 import { applyBotTurn } from "../src/game/online.ts";
 import { buildDeck, seededRandom } from "./support.ts";
 
-const PLAYERS: SeatPlayer[] = [0, 1, 2, 3].map((seat) => ({ name: `Bot ${seat}`, isBot: true, userID: null }));
+/** Bots in every seat of a table of `players`. */
+function botPlayers(players: number): SeatPlayer[] {
+  return E.allSeats(players).map((seat) => ({ name: `Bot ${seat}`, isBot: true, userID: null }));
+}
+
+const PLAYERS = botPlayers(4);
 
 /** The seat that must act (bid, bury or play), or null. */
 function toAct(round: Round): number | null {
@@ -22,7 +27,7 @@ function toAct(round: Round): number | null {
 
 /** The bot's action at absolute `seat`, from that seat's view (a bid's declaration made absolute). */
 function botAction(game: E.GameState, round: Round, seat: number, level: BotLevel): BotAction | null {
-  const action = chooseBotAction(E.toSeatView(game, round, seat, PLAYERS), level);
+  const action = chooseBotAction(E.toSeatView(game, round, seat, botPlayers(round.hands.length)), level);
   if (action?.type !== "bid") return action;
   return { type: "bid", declaration: { ...action.declaration, player: seat } };
 }
@@ -164,4 +169,44 @@ test("a refused bot choice falls back to a safe move, and is reported", () => {
   assert.equal(applyBotTurn(round, 0, { type: "pass" }, "game g_test", (m) => notes.push(m)), null);
   assert.equal(JSON.stringify(round), before);
   assert.match(notes[notes.length - 1], /no safe move was accepted for seat 0; the game waits/);
+});
+
+test("tables of 6 and 8: bots play whole rounds from their views, with sets, and the safe moves are legal", () => {
+  const fallbacks = botDiagnostics.fallbacks;
+  const seen = { setLeads: 0, setDeclarations: 0, safeChecked: 0 };
+  for (let seed = 0; seed < 30; seed++) {
+    const rng = seededRandom(6800 + seed);
+    const table = E.tableSize(seed % 2 === 0 ? 6 : 8);
+    const rank = rng.pick(E.ALL_RANKS as Rank[]);
+    const round = E.newRound(rank, rng.chance(30) ? null : rng.below(table.players), rng.shuffle(E.deckCards(table.decks)), table);
+    const game = E.newGame({ startRank: rank, targetRank: 14, table });
+    assert.equal(E.startBidding(round, round.dealer ?? rng.below(table.players)), null);
+    const levels: BotLevel[] = E.allSeats(table.players).map(() => (rng.chance(50) ? "standard" : "beginner"));
+    for (let step = 0; round.phase !== "finished"; step++) {
+      assert.ok(step < 800, "a round never ended");
+      const seat = toAct(round) as number;
+      for (let other = 0; other < table.players; other++) {
+        if (other !== seat) assert.deepEqual(safeActions(round, other), [], `seat ${other} has a safe move out of turn`);
+      }
+      const safe = safeActions(round, seat);
+      assert.equal(safe.length, 1);
+      assert.equal(apply(E.cloneRound(round), seat, safe[0]), null, `${round.phase}: the safe move was refused`);
+      seen.safeChecked++;
+      const action = botAction(game, round, seat, levels[seat]);
+      assert.ok(action !== null, `no action for seat ${seat} in ${round.phase}`);
+      if (action.type === "bid" && action.declaration.cards.length >= 3) seen.setDeclarations++;
+      if (action.type === "play" && round.currentTrick.length === 0 && E.maxCopies(action.cards) >= 3) seen.setLeads++;
+      if (action.type === "play") {
+        const result = E.play(round, action.cards, seat);
+        assert.ok(result.ok, result.ok ? "" : E.roundErrorExplanation(result.error));
+        assert.equal(result.outcome.type, "played", "bots only throw when the throw is sure to stand");
+      } else {
+        const error = apply(round, seat, action);
+        assert.equal(error, null, error === null ? "" : E.roundErrorExplanation(error));
+      }
+    }
+    assert.equal(round.result?.kitty.length, E.kittySizeOf(round));
+  }
+  assert.ok(seen.setLeads > 0 && seen.setDeclarations > 0, JSON.stringify(seen));
+  assert.equal(botDiagnostics.fallbacks, fallbacks, "the bots needed their rules-built safety net");
 });

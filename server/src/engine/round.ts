@@ -7,8 +7,9 @@
 
 import {
   BIG_JOKER_FACE,
-  DECK_SIZE,
+  MAX_DECKS,
   SMALL_JOKER_FACE,
+  TABLE_FOUR,
   cardDescription,
   containsAll,
   faceOf,
@@ -22,16 +23,22 @@ import {
   shortText,
   suitOf,
   suitSymbol,
+  tableCardCount,
+  tableHandSize,
+  tableKittySize,
+  tableSize,
   totalPoints,
 } from "./cards.ts";
-import type { Card, Rank, Suit } from "./cards.ts";
+import type { Card, Rank, Suit, TableSize } from "./cards.ts";
 import {
   HUMAN_SEAT,
   checkThrow,
+  countWord,
   followViolationExplanation,
   isThrow,
   leadViolationExplanation,
   nextSeat,
+  normalizeSeat,
   seatName,
   teamOf,
   validateFollow,
@@ -43,6 +50,7 @@ import { kittyMultiplier, scoreOutcome } from "./scoring.ts";
 import type { LevelOutcome } from "./scoring.ts";
 import type { Trump } from "./trump.ts";
 
+/** Kitty and hand sizes of the classic 4-player, 2-deck game (`kittySizeOf` and `handSizeOf` give a round's own). */
 export const KITTY_SIZE = 8;
 export const HAND_SIZE = 25;
 
@@ -51,40 +59,81 @@ export const HAND_SIZE = 25;
 /** A bid for trump made by revealing cards (亮主). */
 export interface Declaration {
   player: number;
-  /** The revealed cards: one or two trump-rank cards of one suit, or two identical jokers. */
+  /** The revealed cards: trump-rank cards of one suit, or identical jokers (two or more). */
   cards: Card[];
-  /** Trump suit chosen; null = no trump suit (joker pair). */
+  /** Trump suit chosen; null = no trump suit (jokers). */
   suit: Suit | null;
-  /** 1 = single rank card, 2 = pair of rank cards, 3 = pair of small jokers, 4 = pair of big jokers. */
+  /**
+   * 1 = single rank card, 2 = pair of rank cards, 3 = pair of small jokers, 4 = pair of big jokers.
+   * With three or more decks more cards beat fewer: 5 = three rank cards, 6 = three small jokers,
+   * 7 = three big jokers, then 8 to 10 for four of each (see `declarationStrength`).
+   */
   strength: number;
 }
 
+/** What a declaration shows (Swift `Declaration.Kind`): 0 rank cards of one suit, 1 small jokers, 2 big jokers. */
+export type DeclarationKind = 0 | 1 | 2;
+export const RANK_CARDS = 0 as const;
+export const SMALL_JOKERS = 1 as const;
+export const BIG_JOKERS = 2 as const;
+
 /**
- * e.g. "East declares ♥ (one 2♥)", "You declare no trump (pair of big jokers)". Names are as seen
- * from `viewer` (default seat 0, which is exactly Swift `Declaration.description`).
+ * Strength of showing `count` identical cards of `kind` (jokers need at least two): one rank card 1;
+ * two: rank 2, small jokers 3, big jokers 4; three: 5, 6, 7; four: 8, 9, 10.
  */
-export function declarationDescription(declaration: Declaration, viewer = HUMAN_SEAT): string {
-  const who = declaration.player === viewer ? "You declare" : `${seatName(declaration.player, viewer)} declares`;
-  const what = declaration.suit === null ? "no trump" : suitSymbol(declaration.suit);
+export function declarationStrength(count: number, kind: DeclarationKind): number {
+  if (count <= 1) return 1;
+  return 3 * count - 4 + kind;
+}
+
+/** Cards shown for a strength (1 -> 1, 2...4 -> 2, 5...7 -> 3, 8...10 -> 4). */
+export function declarationCardCount(strength: number): number {
+  return strength <= 1 ? 1 : Math.trunc((strength + 4) / 3);
+}
+
+/** The kind of cards shown for a strength. */
+export function declarationKind(strength: number): DeclarationKind {
+  return strength <= 1 ? RANK_CARDS : ((((strength + 4) % 3) + 3) % 3) as DeclarationKind;
+}
+
+/** The cards shown, e.g. "one 2♥", "pair of 2♥", "three small jokers" (Swift `Declaration.detail`). */
+export function declarationDetail(declaration: Declaration): string {
   const shown = declaration.cards.length > 0 ? cardDescription(declaration.cards[0]) : null;
-  let detail: string;
-  switch (declaration.strength) {
+  const strength = declaration.strength;
+  switch (strength) {
     case 1:
-      detail = shown === null ? "one trump-rank card" : `one ${shown}`;
-      break;
+      return shown === null ? "one trump-rank card" : `one ${shown}`;
     case 2:
-      detail = shown === null ? "pair of trump-rank cards" : `pair of ${shown}`;
-      break;
+      return shown === null ? "pair of trump-rank cards" : `pair of ${shown}`;
     case 3:
-      detail = "pair of small jokers";
-      break;
+      return "pair of small jokers";
     case 4:
-      detail = "pair of big jokers";
-      break;
-    default:
-      detail = shortText(declaration.cards);
+      return "pair of big jokers";
   }
-  return `${who} ${what} (${detail})`;
+  if (strength >= 5) {
+    const count = countWord(declarationCardCount(strength));
+    switch (declarationKind(strength)) {
+      case RANK_CARDS:
+        return shown === null ? `${count} trump-rank cards` : `${count} ${shown}`;
+      case SMALL_JOKERS:
+        return `${count} small jokers`;
+      case BIG_JOKERS:
+        return `${count} big jokers`;
+    }
+  }
+  return shortText(declaration.cards);
+}
+
+/**
+ * e.g. "East declares ♥ (one 2♥)", "You declare no trump (pair of big jokers)", "Northeast declares
+ * ♠ (three 2♠)". Names are as seen from `viewer` at a table of `players` (default seat 0 and 4
+ * players, which is exactly Swift `Declaration.description`; `description(players:)` with more).
+ */
+export function declarationDescription(declaration: Declaration, viewer = HUMAN_SEAT, players = 4): string {
+  const who =
+    declaration.player === viewer ? "You declare" : `${seatName(declaration.player, viewer, players)} declares`;
+  const what = declaration.suit === null ? "no trump" : suitSymbol(declaration.suit);
+  return `${who} ${what} (${declarationDetail(declaration)})`;
 }
 
 /**
@@ -96,7 +145,7 @@ export function parseDeclaration(value: unknown): Declaration | null {
   if (typeof value !== "object" || value === null) return null;
   const v = value as Record<string, unknown>;
   if (typeof v.player !== "number" || !Number.isInteger(v.player)) return null;
-  if (!Array.isArray(v.cards) || v.cards.length > 2 || !v.cards.every(isCard)) return null;
+  if (!Array.isArray(v.cards) || v.cards.length > MAX_DECKS || !v.cards.every(isCard)) return null;
   const suit = v.suit === undefined ? null : v.suit;
   if (suit !== null && !isSuit(suit)) return null;
   if (typeof v.strength !== "number" || !Number.isInteger(v.strength)) return null;
@@ -108,7 +157,7 @@ export function parseDeclaration(value: unknown): Declaration | null {
 export type RoundPhase =
   /** Cards are being dealt (offline) or bid on (online); players may declare trump. */
   | "dealing"
-  /** Dealer has picked up the kitty and must bury 8 cards. */
+  /** Dealer has picked up the kitty and must bury as many cards (8, or 6 with 6 players). */
   | "burying"
   | "playing"
   | "finished";
@@ -170,7 +219,7 @@ export function roundErrorExplanation(error: RoundError): string {
     case "invalidDeclaration":
       return (
         "You can't declare that right now. A declaration must beat the current one, " +
-        "and if the current one is yours you can only strengthen it to a pair."
+        "and if the current one is yours you can only strengthen it with more of the same card."
       );
     case "invalidBury":
       return error.reason;
@@ -199,6 +248,7 @@ export interface Bidding {
 
 /**
  * The complete state of one deal, from dealing to scoring. Field meanings match the Swift `Round`.
+ * The table (4, 6 or 8 players) is the number of hands (`roundTable`).
  */
 export interface Round {
   /** Trump rank for this round (the dealer team's level). */
@@ -206,13 +256,13 @@ export interface Round {
   /** Dealer (庄家). Null only during the first round's deal, before anyone has declared. */
   dealer: number | null;
   phase: RoundPhase;
-  /** Four hands, indexed by seat. Not kept sorted; use `sortCards` for display. */
+  /** One hand per seat (4, 6 or 8), indexed by seat. Not kept sorted; use `sortCards` for display. */
   hands: Card[][];
   /** Cards still to be dealt (dealing phase). */
   undealt: Card[];
   /**
-   * During dealing and burying: the original 8 kitty cards (face down).
-   * After burying: the 8 cards the dealer buried.
+   * During dealing and burying: the original kitty cards (face down; 8, or 6 with 6 players).
+   * After burying: the cards the dealer buried.
    */
   kitty: Card[];
   /** Current winning declaration, if any. */
@@ -239,22 +289,27 @@ export interface Round {
 }
 
 /**
- * A new round. `deck` must be all 108 cards in dealing order: the first 100 are dealt one at a
- * time starting with `dealer ?? 0`, the last 8 are the kitty. A dealer outside 0...3 is taken
- * modulo 4, as in Swift. Throws a RangeError if `deck` is not a permutation of the 108 cards
- * (Swift only checks the count; a deck from `shuffledDeck` always passes) or if `dealer` is not
- * an integer.
+ * A new round at `table` (default 4 players with 2 decks). `deck` must be every card of the table's
+ * decks in dealing order (108 for 4 players): all but the kitty are dealt one at a time starting
+ * with `dealer ?? 0`, the last `kittySize` are the kitty. A dealer outside the seats is taken modulo
+ * the players, as in Swift. Throws a RangeError if `deck` is not a permutation of the table's cards
+ * (Swift only checks the count; a deck from `shuffledDeck` always passes) or if `dealer` is not an
+ * integer.
  */
-export function newRound(trumpRank: Rank, dealer: number | null, deck: readonly Card[]): Round {
-  if (!isFullDeck(deck)) throw new RangeError("A Shengji deal needs all 108 cards (two decks with jokers).");
+export function newRound(trumpRank: Rank, dealer: number | null, deck: readonly Card[], table: TableSize = TABLE_FOUR): Round {
+  const size = tableSize(table.players);
+  const count = tableCardCount(size);
+  if (!isFullDeck(deck, size.decks)) {
+    throw new RangeError(`A Shengji deal for ${size.players} players needs all ${count} cards (${size.decks} decks with jokers).`);
+  }
   if (dealer !== null && !Number.isInteger(dealer)) throw new RangeError(`dealer must be an integer, got ${dealer}`);
-  const seat = dealer === null ? null : ((dealer % 4) + 4) % 4;
-  const dealtCount = DECK_SIZE - KITTY_SIZE;
+  const seat = dealer === null ? null : normalizeSeat(dealer, size.players);
+  const dealtCount = count - tableKittySize(size);
   return {
     trumpRank,
     dealer: seat,
     phase: "dealing",
-    hands: [[], [], [], []],
+    hands: Array.from({ length: size.players }, () => []),
     undealt: deck.slice(0, dealtCount),
     kitty: deck.slice(dealtCount),
     declaration: null,
@@ -269,6 +324,26 @@ export function newRound(trumpRank: Rank, dealer: number | null, deck: readonly 
     result: null,
     bidding: null,
   };
+}
+
+/** Players and decks at this round's table (from its number of hands: 4, 6 or 8). */
+export function roundTable(round: Round): TableSize {
+  return tableSize(round.hands.length);
+}
+
+/** Number of seats at the round's table. */
+export function roundPlayers(round: Round): number {
+  return roundTable(round).players;
+}
+
+/** Cards the dealer picks up and buries: 8 with 4 or 8 players, 6 with 6. */
+export function kittySizeOf(round: Round): number {
+  return tableKittySize(roundTable(round));
+}
+
+/** Cards dealt to each player: 25 with 4 players, 26 with 6 or 8. */
+export function handSizeOf(round: Round): number {
+  return tableHandSize(roundTable(round));
 }
 
 /** A deep copy of the round. */
@@ -290,13 +365,13 @@ export function isDealingComplete(round: Round): boolean {
   return round.undealt.length === 0;
 }
 
-/** Deals one card to `nextToReceive`. Returns null when all 100 cards are dealt. */
+/** Deals one card to `nextToReceive`. Returns null when every card but the kitty is dealt. */
 export function dealNext(round: Round): { player: number; card: Card } | null {
   if (round.phase !== "dealing" || round.undealt.length === 0) return null;
   const card = round.undealt.shift() as Card;
   const player = round.nextToReceive;
   round.hands[player].push(card);
-  round.nextToReceive = nextSeat(player);
+  round.nextToReceive = nextSeat(player, roundPlayers(round));
   return { player, card };
 }
 
@@ -309,7 +384,8 @@ export function dealAll(round: Round): void {
 /**
  * Declarations `player` could make right now with the cards in hand. A new declaration must be
  * strictly stronger than the current one; a player who holds the current declaration may only
- * strengthen it in the same suit (single -> pair). Partners may override each other.
+ * strengthen it with more of the same card (single -> pair, and with three or more decks pair ->
+ * triple). Partners may override each other.
  */
 export function availableDeclarations(round: Round, player: number): Declaration[] {
   if (round.phase !== "dealing" || !isSeat(round, player)) return [];
@@ -318,22 +394,31 @@ export function availableDeclarations(round: Round, player: number): Declaration
   for (const suit of [0, 1, 2, 3] as const) {
     const face = regularFace(round.trumpRank, suit);
     const rankCards = hand.filter((card) => faceOf(card) === face);
-    if (rankCards.length >= 1) options.push({ player, cards: [rankCards[0]], suit, strength: 1 });
-    if (rankCards.length >= 2) options.push({ player, cards: rankCards.slice(0, 2), suit, strength: 2 });
+    for (let count = 1; count <= rankCards.length; count++) {
+      options.push({ player, cards: rankCards.slice(0, count), suit, strength: declarationStrength(count, RANK_CARDS) });
+    }
   }
-  const smallJokers = hand.filter((card) => faceOf(card) === SMALL_JOKER_FACE);
-  if (smallJokers.length >= 2) options.push({ player, cards: smallJokers.slice(0, 2), suit: null, strength: 3 });
-  const bigJokers = hand.filter((card) => faceOf(card) === BIG_JOKER_FACE);
-  if (bigJokers.length >= 2) options.push({ player, cards: bigJokers.slice(0, 2), suit: null, strength: 4 });
+  const jokerKinds: [number, DeclarationKind][] = [
+    [SMALL_JOKER_FACE, SMALL_JOKERS],
+    [BIG_JOKER_FACE, BIG_JOKERS],
+  ];
+  for (const [face, kind] of jokerKinds) {
+    const jokers = hand.filter((card) => faceOf(card) === face);
+    for (let count = 2; count <= jokers.length; count++) {
+      options.push({ player, cards: jokers.slice(0, count), suit: null, strength: declarationStrength(count, kind) });
+    }
+  }
 
   options.sort((a, b) => (a.strength !== b.strength ? a.strength - b.strength : (a.suit ?? 9) - (b.suit ?? 9)));
   const current = round.declaration;
   if (current === null) return options;
   if (current.player === player) {
-    // Holding the current declaration: only a single can be reinforced to a pair of that suit.
+    // Holding the current declaration: only more of the same card (a single becomes a pair).
     return options.filter(
       (option) =>
-        current.strength === 1 && option.strength === 2 && option.suit !== null && option.suit === current.suit,
+        declarationKind(option.strength) === declarationKind(current.strength) &&
+        option.suit === current.suit &&
+        declarationCardCount(option.strength) > declarationCardCount(current.strength),
     );
   }
   return options.filter((option) => option.strength > current.strength);
@@ -341,18 +426,16 @@ export function availableDeclarations(round: Round, player: number): Declaration
 
 /** True if `cards` are exactly what a declaration of that suit and strength reveals. */
 export function cardsMatchDeclaration(cards: readonly Card[], suit: Suit | null, strength: number, rank: Rank): boolean {
-  const isRankCardOf = (card: Card, s: Suit): boolean => !isJoker(card) && suitOf(card) === s && rankOf(card) === rank;
-  switch (strength) {
-    case 1:
-      return suit !== null && cards.length === 1 && isRankCardOf(cards[0], suit);
-    case 2:
-      return suit !== null && cards.length === 2 && cards.every((card) => isRankCardOf(card, suit));
-    case 3:
-      return suit === null && cards.length === 2 && cards.every((card) => faceOf(card) === SMALL_JOKER_FACE);
-    case 4:
-      return suit === null && cards.length === 2 && cards.every((card) => faceOf(card) === BIG_JOKER_FACE);
-    default:
-      return false;
+  if (strength < 1 || cards.length !== declarationCardCount(strength) || new Set(cards).size !== cards.length) {
+    return false;
+  }
+  switch (declarationKind(strength)) {
+    case RANK_CARDS:
+      return suit !== null && cards.every((card) => !isJoker(card) && suitOf(card) === suit && rankOf(card) === rank);
+    case SMALL_JOKERS:
+      return suit === null && cards.length >= 2 && cards.every((card) => faceOf(card) === SMALL_JOKER_FACE);
+    case BIG_JOKERS:
+      return suit === null && cards.length >= 2 && cards.every((card) => faceOf(card) === BIG_JOKER_FACE);
   }
 }
 
@@ -447,18 +530,19 @@ export function kittyFlip(kitty: readonly Card[], rank: Rank): { suit: Suit | nu
 // MARK: Online bidding (no Swift counterpart)
 //
 // Declaring online is turn-based (DESIGN.md, Online multiplayer):
-//  - `startBidding` deals all 100 cards at once and opens bidding at `firstBidder` (the dealer,
-//    or the game creator's seat in round 1, when the dealer is not known yet).
+//  - `startBidding` deals every card but the kitty at once (100 with 4 players, 156 with 6, 208
+//    with 8) and opens bidding at `firstBidder` (the dealer, or the game creator's seat in round 1,
+//    when the dealer is not known yet).
 //  - On their turn a player either declares one of `availableBids` (exactly the offline
-//    `availableDeclarations` strength rules) or passes. Turns go 0 -> 1 -> 2 -> 3 -> 0.
-//  - A declaration resets the pass count. Bidding ends when the three other players have passed
-//    since the last declaration, or when all four pass with no declaration at all (then the
-//    kitty flip rule sets trump, exactly as offline).
+//    `availableDeclarations` strength rules) or passes. Turns go round the table: 0 -> 1 -> ... -> 0.
+//  - A declaration resets the pass count. Bidding ends when every other player has passed since
+//    the last declaration (three with 4 players, five with 6, seven with 8), or when everyone
+//    passes with no declaration at all (then the kitty flip rule sets trump, exactly as offline).
 //  - When bidding ends the declaration window closes as in `finishDealing`: trump is fixed and
 //    the dealer takes the kitty. Round 1 (dealer null): the winning declarer deals; if nobody
 //    declared, the first bidder deals (offline it would be seat 0).
-//  - Because three passes in a row after a declaration end the bidding, the current declarer
-//    never gets another turn while still holding the declaration: a player who declared a
+//  - Because a pass from every other player after a declaration ends the bidding, the current
+//    declarer never gets another turn while still holding the declaration: a player who declared a
 //    single cannot later reinforce it, so declaring a pair straight away is the stronger bid.
 //    A player whose declaration was overridden may override back when their turn comes, with
 //    anything strictly stronger than the current declaration.
@@ -466,10 +550,12 @@ export function kittyFlip(kitty: readonly Card[], rank: Rank): { suit: Suit | nu
 /**
  * Starts online bidding: deals every remaining card and gives the first turn to `firstBidder`.
  * Returns wrongPhase unless the round is still dealing with no declaration and no bidding yet.
- * Throws a RangeError if `firstBidder` is not a seat 0...3.
+ * Throws a RangeError if `firstBidder` is not a seat of the table.
  */
 export function startBidding(round: Round, firstBidder: number): RoundError | null {
-  if (!isSeat(round, firstBidder)) throw new RangeError(`firstBidder must be a seat 0...3, got ${firstBidder}`);
+  if (!isSeat(round, firstBidder)) {
+    throw new RangeError(`firstBidder must be a seat 0...${round.hands.length - 1}, got ${firstBidder}`);
+  }
   if (round.phase !== "dealing" || round.bidding !== null || round.declarationHistory.length > 0) {
     return { case: "wrongPhase" };
   }
@@ -510,9 +596,10 @@ export function bid(round: Round, seat: number, choice: Declaration | "pass"): R
     bidding.passes = 0;
     bidding.bids.push({ seat, declaration: copyDeclaration(parsed) });
   }
-  const finished = round.declaration !== null ? bidding.passes >= 3 : bidding.passes >= 4;
+  const players = roundPlayers(round);
+  const finished = round.declaration !== null ? bidding.passes >= players - 1 : bidding.passes >= players;
   if (!finished) {
-    bidding.turn = nextSeat(seat);
+    bidding.turn = nextSeat(seat, players);
     return null;
   }
   bidding.turn = null;
@@ -524,17 +611,18 @@ export function bid(round: Round, seat: number, choice: Declaration | "pass"): R
 // MARK: Burying
 
 /**
- * Dealer buries exactly 8 cards from their (33-card) hand -> "playing", dealer leads.
- * When `player` is given (online), it must be the dealer (else notYourTurn).
+ * Dealer buries exactly `kittySizeOf(round)` cards (8 from 33 with 4 players) -> "playing", dealer
+ * leads. When `player` is given (online), it must be the dealer (else notYourTurn).
  */
 export function bury(round: Round, cards: readonly Card[], player?: number): RoundError | null {
   const seat = round.dealer;
   if (round.phase !== "burying" || seat === null) return { case: "wrongPhase" };
   if (player !== undefined && player !== seat) return { case: "notYourTurn" };
-  if (cards.length !== KITTY_SIZE) {
+  const size = kittySizeOf(round);
+  if (cards.length !== size) {
     return {
       case: "invalidBury",
-      reason: `Choose exactly ${KITTY_SIZE} cards to bury (you chose ${cards.length}).`,
+      reason: `Choose exactly ${size} cards to bury (you chose ${cards.length}).`,
     };
   }
   if (new Set(cards).size !== cards.length) {
@@ -556,7 +644,7 @@ export function bury(round: Round, cards: readonly Card[], player?: number): Rou
 /** Whose turn it is to play (null outside "playing"). */
 export function turn(round: Round): number | null {
   if (round.phase !== "playing") return null;
-  return (round.leader + round.currentTrick.length) % 4;
+  return (round.leader + round.currentTrick.length) % roundPlayers(round);
 }
 
 /** Team of the dealer (null before the dealer is known). */
@@ -592,7 +680,7 @@ export function legalityError(round: Round, cards: readonly Card[], player: numb
 
 /**
  * Plays cards for the player whose turn it is. Leads that are throws are checked against the
- * other hands; a failing throw plays only the forced component. When the 4th play lands the trick
+ * other hands; a failing throw plays only the forced component. When the last play lands the trick
  * is scored and appended to `tricks`, `currentTrick` is emptied and the winner leads. After the
  * last trick the round is scored (`result`, phase "finished").
  */
@@ -612,7 +700,7 @@ export function play(round: Round, cards: readonly Card[], player: number): Play
 
   round.hands[player] = removeCards(round.hands[player], played) ?? round.hands[player];
   round.currentTrick.push({ player, cards: played });
-  if (round.currentTrick.length === 4) completeTrick(round);
+  if (round.currentTrick.length === roundPlayers(round)) completeTrick(round);
   return { ok: true, outcome };
 }
 
@@ -654,7 +742,7 @@ function finishRound(round: Round, lastLead: readonly Card[], lastWinner: number
     kittyPoints,
     kittyMultiplier: multiplier,
     defenderPoints,
-    outcome: scoreOutcome(defenderPoints),
+    outcome: scoreOutcome(defenderPoints, roundTable(round).decks),
     kitty: round.kitty.slice(),
     lastTrickWinner: lastWinner,
   };

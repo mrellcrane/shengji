@@ -1,8 +1,8 @@
 // Cryptographically random, unbiased shuffling for real games. Parity vectors carry explicit deck
 // orders, so nothing here has to match the Swift SeededGenerator.
 
-import { doubleDeck } from "./cards.ts";
-import type { Card } from "./cards.ts";
+import { TABLE_FOUR, deckCards } from "./cards.ts";
+import type { Card, TableSize } from "./cards.ts";
 
 /** Fills the array with random 32-bit values, like `crypto.getRandomValues`. */
 export type RandomSource = (array: Uint32Array) => Uint32Array;
@@ -52,7 +52,7 @@ export function shuffle<T>(items: readonly T[], source: RandomSource = cryptoRan
   return out;
 }
 
-/** All 108 cards in a uniformly random dealing order. */
-export function shuffledDeck(source: RandomSource = cryptoRandomSource): Card[] {
-  return shuffle(doubleDeck(), source);
+/** Every card of the table's decks (108 for 4 players, 162 for 6, 216 for 8) in a uniformly random dealing order. */
+export function shuffledDeck(table: TableSize = TABLE_FOUR, source: RandomSource = cryptoRandomSource): Card[] {
+  return shuffle(deckCards(table.decks), source);
 }

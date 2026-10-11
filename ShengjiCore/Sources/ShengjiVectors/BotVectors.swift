@@ -16,12 +16,15 @@ import ShengjiCore
 /// extra declaring and burying decisions. The last `ruffRounds` rounds are picked from more seeds:
 /// only rounds in which the standard bot ruffs a throw, or ruffs a suit too short for the
 /// opponents still to play to follow, are kept (both rare at random, and both have their own logic).
+/// Then come rounds and deals at tables of 6 and 8 players (a `players` field): `bigOnline` and
+/// `bigOffline` rounds after the others in `rounds`, `bigDeals` after the others in `deals`.
 enum BotVectors {
     enum Controller: String {
         case standard, beginner, random
     }
 
-    static func make(online: Int, offline: Int, deals: Int, ruffRounds: Int) -> [(String, JSON)] {
+    static func make(online: Int, offline: Int, deals: Int, ruffRounds: Int,
+                     bigOnline: Int, bigOffline: Int, bigDeals: Int) -> [(String, JSON)] {
         var rounds: [JSON] = []
         for index in 0..<online { rounds.append(entry(seed: UInt64(9000 + index), online: true)) }
         for index in 0..<offline { rounds.append(entry(seed: UInt64(9500 + index), online: false)) }
@@ -35,9 +38,19 @@ enum BotVectors {
             }
             seed += 1
         }
+        for index in 0..<bigOnline {
+            rounds.append(entry(seed: UInt64(30_000 + index), online: true, table: Cards.bigTables[index % 2]))
+        }
+        for index in 0..<bigOffline {
+            rounds.append(entry(seed: UInt64(31_000 + index), online: false, table: Cards.bigTables[index % 2]))
+        }
         var short: [JSON] = []
         for index in 0..<deals {
             short.append(entry(seed: UInt64(10_000 + index), online: index % 4 != 3, playOut: false))
+        }
+        for index in 0..<bigDeals {
+            short.append(entry(seed: UInt64(32_000 + index), online: index % 4 != 3, playOut: false,
+                               table: Cards.bigTables[index % 2]))
         }
         return [
             ("format", .int(1)),
@@ -47,37 +60,43 @@ enum BotVectors {
         ]
     }
 
-    static func entry(seed: UInt64, online: Bool, playOut: Bool = true) -> JSON {
-        round(seed: seed, online: online, playOut: playOut).json
+    static func entry(seed: UInt64, online: Bool, playOut: Bool = true, table: TableSize = .four) -> JSON {
+        round(seed: seed, online: online, playOut: playOut, table: table).json
     }
 
-    /// The round of `seed`, and how many times the standard bot made a rare ruff in it (`isRareRuff`).
-    static func round(seed: UInt64, online: Bool, playOut: Bool = true) -> (json: JSON, rareRuffs: Int) {
+    /// The round of `seed`, and how many times the standard bot made a rare ruff in it (`isRareRuff`,
+    /// two-deck rounds only).
+    static func round(seed: UInt64, online: Bool, playOut: Bool = true,
+                      table: TableSize = .four) -> (json: JSON, rareRuffs: Int) {
         var rand = Rand(seed)
+        let n = table.players
         let rank = Rank.allCases[rand.below(Rank.allCases.count)]
-        let dealer: Int? = rand.percent(25) ? nil : rand.below(4)
+        let dealer: Int? = rand.percent(25) ? nil : rand.below(n)
         let firstSeat = dealer ?? 0
-        // Pair-rich deals keep tractors in play; joker-rich ones bring no trump declarations.
+        // Pair-rich deals keep tractors in play (with more decks, sets and tractors of sets);
+        // joker-rich ones bring no trump declarations.
         let deckRoll = rand.below(100)
         let deck: [Card]
         if deckRoll < 20 {
-            deck = RoundVectors.pairRichDeck(firstSeat: firstSeat, rand: &rand)
+            deck = table.isClassic ? RoundVectors.pairRichDeck(firstSeat: firstSeat, rand: &rand)
+                : RoundVectors.setRichDeck(table: table, firstSeat: firstSeat, rand: &rand)
         } else if deckRoll < 35 {
-            deck = jokerRichDeck(rank: rank, firstSeat: firstSeat, rand: &rand)
+            deck = jokerRichDeck(rank: rank, firstSeat: firstSeat, table: table, rand: &rand)
         } else {
-            deck = rand.shuffled(Cards.all)
+            deck = rand.shuffled(Cards.deck(table.decks))
         }
-        let controllers: [Controller] = (0..<4).map { _ in
+        let controllers: [Controller] = (0..<n).map { _ in
             let roll = rand.below(100)
             return roll < 40 ? .standard : (roll < 65 ? .beginner : .random)
         }
-        var round = Round(trumpRank: rank, dealer: dealer, deck: deck)
+        var round = Round(trumpRank: rank, dealer: dealer, deck: deck, table: table)
         let declaring = online
             ? bid(&round, firstBidder: firstSeat, controllers: controllers, rand: &rand)
             : declareWhileDealing(&round, controllers: controllers, rand: &rand)
         round.finishDealing()
         let burying = bury(&round, controllers: controllers, rand: &rand)
-        var fields: [(String, JSON)] = [
+        var fields: [(String, JSON)] = table.isClassic ? [] : [("players", .int(n))]
+        fields += [
             ("seed", .int(Int(seed))),
             ("mode", .string(online ? "online" : "offline")),
             ("trumpRank", json(rank)),
@@ -96,7 +115,7 @@ enum BotVectors {
         while round.phase == .playing, let player = round.turn {
             let step = play(&round, player: player, controllers: controllers, rand: &rand)
             playing.append(step.json)
-            if step.rareRuff { rareRuffs += 1 }
+            if step.rareRuff && table.isClassic { rareRuffs += 1 }
         }
         guard let result = round.result else { fatalError("bot round \(seed) did not finish") }
         fields += [("playing", .array(playing)), ("result", json(result))]
@@ -123,13 +142,15 @@ enum BotVectors {
         return unseen < max(1, lead.count * laterOpponents)
     }
 
-    /// A shuffled deck in which one seat is dealt all four jokers and a few trump-rank cards, so
+    /// A shuffled deck in which one seat is dealt every joker and a few trump-rank cards, so
     /// no-trump declarations (and no-trump rounds) come up often.
-    static func jokerRichDeck(rank: Rank, firstSeat: Int, rand: inout Rand) -> [Card] {
-        var deck = rand.shuffled(Cards.all)
-        let seat = rand.below(4)
-        let positions = (0..<100).filter { ($0 + firstSeat) % 4 == seat }
-        let wanted = Cards.all.filter(\.isJoker) + rand.sample(Cards.all.filter { $0.rank == rank }, rand.between(0, 3))
+    static func jokerRichDeck(rank: Rank, firstSeat: Int, table: TableSize = .four, rand: inout Rand) -> [Card] {
+        let all = Cards.deck(table.decks)
+        let n = table.players
+        var deck = rand.shuffled(all)
+        let seat = rand.below(n)
+        let positions = (0..<(n * table.handSize)).filter { ($0 + firstSeat) % n == seat }
+        let wanted = all.filter(\.isJoker) + rand.sample(all.filter { $0.rank == rank }, rand.between(0, 3))
         for (card, target) in zip(wanted, rand.sample(positions, wanted.count)) {
             guard let from = deck.firstIndex(of: card) else { fatalError("card missing from deck") }
             deck.swapAt(from, target)
@@ -176,9 +197,11 @@ enum BotVectors {
     }
 
     /// The server's turn-based bidding (server/src/engine/round.ts `bid`): from `firstBidder`, each
-    /// seat in turn declares or passes; three passes after a declaration, or four with none, end it.
+    /// seat in turn declares or passes; a pass from every other player after a declaration (three
+    /// with 4 players), or from everyone with none, ends it.
     static func bid(_ round: inout Round, firstBidder: Int, controllers: [Controller], rand: inout Rand) -> [JSON] {
         round.dealAll()
+        let n = round.players
         var steps: [JSON] = []
         var history: [SeatView.Bid] = []
         var turn = firstBidder
@@ -188,8 +211,8 @@ enum BotVectors {
             var view = round.seatView(for: turn)
             view.phase = .bidding
             let rotated = history.map { bid in
-                SeatView.Bid(player: (bid.player - turn + 4) % 4,
-                             declaration: bid.declaration.map { made($0, by: ($0.player - turn + 4) % 4) })
+                SeatView.Bid(player: (bid.player - turn + n) % n,
+                             declaration: bid.declaration.map { made($0, by: ($0.player - turn + n) % n) })
             }
             view.bidding = SeatView.Bidding(turn: 0, history: rotated, available: available)
             let result = declareStep(&round, seat: turn, view: view, available: available, controllers: controllers,
@@ -197,8 +220,8 @@ enum BotVectors {
             steps.append(result.step)
             history.append(SeatView.Bid(player: turn, declaration: result.move.map { made($0, by: turn) }))
             passes = result.move == nil ? passes + 1 : 0
-            if round.declaration != nil ? passes >= 3 : passes >= 4 { break }
-            turn = (turn + 1) % 4
+            if round.declaration != nil ? passes >= n - 1 : passes >= n { break }
+            turn = (turn + 1) % n
         }
         return steps
     }
@@ -221,7 +244,7 @@ enum BotVectors {
             }
             steps.append(look(&round, seat: last, prefix: [("deal", .int(count))], rand: &rand))
         }
-        for seat in [1, 2, 3, 0] { steps.append(look(&round, seat: seat, prefix: [], rand: &rand)) }
+        for seat in Array(1..<round.players) + [0] { steps.append(look(&round, seat: seat, prefix: [], rand: &rand)) }
         return steps
     }
 
@@ -238,7 +261,7 @@ enum BotVectors {
         case .random:
             let hand = round.hands[seat]
             let pointsFirst = hand.filter { $0.points > 0 } + rand.shuffled(hand.filter { $0.points == 0 })
-            move = rand.percent(50) ? Array(pointsFirst.prefix(Round.kittySize)) : rand.sample(hand, Round.kittySize)
+            move = rand.percent(50) ? Array(pointsFirst.prefix(round.kittySize)) : rand.sample(hand, round.kittySize)
             fields.append(("move", json(move)))
         }
         do {
@@ -261,9 +284,15 @@ enum BotVectors {
         case .beginner: move = beginner
         case .random:
             let hand = round.hands[player]
-            move = round.currentTrick.isEmpty
-                ? Plays.randomLead(hand: hand, trump: round.trump, rand: &rand, throwPercent: 25)
-                : Plays.follow(hand: hand, lead: round.currentLead, trump: round.trump, rand: &rand)
+            if !round.currentTrick.isEmpty {
+                move = Plays.follow(hand: hand, lead: round.currentLead, trump: round.trump, rand: &rand)
+            } else if round.table.isClassic {
+                move = Plays.randomLead(hand: hand, trump: round.trump, rand: &rand, throwPercent: 25)
+            } else {
+                let n = round.players
+                let others = (1..<n).map { round.hands[(player + $0) % n] }
+                move = Plays.setLead(hand: hand, others: others, trump: round.trump, rand: &rand)
+            }
             fields.append(("move", json(move)))
         }
         do {

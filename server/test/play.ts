@@ -1,6 +1,7 @@
 // Random players for simulations: legal leads, and legal follows found by searching candidate
 // plays with validateFollow (the candidates always include one built from the follow rules, so the
-// search cannot come up empty).
+// search cannot come up empty). Any table: with 3 or 4 decks leads include triples, four of a kind
+// and tractors of them, and the rule-built follow takes every owed combination.
 
 import assert from "node:assert/strict";
 import * as E from "../src/engine/index.ts";
@@ -18,9 +19,14 @@ function groupsOf(hand: readonly Card[], trump: Trump): Card[][] {
   return Array.from(groups.values());
 }
 
-/** A random lead: singles, pairs, tractors, throws (which may fail) and whole short suits. */
+/** A random lead: singles, pairs, tractors, sets, throws (which may fail) and whole short suits. */
 export function randomLead(hand: readonly Card[], trump: Trump, rng: Rng): Card[] {
   const group = rng.pick(groupsOf(hand, trump));
+  if (E.maxCopies(group) >= 3 && rng.chance(30)) {
+    // Three or more decks: a set or a tractor of sets.
+    const sets = E.decompose(group, trump).filter((c) => E.shapeWidth(c.shape) >= 3);
+    if (sets.length > 0) return rng.pick(sets).cards;
+  }
   const roll = rng.below(100);
   if (roll < 15) {
     const longest = E.longestRun(group, trump);
@@ -36,6 +42,16 @@ export function randomLead(hand: readonly Card[], trump: Trump, rng: Rng): Card[
   if (roll < 55 && group.length >= 2) return rng.sample(group, 2 + rng.below(Math.min(5, group.length - 1)));
   if (roll < 60 && group.length <= 6) return group.slice();
   return [rng.pick(group)];
+}
+
+/** Disjoint combinations of the given shapes in `cards` (each from what the earlier ones leave), or null. */
+function disjointUnits(cards: readonly Card[], shapes: readonly E.ComboShape[], trump: Trump, rng: Rng): Card[][] | null {
+  if (shapes.length === 0) return [];
+  for (const unit of rng.shuffle(E.unitsOf(shapes[0], cards, trump))) {
+    const more = disjointUnits(E.without(cards, unit), shapes.slice(1), trump, rng);
+    if (more !== null) return [unit, ...more];
+  }
+  return null;
 }
 
 /** Disjoint tractors of the given lengths in `cards`, or null. */
@@ -98,7 +114,10 @@ export function followCandidates(hand: readonly Card[], lead: readonly Card[], t
   return candidates;
 }
 
-/** A legal follow built from the rules: required tractors, then pairs, then random filler. */
+/**
+ * A legal follow built from the rules: required tractors, then pairs, then random filler (with
+ * three or more copies of a face: every owed combination of the requirement, widest first).
+ */
 export function constructiveFollow(hand: readonly Card[], lead: readonly Card[], trump: Trump, rng: Rng): Card[] {
   const n = lead.length;
   const ledGroup = E.groupOfCards(lead, trump) ?? E.groupOf(trump, lead[0]);
@@ -108,6 +127,16 @@ export function constructiveFollow(hand: readonly Card[], lead: readonly Card[],
   const requirement = E.followRequirement(lead, held, trump);
   let pool = held.slice();
   const play: Card[] = [];
+  if (!E.isClassicRequirement(requirement) || E.maxCopies(held) > 2 || E.maxCopies(lead) > 2) {
+    const units = disjointUnits(held, E.sortedUnits(requirement.units), trump, rng);
+    assert.ok(units !== null, `the owed combinations are not in ${E.shortText(held)}`);
+    for (const unit of units) {
+      play.push(...unit);
+      pool = E.without(pool, unit);
+    }
+    play.push(...rng.sample(pool, n - play.length));
+    return play;
+  }
   for (const tractor of disjointTractors(pool, requirement.tractorLengths, trump, rng) ?? []) {
     play.push(...tractor);
     pool = E.without(pool, tractor);
@@ -142,7 +171,7 @@ export function randomBidding(round: Round, firstBidder: number, rng: Rng, decla
 /** Runs open bidding to the end with random choices (`declarePercent` of turns declare when possible). */
 export function finishBidding(round: Round, rng: Rng, declarePercent = 30): void {
   for (let turns = 0; E.biddingTurn(round) !== null; turns++) {
-    assert.ok(turns < 50, "bidding did not end");
+    assert.ok(turns < 100, "bidding did not end");
     const seat = E.biddingTurn(round) as number;
     const options = E.availableBids(round, seat);
     const choice = options.length > 0 && rng.chance(declarePercent) ? rng.pick(options) : "pass";
@@ -150,10 +179,10 @@ export function finishBidding(round: Round, rng: Rng, declarePercent = 30): void
   }
 }
 
-/** The dealer buries 8 random cards. */
+/** The dealer buries random cards (8, or 6 with 6 players). */
 export function randomBury(round: Round, rng: Rng): void {
   const dealer = round.dealer as number;
-  assert.equal(E.bury(round, rng.sample(round.hands[dealer], E.KITTY_SIZE), dealer), null);
+  assert.equal(E.bury(round, rng.sample(round.hands[dealer], E.kittySizeOf(round)), dealer), null);
 }
 
 /** One random legal play by the seat whose turn it is. */

@@ -1,7 +1,8 @@
 // Declaring trump: offline during the deal, online in turn-based bidding. Port of
 // ShengjiCore/Sources/ShengjiCore/Bots/BotDeclaring.swift (`choose`), choices only. Deterministic:
 // the same view and options always give the same choice.
-//  - Never overrides the partner; always reinforces its own single with a pair when it can.
+//  - Never overrides a partner; always reinforces its own declaration with more of the same card
+//    when it can (a single becomes a pair; with three or more decks, the most copies held).
 //  - Standard: strength = would-be trumps (that suit + every trump-rank card + jokers) as a share of
 //    the cards received so far. Declares once at least 6 cards are in, when strength reaches a
 //    threshold that eases from 0.30 to 0.25 as the deal ends. A joker pair (no trump) is used when
@@ -11,11 +12,12 @@
 //    trump suits us or their suit is poor for us.
 //  - Beginner: declares only with a pair.
 
-import { rankOf, suitOf } from "../engine/cards.ts";
+import { rankOf, suitOf, tableHandSize } from "../engine/cards.ts";
 import type { Card, Rank, Suit } from "../engine/cards.ts";
-import { HAND_SIZE } from "../engine/round.ts";
+import { HAND_SIZE, RANK_CARDS, declarationCardCount, declarationKind } from "../engine/round.ts";
 import type { Declaration } from "../engine/round.ts";
-import { partnerOf } from "../engine/rules.ts";
+import { teamOf } from "../engine/rules.ts";
+import { viewTable } from "../engine/seatview.ts";
 import type { SeatView } from "../engine/seatview.ts";
 import { isTrump } from "../engine/trump.ts";
 import type { BotLevel } from "./bot.ts";
@@ -54,16 +56,22 @@ export function trumpShare(hand: readonly Card[], rank: Rank, suit: Suit | null)
   return trumpCount(hand, rank, suit) / hand.length;
 }
 
-/** Threshold for declaring a suit after receiving `received` cards. */
-export function threshold(received: number, complete: boolean, tuning: Readonly<BotTuning> = DEFAULT_TUNING): number {
-  const span = HAND_SIZE - MINIMUM_CARDS;
+/** Threshold for declaring a suit after receiving `received` of `handSize` cards. */
+export function threshold(
+  received: number,
+  complete: boolean,
+  handSize = HAND_SIZE,
+  tuning: Readonly<BotTuning> = DEFAULT_TUNING,
+): number {
+  const span = handSize - MINIMUM_CARDS;
   const progress = complete ? 1.0 : Math.min(1.0, Math.max(0.0, (received - MINIMUM_CARDS) / span));
   return tuning.declareEarly - (tuning.declareEarly - tuning.declareLate) * progress;
 }
 
-/** Every card is dealt: online bidding, or offline once all 100 cards are in the hands. */
+/** Every card is dealt: online bidding, or offline once every hand is full (100 cards with 4 players). */
 export function isDealComplete(view: SeatView): boolean {
-  return view.phase === "bidding" || view.handCounts.reduce((a, b) => a + b, 0) >= 4 * HAND_SIZE;
+  const table = viewTable(view);
+  return view.phase === "bidding" || view.handCounts.reduce((a, b) => a + b, 0) >= table.players * tableHandSize(table);
 }
 
 function withPlayerZero(d: Declaration): Declaration {
@@ -93,7 +101,7 @@ export function canonical(available: readonly Declaration[]): Declaration[] {
 
 /**
  * The declaration of the viewer of `view` among `available` (seats viewer-relative: the viewer is
- * 0, the partner 2): one of `available` with player 0, or null to pass. Swift
+ * 0, the partners the even seats): one of `available` with player 0, or null to pass. Swift
  * `BotDeclaring.choose(for:view:available:).declaration`.
  */
 export function chooseDeclaration(
@@ -107,9 +115,24 @@ export function chooseDeclaration(
   // Who holds the declaration comes first.
   const current = view.declaration;
   if (current !== null) {
-    if (current.player === partnerOf(0)) return null;
+    if (current.player !== 0 && teamOf(current.player) === teamOf(0)) return null;
     if (current.player === 0) {
-      return options.find((o) => o.strength === 2 && o.suit !== null && o.suit === current.suit) ?? null;
+      // Reinforce with more of the same card: a single becomes a pair (with three or more decks,
+      // the most copies held).
+      const kind = declarationKind(current.strength);
+      const shown = declarationCardCount(current.strength);
+      let more: Declaration | null = null;
+      for (const option of options) {
+        if (
+          declarationKind(option.strength) === kind &&
+          option.suit === current.suit &&
+          declarationCardCount(option.strength) > shown &&
+          (option.suit !== null || kind !== RANK_CARDS)
+        ) {
+          more = option;
+        }
+      }
+      return more;
     }
   }
   if (options.length === 0) return null;
@@ -121,7 +144,7 @@ function standard(options: readonly Declaration[], view: SeatView, tuning: Reado
   const hand = view.hand;
   if (hand.length < MINIMUM_CARDS) return null;
   const rank = view.trump.rank;
-  const bar = threshold(hand.length, isDealComplete(view), tuning);
+  const bar = threshold(hand.length, isDealComplete(view), tableHandSize(viewTable(view)), tuning);
 
   // Best suit option: highest share, then the stronger declaration (a pair is harder to override).
   let bestSuit: { option: Declaration; share: number } | null = null;
