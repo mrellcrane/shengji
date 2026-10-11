@@ -96,7 +96,7 @@ struct GameBigTableLayout<Slot: View, Center: View>: View {
     }
 }
 
-/// A seat's label at a table of 6 or 8: team dot and short name, then cards held and the dealer mark.
+/// A seat's label at a table of 6 or 8: team dot and short name, then cards held and a "D" dealer button.
 /// Gold edge when it is their turn.
 @MainActor
 struct GameSeatChip: View {
@@ -131,7 +131,12 @@ struct GameSeatChip: View {
                         .monospacedDigit()
                 }
                 if info.role == .dealer {
-                    GameRoleBadge(role: .dealer, team: info.team)
+                    // A dealer button, as at a card table: there's no room for the word.
+                    Text("D")
+                        .font(.caption2.weight(.heavy))
+                        .foregroundStyle(Theme.cardInk)
+                        .frame(width: 15, height: 15)
+                        .background(Circle().fill(Theme.gold))
                 }
             }
             .font(.caption2)

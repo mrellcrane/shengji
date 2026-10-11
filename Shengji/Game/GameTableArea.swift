@@ -217,10 +217,12 @@ struct GamePlaySlot: View {
     }
 
     @ViewBuilder private var tag: some View {
+        // Fixed size: under a single small card (a table of 8) the tag is wider than the card.
         if isWinner {
             Text("Wins")
                 .font(.caption2.weight(.heavy))
                 .foregroundStyle(Theme.cardInk)
+                .fixedSize()
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Capsule().fill(Theme.gold))
@@ -229,6 +231,7 @@ struct GamePlaySlot: View {
             Text("Winning")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(Theme.cardInk)
+                .fixedSize()
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Capsule().fill(Color.white.opacity(0.85)))
