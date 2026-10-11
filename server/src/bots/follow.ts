@@ -5,7 +5,7 @@
 //  - Partner winning but beatable: overtake with a sure winner if points are at risk, else duck low.
 //  - Opponent winning: win cheaply when it is worth it, ruff when out of the suit and points are at
 //    stake (high enough when a later opponent may overruff), otherwise duck low.
-//  - Third seat: the last player is an opponent, so a trick left to them is worth more than the
+//  - Next to last: the last player is an opponent, so a trick left to them is worth more than the
 //    points on the table.
 
 import type { Card } from "../engine/cards.ts";
@@ -115,7 +115,7 @@ class StandardFollow {
   private readonly laterOpponents: number[];
   private readonly partnerLater: boolean;
   private readonly isLast: boolean;
-  /** Third seat only: the points the last player is expected to add if the trick is left to them. */
+  /** Next to last only: the points the last player is expected to add if the trick is left to them. */
   private readonly lastPlayerThreat: number;
 
   constructor(table: BotTable) {
@@ -135,12 +135,13 @@ class StandardFollow {
     for (const play of trick) onTable += points(play.cards);
     this.onTable = onTable;
     const position = trick.length;
+    const lastPosition = table.players - 1;
     const later: number[] = [];
-    for (let step = 1; step <= 3 - position; step++) later.push((table.seat + step) % 4);
+    for (let step = 1; step <= lastPosition - position; step++) later.push((table.seat + step) % table.players);
     this.laterOpponents = later.filter((player) => table.isOpponent(player));
-    this.partnerLater = later.includes(table.partner);
-    this.isLast = position >= 3;
-    this.lastPlayerThreat = position === 2 ? table.tuning.lastPlayerThreat : 0;
+    this.partnerLater = later.some((player) => table.isTeammate(player));
+    this.isLast = position >= lastPosition;
+    this.lastPlayerThreat = position === lastPosition - 1 ? table.tuning.lastPlayerThreat : 0;
   }
 
   private get ledGroup(): SuitGroup {
@@ -148,7 +149,7 @@ class StandardFollow {
   }
 
   decide(): Card[] {
-    const cards = this.winner === this.table.partner ? this.partnerWinning() : this.opponentWinning();
+    const cards = this.table.isTeammate(this.winner) ? this.partnerWinning() : this.opponentWinning();
     if (this.builder.isLegal(cards)) return cards;
     noteFallback();
     return this.builder.fallback();

@@ -1,4 +1,5 @@
-// Singles, pairs, tractors and the decomposition of a play. Port of Engine/Combination.swift.
+// Singles, pairs, tractors, sets (triples, four of a kind) and tractors of sets, and the decomposition
+// of a play. Port of Engine/Combination.swift.
 
 import { faceOf, shortText, suitOf } from "./cards.ts";
 import type { Card, Face } from "./cards.ts";
@@ -6,16 +7,21 @@ import { groupOf, sortCards, sortKey, strength } from "./trump.ts";
 import type { SuitGroup, Trump } from "./trump.ts";
 
 /**
- * The basic building blocks of a play, with `pairs` = number of pairs (single 0, pair 1,
- * tractor n >= 2). Same encoding as the parity vectors.
- *  - single: one card
- *  - pair: two identical cards (same face; 2♠ + 2♣ is NOT a pair)
- *  - tractor: n >= 2 pairs of consecutive strength in the same suit group (拖拉机)
+ * The basic building blocks of a play, in the parity vectors' encoding. Two decks give:
+ *  - single `{type: "single", pairs: 0}`: one card
+ *  - pair `{type: "pair", pairs: 1}`: two identical cards (same face; 2♠ + 2♣ is NOT a pair)
+ *  - tractor `{type: "tractor", pairs: n}`: n >= 2 pairs of consecutive strength in the same suit
+ *    group (拖拉机)
+ * With three or more decks a face can appear three or four times, which adds:
+ *  - set `{type: "set", width: n}`: n >= 3 identical cards (a triple; four of a kind)
+ *  - setTractor `{type: "setTractor", width, length}`: `length` >= 2 sets of `width` >= 3 identical
+ *    cards at consecutive strengths in one suit group (a tractor of triples)
+ * Every shape is `width` identical cards at each of `length` consecutive strengths (`makeShape`).
  */
-export interface ComboShape {
-  type: "single" | "pair" | "tractor";
-  pairs: number;
-}
+export type ComboShape =
+  | { type: "single" | "pair" | "tractor"; pairs: number }
+  | { type: "set"; width: number }
+  | { type: "setTractor"; width: number; length: number };
 
 export const SINGLE: ComboShape = Object.freeze({ type: "single", pairs: 0 }) as ComboShape;
 export const PAIR: ComboShape = Object.freeze({ type: "pair", pairs: 1 }) as ComboShape;
@@ -24,26 +30,94 @@ export function tractorShape(pairs: number): ComboShape {
   return { type: "tractor", pairs };
 }
 
-export function shapeCardCount(shape: ComboShape): number {
+export function setShape(width: number): ComboShape {
+  return { type: "set", width };
+}
+
+export function setTractorShape(width: number, length: number): ComboShape {
+  return { type: "setTractor", width, length };
+}
+
+/** The shape of `length` consecutive sets of `width` identical cards (width 1: a single). Swift `ComboShape.make`. */
+export function makeShape(width: number, length: number): ComboShape {
+  const w = Math.max(1, width);
+  const l = Math.max(1, length);
+  if (w === 1) return SINGLE;
+  if (w === 2) return l === 1 ? PAIR : tractorShape(l);
+  return l === 1 ? setShape(w) : setTractorShape(w, l);
+}
+
+/** Identical cards at each strength: 1 for a single, 2 for pairs and tractors, 3 for triples. */
+export function shapeWidth(shape: ComboShape): number {
   switch (shape.type) {
     case "single":
       return 1;
     case "pair":
-      return 2;
     case "tractor":
-      return 2 * shape.pairs;
+      return 2;
+    case "set":
+    case "setTractor":
+      return shape.width;
   }
 }
 
+/** Consecutive strengths: 1 for a single, pair or set, the number of steps for a tractor. */
+export function shapeLength(shape: ComboShape): number {
+  switch (shape.type) {
+    case "single":
+    case "pair":
+    case "set":
+      return 1;
+    case "tractor":
+      return shape.pairs;
+    case "setTractor":
+      return shape.length;
+  }
+}
+
+export function shapeCardCount(shape: ComboShape): number {
+  return shapeWidth(shape) * shapeLength(shape);
+}
+
+/** Pairs the shape holds (a triple holds one, four of a kind two). */
 export function shapePairCount(shape: ComboShape): number {
-  return shape.type === "single" ? 0 : shape.type === "pair" ? 1 : shape.pairs;
+  return shapeLength(shape) * Math.floor(shapeWidth(shape) / 2);
+}
+
+/** True for tractors of pairs, triples or more. */
+export function isTractorShape(shape: ComboShape): boolean {
+  return shapeLength(shape) >= 2;
 }
 
 export function shapesEqual(a: ComboShape, b: ComboShape): boolean {
-  return a.type === b.type && (a.type !== "tractor" || a.pairs === b.pairs);
+  return a.type === b.type && shapeWidth(a) === shapeWidth(b) && shapeLength(a) === shapeLength(b);
 }
 
-/** "single", "pair", "tractor", "tractor of 3 pairs". */
+/** "triple", "four of a kind", "5 of a kind". */
+function setName(width: number): string {
+  switch (width) {
+    case 3:
+      return "triple";
+    case 4:
+      return "four of a kind";
+    default:
+      return `${width} of a kind`;
+  }
+}
+
+/** "triples", "fours", "5s". */
+function setsName(width: number): string {
+  switch (width) {
+    case 3:
+      return "triples";
+    case 4:
+      return "fours";
+    default:
+      return `${width}s`;
+  }
+}
+
+/** "single", "pair", "tractor", "tractor of 3 pairs", "triple", "tractor of triples", "tractor of 3 fours". */
 export function shapeName(shape: ComboShape): string {
   switch (shape.type) {
     case "single":
@@ -52,10 +126,16 @@ export function shapeName(shape: ComboShape): string {
       return "pair";
     case "tractor":
       return shape.pairs === 2 ? "tractor" : `tractor of ${shape.pairs} pairs`;
+    case "set":
+      return setName(shape.width);
+    case "setTractor": {
+      const sets = setsName(shape.width);
+      return shape.length === 2 ? `tractor of ${sets}` : `tractor of ${shape.length} ${sets}`;
+    }
   }
 }
 
-/** One component of a play: a single, a pair, or a tractor, all from one suit group. */
+/** One component of a play: a single, a pair, a tractor or a set (or tractor of sets), all from one suit group. */
 export interface Component {
   shape: ComboShape;
   /** Cards sorted from lowest to highest strength. */
@@ -201,6 +281,150 @@ export function longestRun(cards: readonly Card[], trump: Trump): number {
   return best;
 }
 
+// MARK: Sets of identical cards (any width)
+
+/**
+ * The most copies of any one face among `cards` (0 when empty). Two decks give at most 2; with three
+ * or more decks a face can appear three or four times (triples, four of a kind).
+ */
+export function maxCopies(cards: readonly Card[]): number {
+  const counts = new Map<Face, number>();
+  let best = 0;
+  for (const card of cards) {
+    const count = (counts.get(faceOf(card)) ?? 0) + 1;
+    counts.set(faceOf(card), count);
+    best = Math.max(best, count);
+  }
+  return best;
+}
+
+/** Card groups sorted by the sort key of their first card (unique per face). */
+function bySortKey(groups: Card[][], trump: Trump): Card[][] {
+  return groups
+    .map((cards) => ({ cards, key: sortKey(trump, cards[0]) }))
+    .sort((a, b) => a.key - b.key)
+    .map((g) => g.cards);
+}
+
+/**
+ * Every set of `width` identical cards in `cards`: the lowest-id `width` copies of each face held at
+ * least that often, sorted by group then strength ascending (width 2: `pairsIn`). Swift `Combos.sets`.
+ */
+export function setsIn(cards: readonly Card[], width: number, trump: Trump): Card[][] {
+  const w = Math.max(1, width);
+  const sets: Card[][] = [];
+  for (const bucket of byFace(cards).values()) {
+    if (bucket.length >= w) sets.push(bucket.slice(0, w));
+  }
+  return bySortKey(sets, trump);
+}
+
+/**
+ * Like `setsIn` but a face held twice as often gives two sets (four 7♠ are two pairs), lowest ids
+ * first. Swift `Combos.allSets`.
+ */
+export function allSetsIn(cards: readonly Card[], width: number, trump: Trump): Card[][] {
+  const w = Math.max(1, width);
+  const out: Card[][] = [];
+  for (const bucket of byFace(cards).values()) {
+    for (let start = 0; start + w <= bucket.length; start += w) out.push(bucket.slice(start, start + w));
+  }
+  return out
+    .map((cards) => ({ cards, key: sortKey(trump, cards[0]) }))
+    .sort((a, b) => a.key - b.key || a.cards[0] - b.cards[0])
+    .map((g) => g.cards);
+}
+
+/** Faces of one group held at least `width` times, bucketed by strength level (width 2: `pairLevels`). */
+function setLevels(cards: readonly Card[], width: number, group: SuitGroup, trump: Trump): Map<number, Face[]> {
+  const levels = new Map<number, Face[]>();
+  for (const [face, bucket] of byFace(cards)) {
+    if (bucket.length < width || groupOf(trump, face) !== group) continue;
+    const level = strength(trump, face);
+    const list = levels.get(level);
+    if (list) list.push(face);
+    else levels.set(level, [face]);
+  }
+  for (const list of levels.values()) {
+    list.sort((a, b) => (suitOf(a) ?? 9) - (suitOf(b) ?? 9));
+  }
+  return levels;
+}
+
+/**
+ * Every tractor of exactly `length` consecutive sets of `width` identical cards (width 2:
+ * `tractorsIn`). Each result is width * length cards, low to high. Swift `Combos.setTractors`.
+ */
+export function setTractorsIn(cards: readonly Card[], width: number, length: number, trump: Trump): Card[][] {
+  if (length < 2 || width < 2) return [];
+  if (width === 2) return tractorsIn(cards, length, trump);
+  const faceCards = byFace(cards);
+  const results: Card[][] = [];
+  for (const group of groupsIn(cards, trump)) {
+    const levels = setLevels(cards, width, group, trump);
+    for (const start of ascending(levels.keys())) {
+      let complete = true;
+      for (let level = start; level < start + length; level++) {
+        if (!levels.has(level)) {
+          complete = false;
+          break;
+        }
+      }
+      if (!complete) continue;
+      let partials: Card[][] = [[]];
+      for (let level = start; level < start + length; level++) {
+        const next: Card[][] = [];
+        for (const partial of partials) {
+          for (const face of levels.get(level) as Face[]) {
+            next.push(partial.concat((faceCards.get(face) as Card[]).slice(0, width)));
+          }
+        }
+        partials = next;
+      }
+      results.push(...partials);
+    }
+  }
+  return results;
+}
+
+/** Length of the longest run of sets of `width` identical cards: 0 = none, 1 = sets but no tractor. */
+export function longestSetRun(cards: readonly Card[], width: number, trump: Trump): number {
+  if (width === 2) return longestRun(cards, trump);
+  let best = 0;
+  for (const group of groupsIn(cards, trump)) {
+    const keys = new Set(setLevels(cards, width, group, trump).keys());
+    for (const key of keys) {
+      if (keys.has(key - 1)) continue;
+      let n = 0;
+      while (keys.has(key + n)) n++;
+      best = Math.max(best, n);
+    }
+  }
+  return best;
+}
+
+/**
+ * Every way to take one combination of `shape` out of `cards`, as card lists: one per face (or per
+ * choice of faces along a tractor), using the lowest-id copies. Swift `Combos.units(of:in:trump:)`.
+ */
+export function unitsOf(shape: ComboShape, cards: readonly Card[], trump: Trump): Card[][] {
+  switch (shape.type) {
+    case "single": {
+      const singles: Card[][] = [];
+      for (const bucket of byFace(cards).values()) singles.push([bucket[0]]);
+      return bySortKey(singles, trump);
+    }
+    case "pair":
+      return pairsIn(cards, trump);
+    case "tractor":
+      return tractorsIn(cards, shape.pairs, trump);
+    case "set":
+      return setsIn(cards, shape.width, trump);
+    case "setTractor":
+      return setTractorsIn(cards, shape.width, shape.length, trump);
+  }
+}
+
 // MARK: Decomposition
 
 function compareComponents(a: Component, b: Component, trump: Trump): number {
@@ -214,9 +438,12 @@ function compareComponents(a: Component, b: Component, trump: Trump): number {
 /**
  * Splits cards into components: tractors first (longest runs greedily), then pairs, then singles.
  * Sorted largest first (by card count), then by strength descending. This is the canonical
- * "format" of a lead.
+ * "format" of a lead. With three or more decks, where a face can appear three or four times, the
+ * widest sets are taken first: tractors of the widest sets, then those sets, then narrower ones
+ * (777 888 99 is a tractor of triples and a pair).
  */
 export function decompose(cards: readonly Card[], trump: Trump): Component[] {
+  if (maxCopies(cards) > 2) return decomposeSets(cards, trump);
   const remaining = byFace(cards);
   const components: Component[] = [];
 
@@ -276,7 +503,81 @@ export function decompose(cards: readonly Card[], trump: Trump): Component[] {
   return components.sort((a, b) => compareComponents(a, b, trump));
 }
 
-/** The shape if `cards` form exactly one component (single, pair or tractor), else null. */
+/** `decompose` for cards holding three or more copies of a face. Swift `Combos.decomposeSets`. */
+function decomposeSets(cards: readonly Card[], trump: Trump): Component[] {
+  const remaining = byFace(cards);
+  const components: Component[] = [];
+
+  const take = (face: Face, n: number): Card[] => {
+    const bucket = remaining.get(face) as Card[];
+    const taken = bucket.slice(0, n);
+    const left = bucket.slice(n);
+    if (left.length === 0) remaining.delete(face);
+    else remaining.set(face, left);
+    return taken;
+  };
+
+  for (const group of groupsIn(cards, trump)) {
+    let widest = 0;
+    for (const [face, bucket] of remaining) {
+      if (groupOf(trump, face) === group) widest = Math.max(widest, bucket.length);
+    }
+    for (let width = widest; width >= 2; width--) {
+      // Tractors of this width: repeatedly take the longest run available (ties: the highest).
+      for (;;) {
+        const flat: Card[] = [];
+        for (const bucket of remaining.values()) flat.push(...bucket);
+        const levels = setLevels(flat, width, group, trump);
+        const keys = new Set(levels.keys());
+        let bestStart: number | null = null;
+        let bestLength = 1;
+        for (const key of ascending(keys).reverse()) {
+          if (keys.has(key - 1)) continue;
+          let n = 0;
+          while (keys.has(key + n)) n++;
+          if (n > bestLength) {
+            bestLength = n;
+            bestStart = key;
+          }
+        }
+        if (bestStart === null) break;
+        const tractorCards: Card[] = [];
+        for (let level = bestStart; level < bestStart + bestLength; level++) {
+          tractorCards.push(...take((levels.get(level) as Face[])[0], width));
+        }
+        components.push({
+          shape: makeShape(width, bestLength),
+          cards: tractorCards,
+          group,
+          topStrength: bestStart + bestLength - 1,
+        });
+      }
+      // Sets of this width.
+      for (const [face, bucket] of Array.from(remaining.entries())) {
+        if (bucket.length >= width && groupOf(trump, face) === group) {
+          components.push({ shape: makeShape(width, 1), cards: take(face, width), group, topStrength: strength(trump, face) });
+        }
+      }
+    }
+  }
+  for (const bucket of remaining.values()) {
+    for (const card of bucket) {
+      components.push({ shape: SINGLE, cards: [card], group: groupOf(trump, card), topStrength: strength(trump, card) });
+    }
+  }
+  return components.sort((a, b) => {
+    const countA = shapeCardCount(a.shape);
+    const countB = shapeCardCount(b.shape);
+    if (countA !== countB) return countB - countA;
+    if (a.topStrength !== b.topStrength) return b.topStrength - a.topStrength;
+    const widthA = shapeWidth(a.shape);
+    const widthB = shapeWidth(b.shape);
+    if (widthA !== widthB) return widthB - widthA;
+    return sortKey(trump, b.cards[0]) - sortKey(trump, a.cards[0]);
+  });
+}
+
+/** The shape if `cards` form exactly one component (single, pair, tractor, set or tractor of sets), else null. */
 export function shapeOf(cards: readonly Card[], trump: Trump): ComboShape | null {
   if (groupOfCards(cards, trump) === null) return null;
   const components = decompose(cards, trump);
@@ -307,6 +608,20 @@ export function componentsOf(shape: ComboShape, cards: readonly Card[], trump: T
     case "tractor":
       return tractorsIn(cards, shape.pairs, trump).map((tractor) => ({
         shape: tractorShape(shape.pairs),
+        cards: tractor,
+        group: groupOf(trump, tractor[0]),
+        topStrength: Math.max(...tractor.map((card) => strength(trump, card))),
+      }));
+    case "set":
+      return setsIn(cards, shape.width, trump).map((set) => ({
+        shape: setShape(shape.width),
+        cards: set,
+        group: groupOf(trump, set[0]),
+        topStrength: strength(trump, set[0]),
+      }));
+    case "setTractor":
+      return setTractorsIn(cards, shape.width, shape.length, trump).map((tractor) => ({
+        shape: setTractorShape(shape.width, shape.length),
         cards: tractor,
         group: groupOf(trump, tractor[0]),
         topStrength: Math.max(...tractor.map((card) => strength(trump, card))),

@@ -351,7 +351,7 @@ struct OnlineGamesResponse: Codable, Hashable, Sendable {
 
 struct OnlineNewGameBody: Codable, Hashable, Sendable {
     var clubId: String
-    /// Absolute seat order: teams are seats 0 + 2 and 1 + 3.
+    /// Absolute seat order, 4, 6 or 8 seats: teams alternate (seats 0 + 2 and 1 + 3 at a table of four).
     var seats: [OnlineSeatSpec]
     var targetRank: Rank
 }

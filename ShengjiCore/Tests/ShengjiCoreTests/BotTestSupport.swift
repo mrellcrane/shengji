@@ -41,7 +41,7 @@ enum BotHarness {
         while let dealt = round.dealNext() {
             declare(&round, bot: bots[dealt.player], stats: &stats)
         }
-        for seat in [1, 2, 3, 0] { declare(&round, bot: bots[seat], stats: &stats) }
+        for seat in Array(1..<round.players) + [0] { declare(&round, bot: bots[seat], stats: &stats) }
         round.finishDealing()
     }
 
@@ -49,7 +49,8 @@ enum BotHarness {
         let before = round.declaration
         let choice = stats.time { bot.declaration(in: round) }
         guard let declaration = choice else { return }
-        if let before = before, before.player == Seats.partner(of: bot.seat) {
+        if let before = before, before.player != bot.seat,
+           Seats.team(of: before.player) == Seats.team(of: bot.seat) {
             stats.problems.append("seat \(bot.seat) overrode its partner")
         }
         do {
@@ -68,7 +69,7 @@ enum BotHarness {
         for problem in burialClaimProblems(decision, hand: hand, trump: round.trump) {
             stats.problems.append("bury: \(problem)")
         }
-        if decision.cards.count != Round.kittySize || !hand.containsAll(decision.cards) {
+        if decision.cards.count != round.kittySize || !hand.containsAll(decision.cards) {
             stats.problems.append("bad bury \(decision.cards.shortText)")
         }
         do {
@@ -76,7 +77,7 @@ enum BotHarness {
             stats.burials += 1
         } catch {
             stats.problems.append("bury rejected: \(error)")
-            try? round.bury(Array(hand.prefix(Round.kittySize)))
+            try? round.bury(Array(hand.prefix(round.kittySize)))
         }
     }
 
@@ -131,15 +132,16 @@ enum BotHarness {
     /// A whole round: deal with declarations, bury, play to the end.
     @discardableResult
     static func playRound(rank: Rank, dealer: Int?, seed: UInt64, levels: [BotLevel],
-                          stats: inout BotRunStats) -> Round {
+                          stats: inout BotRunStats, table: TableSize = .four) -> Round {
         var rng = SeededGenerator(seed: seed)
-        var round = Round(trumpRank: rank, dealer: dealer, rng: &rng)
+        var round = Round(trumpRank: rank, dealer: dealer, rng: &rng, table: table)
         return play(&round, levels: levels, stats: &stats)
     }
 
+    /// `levels` are per seat; a shorter list repeats (one level for a whole table of 6 or 8).
     @discardableResult
     static func play(_ round: inout Round, levels: [BotLevel], stats: inout BotRunStats) -> Round {
-        let bots = (0..<4).map { Bot(seat: $0, level: levels[$0]) }
+        let bots = (0..<round.players).map { Bot(seat: $0, level: levels[$0 % max(levels.count, 1)]) }
         stats.rounds += 1
         deal(&round, bots: bots, stats: &stats)
         bury(&round, bots: bots, stats: &stats)

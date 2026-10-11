@@ -4,24 +4,26 @@ import Foundation
 /// Rules for the texts: second person, short and warm. `nudge` and `principle` never name cards
 /// (no suit symbols, ranks, digits or joker codes); `reason` always names the chosen cards.
 enum BotText {
-    /// How `seat` refers to `player`: "you", "your partner", or a compass name.
-    static func name(_ player: Int, from seat: Int) -> String {
-        let p = ((player % 4) + 4) % 4
-        if p == seat { return "you" }
-        if p == Seats.partner(of: seat) { return "your partner" }
-        switch p {
-        case 0: return "South"
-        case 1: return "East"
-        case 2: return "North"
-        default: return "West"
+    /// How `seat` refers to `player` at a table of `players`: "you", "your partner", or a compass
+    /// name. With 6 or 8 players there are several partners, so they are "your partner Northeast".
+    static func name(_ player: Int, from seat: Int, players: Int = 4) -> String {
+        let n = max(players, 4)
+        let p = Seats.normalized(player, players: n)
+        let me = Seats.normalized(seat, players: n)
+        if p == me { return "you" }
+        if n == 4 {
+            if p == Seats.partner(of: me) { return "your partner" }
+            return Seats.compassName(p, players: 4)
         }
+        let compass = Seats.compassName(p, players: n)
+        return Seats.team(of: p) == Seats.team(of: me) ? "your partner \(compass)" : compass
     }
 
     /// "your", "your partner's", "East's".
-    static func possessive(_ player: Int, from seat: Int) -> String {
-        let p = ((player % 4) + 4) % 4
-        if p == seat { return "your" }
-        return name(p, from: seat) + "'s"
+    static func possessive(_ player: Int, from seat: Int, players: Int = 4) -> String {
+        let n = max(players, 4)
+        if Seats.normalized(player, players: n) == Seats.normalized(seat, players: n) { return "your" }
+        return name(player, from: seat, players: n) + "'s"
     }
 
     static func capitalized(_ text: String) -> String {

@@ -62,4 +62,35 @@ struct GameRuleReminder: Identifiable, Sendable {
             cards: [],
             caption: nil),
     ]
+
+    /// The reminders for a table of `players`: with 6 or 8, triples join in and the point lines scale
+    /// with the decks.
+    static func all(players: Int) -> [GameRuleReminder] {
+        let table = TableSize(players: players)
+        guard table.players > 4 else { return all }
+        let threshold = Scoring.takeoverThreshold(decks: table.decks)
+        var reminders = all.map { reminder -> GameRuleReminder in
+            switch reminder.id {
+            case "points":
+                return GameRuleReminder(id: reminder.id, title: reminder.title,
+                                        text: "5s are worth 5. 10s and Kings are worth 10. With \(table.decks) decks there are \(table.totalPoints) points in all.",
+                                        cards: reminder.cards, caption: reminder.caption)
+            case "line":
+                return GameRuleReminder(id: reminder.id, title: "The \(threshold) line and the kitty",
+                                        text: "With \(table.decks) decks the defenders need \(threshold) points to take over the deal. If they win the last trick, the kitty's points count double or more.",
+                                        cards: [], caption: nil)
+            default:
+                return reminder
+            }
+        }
+        let triples = GameRuleReminder(
+            id: "triples",
+            title: "Triples",
+            text: "With \(table.decks) decks three identical cards make a triple. If a triple is led, play a triple of that suit if you can, otherwise a pair. Only a triple beats a triple.",
+            cards: [Card(.queen, .clubs), Card(.queen, .clubs, copy: 1), Card(.queen, .clubs, copy: 2)],
+            caption: nil)
+        let index = (reminders.firstIndex { $0.id == "matching" } ?? reminders.count - 1) + 1
+        reminders.insert(triples, at: min(index, reminders.count))
+        return reminders
+    }
 }

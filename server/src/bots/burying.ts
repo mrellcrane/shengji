@@ -1,13 +1,14 @@
-// Burying the kitty (dealer only): exactly 8 cards from the dealer's hand. Port of
-// ShengjiCore/Sources/ShengjiCore/Bots/BotBurying.swift, choices only.
-//  - Standard: never trumps unless there are fewer than 8 other cards; avoids aces, pairs and point
+// Burying the kitty (dealer only): exactly as many cards as the kitty held (8, or 6 with 6 players)
+// from the dealer's hand. Port of ShengjiCore/Sources/ShengjiCore/Bots/BotBurying.swift, choices only.
+//  - Standard: never trumps unless there are too few other cards; avoids aces, pairs and point
 //    cards; prefers emptying short plain suits entirely (a void lets you trump that suit later);
 //    otherwise the lowest singles.
-//  - Beginner: the 8 lowest cards that aren't trumps.
+//  - Beginner: the lowest cards that aren't trumps.
 
 import { ALL_SUITS, cardPoints, faceOf } from "../engine/cards.ts";
 import type { Card } from "../engine/cards.ts";
-import { KITTY_SIZE } from "../engine/round.ts";
+import { tableKittySize } from "../engine/cards.ts";
+import { viewTable } from "../engine/seatview.ts";
 import type { SeatView } from "../engine/seatview.ts";
 import { TOP_PLAIN_STRENGTH, groupOf, isTrump, strength } from "../engine/trump.ts";
 import type { SuitGroup } from "../engine/trump.ts";
@@ -16,9 +17,12 @@ import { CostModel, cheapest as cheapestByCost } from "./builder.ts";
 import { BotTable, DEFAULT_TUNING } from "./table.ts";
 import type { BotTuning } from "./table.ts";
 
-/** The 8 cards to bury, or null unless the viewer is the dealer, burying, with at least 8 cards. */
+/**
+ * The cards to bury (as many as the kitty holds), or null unless the viewer is the dealer, burying,
+ * with at least that many cards.
+ */
 export function buryDecision(view: SeatView, level: BotLevel, tuning: Readonly<BotTuning> = DEFAULT_TUNING): Card[] | null {
-  if (view.phase !== "burying" || view.dealer !== 0 || view.hand.length < KITTY_SIZE) return null;
+  if (view.phase !== "burying" || view.dealer !== 0 || view.hand.length < tableKittySize(viewTable(view))) return null;
   const table = new BotTable(view, tuning);
   return level === "beginner" ? beginner(table) : standard(table);
 }
@@ -47,7 +51,7 @@ function cheapest(cards: readonly Card[], count: number, table: BotTable): Card[
 }
 
 function standard(table: BotTable): Card[] {
-  const size = KITTY_SIZE;
+  const size = tableKittySize(viewTable(table.view));
   const suits = ALL_SUITS.filter((suit) => table.cards(suit).length > 0);
   const trumpCount = table.trumps.length;
   // A void is only worth much with trumps to ruff with.
@@ -75,5 +79,5 @@ function standard(table: BotTable): Card[] {
 }
 
 function beginner(table: BotTable): Card[] {
-  return cheapestByCost(table.hand, KITTY_SIZE, new CostModel(table, "lowest"));
+  return cheapestByCost(table.hand, tableKittySize(viewTable(table.view)), new CostModel(table, "lowest"));
 }

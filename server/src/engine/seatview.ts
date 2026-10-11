@@ -3,16 +3,20 @@
 // bidding state, which has no Swift producer (Swift only decodes it).
 //
 // Seats are viewer-relative: the viewer is seat 0, 1 their right (next to play), 2 their partner,
-// 3 their left; team 0 is the viewer's team. The JSON form of `SeatView` is exactly the Swift
-// `SeatView` Codable (test/vectors/views.json proves it for all four seats); optionals are written
-// as null where Swift leaves the key out, which Swift's decoder reads the same way.
+// 3 their left; team 0 is the viewer's team. Bigger tables go on round the same way: with 6 or 8
+// players `players` and `handCounts` have 6 or 8 entries, the viewer's team is every even seat and
+// the opponents every odd one. The JSON form of `SeatView` is exactly the Swift `SeatView` Codable
+// (test/vectors/views.json proves it for every seat of 4, 6 and 8-player tables); optionals are
+// written as null where Swift leaves the key out, which Swift's decoder reads the same way.
 //
 // Privacy (DESIGN.md): a view never contains another hand, the undealt cards, or a kitty the viewer
 // may not see (the dealer sees it while burying and after burying it; everyone once the round is
 // finished).
 
+import { tableSize } from "./cards.ts";
 import type { Card, Rank } from "./cards.ts";
-import { availableBids, turn as playTurn } from "./round.ts";
+import { normalizeSeat } from "./rules.ts";
+import { availableBids, roundPlayers, turn as playTurn } from "./round.ts";
 import type { Declaration, Round, RoundResult, TrickRecord } from "./round.ts";
 import type { Play } from "./rules.ts";
 import { explainRound } from "./game.ts";
@@ -46,7 +50,7 @@ export interface SeatBidding {
 
 /** Swift `SeatView`, field for field. */
 export interface SeatView {
-  /** Players in seat order; index 0 is the viewer. */
+  /** Players in seat order (4, 6 or 8); index 0 is the viewer. */
   players: SeatPlayer[];
   /** Levels as [viewer's team, other team]. */
   teamLevels: Rank[];
@@ -76,14 +80,19 @@ export interface SeatView {
   gameWinnerTeam: number | null;
 }
 
-/** `seat` as seen from `viewer` (Swift `seat(_:)` in `seatView`). */
-export function relativeSeat(seat: number, viewer: number): number {
-  return (((seat - viewer) % 4) + 4) % 4;
+/** `seat` as seen from `viewer` at a table of `players` (Swift `seat(_:)` in `seatView`). */
+export function relativeSeat(seat: number, viewer: number, players = 4): number {
+  return normalizeSeat(seat - viewer, players);
 }
 
 /** The absolute seat of `relative` as seen from `viewer` (inverse of `relativeSeat`). */
-export function absoluteSeat(relative: number, viewer: number): number {
-  return (((relative + viewer) % 4) + 4) % 4;
+export function absoluteSeat(relative: number, viewer: number, players = 4): number {
+  return normalizeSeat(relative + viewer, players);
+}
+
+/** Players and decks at the table a view shows (from its number of seats: 4, 6 or 8; Swift `SeatView.table`). */
+export function viewTable(view: SeatView): { players: number; decks: number } {
+  return tableSize(view.handCounts.length === 0 ? view.players.length : view.handCounts.length);
 }
 
 /** Team `team` as seen from `viewer` (0 = the viewer's team). */
@@ -91,9 +100,6 @@ export function relativeTeam(team: number, viewer: number): number {
   return (team + viewer) % 2;
 }
 
-function normalizedViewer(viewer: number): number {
-  return ((viewer % 4) + 4) % 4;
-}
 
 function rotateTeams<T>(values: readonly T[], viewer: number): T[] {
   if (values.length !== 2) return values.slice();
@@ -103,21 +109,25 @@ function rotateTeams<T>(values: readonly T[], viewer: number): T[] {
   return out;
 }
 
-function rotateDeclaration(d: Declaration, viewer: number): Declaration {
-  return { player: relativeSeat(d.player, viewer), cards: d.cards.slice(), suit: d.suit, strength: d.strength };
+function rotateDeclaration(d: Declaration, viewer: number, players: number): Declaration {
+  return { player: relativeSeat(d.player, viewer, players), cards: d.cards.slice(), suit: d.suit, strength: d.strength };
 }
 
-function rotatePlay(p: Play, viewer: number): Play {
-  return { player: relativeSeat(p.player, viewer), cards: p.cards.slice() };
+function rotatePlay(p: Play, viewer: number, players: number): Play {
+  return { player: relativeSeat(p.player, viewer, players), cards: p.cards.slice() };
 }
 
-function rotateTrick(t: TrickRecord, viewer: number): TrickRecord {
-  return { plays: t.plays.map((p) => rotatePlay(p, viewer)), winner: relativeSeat(t.winner, viewer), points: t.points };
-}
-
-function rotateResult(r: RoundResult, viewer: number): RoundResult {
+function rotateTrick(t: TrickRecord, viewer: number, players: number): TrickRecord {
   return {
-    dealer: relativeSeat(r.dealer, viewer),
+    plays: t.plays.map((p) => rotatePlay(p, viewer, players)),
+    winner: relativeSeat(t.winner, viewer, players),
+    points: t.points,
+  };
+}
+
+function rotateResult(r: RoundResult, viewer: number, players: number): RoundResult {
+  return {
+    dealer: relativeSeat(r.dealer, viewer, players),
     declarerTeam: relativeTeam(r.declarerTeam, viewer),
     trump: { rank: r.trump.rank, suit: r.trump.suit },
     trickPoints: r.trickPoints,
@@ -126,7 +136,7 @@ function rotateResult(r: RoundResult, viewer: number): RoundResult {
     defenderPoints: r.defenderPoints,
     outcome: { declarersHold: r.outcome.declarersHold, levels: r.outcome.levels, summary: r.outcome.summary },
     kitty: r.kitty.slice(),
-    lastTrickWinner: relativeSeat(r.lastTrickWinner, viewer),
+    lastTrickWinner: relativeSeat(r.lastTrickWinner, viewer, players),
   };
 }
 
@@ -135,16 +145,18 @@ function copySummary(s: RoundSummary): RoundSummary {
 }
 
 /**
- * The same summary from `viewer`'s point of view: seats and teams rotated, explanation rewritten
- * so the viewer's team is "Your team". Swift `RoundSummary.rotated(by:target:)`.
+ * The same summary from `viewer`'s point of view at a table of `players`: seats and teams rotated,
+ * explanation rewritten so the viewer's team is "Your team". Swift
+ * `RoundSummary.rotated(by:target:players:)`.
  */
-export function rotateSummary(summary: RoundSummary, viewer: number, target: Rank): RoundSummary {
-  const v = normalizedViewer(viewer);
+export function rotateSummary(summary: RoundSummary, viewer: number, target: Rank, players = 4): RoundSummary {
+  const n = tableSize(players).players;
+  const v = normalizeSeat(viewer, n);
   if (v === 0) return copySummary(summary);
-  const result = rotateResult(summary.result, v);
+  const result = rotateResult(summary.result, v, n);
   const after = rotateTeams(summary.levelsAfter, v);
   const benefiting = result.outcome.declarersHold ? result.declarerTeam : 1 - result.declarerTeam;
-  const next = relativeSeat(summary.nextDealer, v);
+  const next = relativeSeat(summary.nextDealer, v, n);
   const gameWinner = summary.gameWinner === null ? null : relativeTeam(summary.gameWinner, v);
   const explanation = explainRound({
     result,
@@ -156,6 +168,7 @@ export function rotateSummary(summary: RoundSummary, viewer: number, target: Ran
     target,
     nextDealer: next,
     nextLevel: after[next % 2],
+    players: n,
   });
   return {
     result,
@@ -219,10 +232,12 @@ export function roundNumber(game: GameState, round: Round): number {
  * open. Shares no objects with its inputs.
  */
 export function toSeatView(game: GameState, round: Round, viewer: number, players: readonly SeatPlayer[]): SeatView {
-  const v = normalizedViewer(viewer);
-  const seat = (s: number): number => relativeSeat(s, v);
-  const rotatedPlayers = [0, 1, 2, 3].map((i) => {
-    const p = players[absoluteSeat(i, v)];
+  const n = roundPlayers(round);
+  const v = normalizeSeat(viewer, n);
+  const seat = (s: number): number => relativeSeat(s, v, n);
+  const seats = Array.from({ length: n }, (_, i) => i);
+  const rotatedPlayers = seats.map((i) => {
+    const p = players[absoluteSeat(i, v, n) % Math.max(players.length, 1)];
     return { name: p.name, isBot: p.isBot, userID: p.userID };
   });
   const hand = (s: number): Card[] => (s >= 0 && s < round.hands.length ? round.hands[s] : []);
@@ -234,9 +249,9 @@ export function toSeatView(game: GameState, round: Round, viewer: number, player
       turn: open.turn === null ? null : seat(open.turn),
       history: open.bids.map((b) => ({
         player: seat(b.seat),
-        declaration: b.declaration === null ? null : rotateDeclaration(b.declaration, v),
+        declaration: b.declaration === null ? null : rotateDeclaration(b.declaration, v, n),
       })),
-      available: availableBids(round, v).map((d) => rotateDeclaration(d, v)),
+      available: availableBids(round, v).map((d) => rotateDeclaration(d, v, n)),
     };
   }
   const last = game.history.length > 0 ? game.history[game.history.length - 1] : null;
@@ -251,12 +266,12 @@ export function toSeatView(game: GameState, round: Round, viewer: number, player
     trumpFromKitty: round.trumpFromKitty,
     dealer: round.dealer === null ? null : seat(round.dealer),
     hand: hand(v).slice(),
-    handCounts: [0, 1, 2, 3].map((i) => hand(absoluteSeat(i, v)).length),
-    declaration: round.declaration === null ? null : rotateDeclaration(round.declaration, v),
-    declarationHistory: round.declarationHistory.map((d) => rotateDeclaration(d, v)),
+    handCounts: seats.map((i) => hand(absoluteSeat(i, v, n)).length),
+    declaration: round.declaration === null ? null : rotateDeclaration(round.declaration, v, n),
+    declarationHistory: round.declarationHistory.map((d) => rotateDeclaration(d, v, n)),
     bidding,
     kitty: kittyVisibleTo(round, v) ? round.kitty.slice() : null,
-    currentTrick: round.currentTrick.map((p) => rotatePlay(p, v)),
+    currentTrick: round.currentTrick.map((p) => rotatePlay(p, v, n)),
     leader: seat(round.leader),
     turn:
       playing !== null
@@ -264,10 +279,10 @@ export function toSeatView(game: GameState, round: Round, viewer: number, player
         : round.phase === "burying" && round.dealer !== null
           ? seat(round.dealer)
           : null,
-    tricks: round.tricks.map((t) => rotateTrick(t, v)),
+    tricks: round.tricks.map((t) => rotateTrick(t, v, n)),
     defenderTrickPoints: round.defenderTrickPoints,
-    result: round.result === null ? null : rotateResult(round.result, v),
-    lastRoundSummary: last === null ? null : rotateSummary(last, v, game.settings.targetRank),
+    result: round.result === null ? null : rotateResult(round.result, v, n),
+    lastRoundSummary: last === null ? null : rotateSummary(last, v, game.settings.targetRank, n),
     gameWinnerTeam: game.winner === null ? null : relativeTeam(game.winner, v),
   };
 }

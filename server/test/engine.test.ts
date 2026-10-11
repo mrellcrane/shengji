@@ -88,8 +88,37 @@ test("card ids follow the wire format (face index + copy * 54)", () => {
   assert.equal(E.cardLongName(E.bigJoker()), "big joker");
   assert.equal(E.copyOf(53), 0);
   assert.equal(E.copyOf(54), 1);
-  assert.deepEqual([E.isCard(0), E.isCard(107), E.isCard(108), E.isCard(-1), E.isCard(1.5), E.isCard("3")],
-    [true, true, false, false, false, false]);
+  // Up to four decks (8 players): ids 0...215, copies 0...3.
+  assert.equal(E.makeCard(14, E.DIAMONDS, 3), 213);
+  assert.equal(E.bigJoker(3), 215);
+  assert.equal(E.copyOf(215), 3);
+  assert.equal(E.cardDescription(E.smallJoker(2)), "SJ");
+  assert.deepEqual([E.isCard(0), E.isCard(107), E.isCard(215), E.isCard(216), E.isCard(-1), E.isCard(1.5), E.isCard("3")],
+    [true, true, true, false, false, false, false]);
+  // One table's range: 108 cards with 2 decks, 162 with 3, 216 with 4.
+  assert.deepEqual([E.isCardOf(107, 2), E.isCardOf(108, 2), E.isCardOf(161, 3), E.isCardOf(162, 3), E.isCardOf(215, 4)],
+    [true, false, true, false, true]);
+});
+
+test("table sizes: 4, 6 or 8 players with half a deck each", () => {
+  const sizes = [4, 6, 8].map((players) => {
+    const table = E.tableSize(players);
+    return [table.players, table.decks, E.tableCardCount(table), E.tableKittySize(table), E.tableHandSize(table),
+      E.tableTotalPoints(table)];
+  });
+  assert.deepEqual(sizes, [[4, 2, 108, 8, 25, 200], [6, 3, 162, 6, 26, 300], [8, 4, 216, 8, 26, 400]]);
+  // Other counts round to the nearest table (ties to the smaller), as Swift `TableSize(players:)`.
+  assert.deepEqual([1, 5, 7, 9, 12].map((n) => E.tableSize(n).players), [4, 4, 6, 8, 8]);
+  assert.deepEqual([4, 6, 8, 5, 3, "6", null].map((n) => E.tableSizeExactly(n)?.players ?? null), [4, 6, 8, null, null, null, null]);
+  assert.deepEqual(E.deckCards(3), Array.from({ length: 162 }, (_, id) => id));
+  // Seats: teams alternate; teammates and opponents in play order after the seat.
+  assert.deepEqual(E.teammatesOf(1, 8), [3, 5, 7]);
+  assert.deepEqual(E.opponentsOf(5, 6), [0, 2, 4]);
+  assert.deepEqual(E.allSeats(6).map((seat) => E.seatName(seat, 0, 6)),
+    ["You", "Southeast", "Northeast", "North", "Northwest", "Southwest"]);
+  // Seen from seat 3 of 8: seat 4 is on its right (Southeast), seat 7 opposite (North).
+  assert.deepEqual(E.allSeats(8).map((seat) => E.seatName(seat, 3, 8)),
+    ["Northwest", "West", "Southwest", "You", "Southeast", "East", "Northeast", "North"]);
 });
 
 test("removeCards removes each card once, keeps order, and fails as a whole", () => {
@@ -127,11 +156,50 @@ test("parseDeclaration accepts well-formed declarations only", () => {
   for (const bad of [
     null, 3, "x", [], {},
     { ...good, player: "1" }, { ...good, player: 1.5 },
-    { ...good, cards: [13, 67, 13] }, { ...good, cards: [13, 200] }, { ...good, cards: "13" },
+    { ...good, cards: [13, 67, 121, 175, 13] }, { ...good, cards: [13, 216] }, { ...good, cards: "13" },
     { ...good, suit: 4 }, { ...good, suit: "1" }, { ...good, strength: "2" },
   ]) {
     assert.equal(E.parseDeclaration(bad), null, JSON.stringify(bad));
   }
+});
+
+test("declarations of three and four cards (three or four decks)", () => {
+  // The strength ladder: more cards beat fewer, then small jokers beat rank cards and big jokers beat both.
+  assert.deepEqual([1, 2, 3, 4].map((count) => [E.declarationStrength(count, E.RANK_CARDS),
+    E.declarationStrength(count, E.SMALL_JOKERS), E.declarationStrength(count, E.BIG_JOKERS)]),
+  [[1, 1, 1], [2, 3, 4], [5, 6, 7], [8, 9, 10]]);
+  assert.deepEqual([1, 2, 4, 5, 7, 8, 10].map((s) => [E.declarationCardCount(s), E.declarationKind(s)]),
+    [[1, 0], [2, 0], [2, 2], [3, 0], [3, 2], [4, 0], [4, 2]]);
+  assert.equal(E.declarationDescription({ player: 2, cards: [0, 54, 108], suit: 0, strength: 5 }, 0, 6),
+    "Northeast declares ♠ (three 2♠)");
+  assert.equal(E.declarationDescription({ player: 0, cards: [53, 107, 161, 215], suit: null, strength: 10 }, 0, 8),
+    "You declare no trump (four big jokers)");
+
+  // Seat 1 of a 6-player table holds three 2♥ (13, 67, 121); seat 4 holds three small jokers.
+  const table = E.tableSize(6);
+  const deck = E.deckCards(3);
+  const order = [...deck.filter((card) => ![13, 67, 121, 52, 106, 160].includes(card))];
+  // Deal from seat 0: seat s gets positions s, s + 6, ... of the first 156 cards.
+  const dealt: number[] = new Array(156);
+  const wanted: Record<number, number[]> = { 1: [13, 67, 121], 4: [52, 106, 160] };
+  for (const [seat, cards] of Object.entries(wanted)) cards.forEach((card, i) => (dealt[Number(seat) + 6 * i] = card));
+  for (let i = 0; i < 156; i++) if (dealt[i] === undefined) dealt[i] = order.shift() as number;
+  const round = E.newRound(2, 0, [...dealt, ...order], table);
+  E.dealAll(round);
+  const hearts = (seat: number): number[][] =>
+    E.availableDeclarations(round, seat).filter((d) => d.suit === E.HEARTS).map((d) => [d.cards.length, d.strength]);
+  assert.deepEqual(hearts(1), [[1, 1], [2, 2], [3, 5]]);
+  assert.equal(E.declare(round, { player: 1, cards: [13], suit: 1, strength: 1 }), null);
+  // The holder may only add more of the same card: two or three 2♥.
+  assert.deepEqual(E.availableDeclarations(round, 1).map((d) => [d.suit, d.strength]), [[1, 2], [1, 5]]);
+  // Three small jokers (6) beat three rank cards (5); a pair of 2♥ can't beat them.
+  assert.equal(E.declare(round, { player: 4, cards: [52, 106, 160], suit: null, strength: 6 }), null);
+  assert.deepEqual(E.declare(round, { player: 1, cards: [13, 67], suit: 1, strength: 2 }), { case: "invalidDeclaration" });
+  assert.equal(E.roundErrorExplanation({ case: "invalidDeclaration" }),
+    "You can't declare that right now. A declaration must beat the current one, and if the current one is yours " +
+      "you can only strengthen it with more of the same card.");
+  // The same card three times is refused.
+  assert.equal(E.cardsMatchDeclaration([13, 13, 13], 1, 5, 2), false);
 });
 
 test("parseDeclaration reads a missing suit as no trump suit (how Swift's Codable sends nil)", () => {

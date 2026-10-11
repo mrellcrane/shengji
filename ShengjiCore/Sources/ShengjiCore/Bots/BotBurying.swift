@@ -1,14 +1,14 @@
 import Foundation
 
-/// Burying the kitty (dealer only): exactly 8 cards from the dealer's hand.
-///  - Standard: never trumps unless there are fewer than 8 other cards; avoids aces, pairs and point
+/// Burying the kitty (dealer only): exactly as many cards as the kitty held (8, or 6 with 6 players).
+///  - Standard: never trumps unless there are too few other cards; avoids aces, pairs and point
 ///    cards; prefers emptying short plain suits entirely (a void lets you trump that suit later);
 ///    otherwise the lowest singles.
 ///  - Beginner: the 8 lowest cards that aren't trumps.
 enum BotBurying {
     /// Nil unless the viewer is the dealer, burying, with at least 8 cards (the kitty included).
     static func decide(for bot: Bot, view: SeatView) -> BotDecision? {
-        guard view.phase == .burying, view.dealer == 0, view.hand.count >= Round.kittySize else { return nil }
+        guard view.phase == .burying, view.dealer == 0, view.hand.count >= view.table.kittySize else { return nil }
         let table = BotTable(view: view, compassSeat: bot.normalizedSeat, usesPlayerNames: bot.usesPlayerNames, tuning: bot.tuning)
         switch bot.level {
         case .beginner: return beginner(table)
@@ -45,7 +45,7 @@ enum BotBurying {
     }
 
     private static func standard(_ table: BotTable) -> BotDecision {
-        let size = Round.kittySize
+        let size = table.view.table.kittySize
         var suits: [Suit] = []
         for suit in Suit.allCases where !table.cards(in: .plain(suit)).isEmpty { suits.append(suit) }
         let trumpCount = table.trumps.count
@@ -101,7 +101,7 @@ enum BotBurying {
             concept = "Bury low"
         }
         if cards.contains(where: { table.trump.isTrump($0) }) {
-            reason += " You don't have 8 other cards, so a few low trumps go too."
+            reason += " You don't have \(cards.count) other cards, so a few low trumps go too."
         }
         if cards.points > 0 {
             reason += " This buries \(BotText.points(cards.points)), so try to win the last trick to protect them."
@@ -113,7 +113,7 @@ enum BotBurying {
     }
 
     private static func beginner(_ table: BotTable) -> BotDecision {
-        let cards = BotPick.cheapest(table.hand, Round.kittySize, CostModel(table: table, mode: .lowest))
+        let cards = BotPick.cheapest(table.hand, table.view.table.kittySize, CostModel(table: table, mode: .lowest))
         let names = BotText.cards(cards, table.trump)
         var reason = "Bury \(names), your lowest cards that aren't trumps."
         if cards.contains(where: { table.trump.isTrump($0) }) {

@@ -23,7 +23,10 @@ final class CardIDTests: XCTestCase {
 
     func testInitFromIDRejectsOutOfRange() {
         XCTAssertNil(Card(id: -1))
-        XCTAssertNil(Card(id: 108))
+        // Up to four decks (eight players): ids 0...215.
+        XCTAssertEqual(Card(id: 108), c(.two, .spades, 2))
+        XCTAssertEqual(Card(id: 215), .bigJoker(copy: 3))
+        XCTAssertNil(Card(id: 216))
         XCTAssertNil(Card(id: Int.max))
         XCTAssertNil(Card(id: Int.min))
     }

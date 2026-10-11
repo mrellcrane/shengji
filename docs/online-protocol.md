@@ -7,10 +7,19 @@ All bodies are JSON (`content-type: application/json`). Errors are
 
 ## Conventions
 
-- **Cards** are integers 0...107 (`Card.id` = face index + copy × 54; face index = suit × 13 + (rank − 2), small
-  joker 52, big joker 53; suits: spades 0, hearts 1, clubs 2, diamonds 3; ranks 2...14 with A = 14).
+- **Tables** have 4, 6 or 8 seats, with half a deck per player: 2 decks (108 cards) for 4 players, 3 decks
+  (162) for 6 and 4 decks (216) for 8. Everyone holds 25 cards with 4 players and 26 with 6 or 8; the kitty is
+  8 cards with 4 or 8 players and 6 with 6. Teams alternate round the table: the even seats against the odd
+  ones (0+2 and 1+3 with 4 players; 0+2+4 and 1+3+5 with 6). Defenders take over the deal from 40 points per
+  deck (80, 120 or 160) and each further 20 points per deck is a level. With 3 or 4 decks a card can be
+  held three or four times: triples, four of a kind and tractors of them (see DESIGN.md for the rules).
+- **Cards** are integers `Card.id` = face index + copy × 54 (face index = suit × 13 + (rank − 2), small
+  joker 52, big joker 53; suits: spades 0, hearts 1, clubs 2, diamonds 3; ranks 2...14 with A = 14; copy 0
+  for the first deck, 1 for the second, ...): 0...107 with 2 decks, 0...161 with 3, 0...215 with 4.
 - **Seats in views are viewer-relative**: the viewer is always seat 0, seat 1 their right (next to play),
-  2 their partner, 3 their left; team 0 is the viewer's team. Actions never name seats.
+  and so on round the table; with 4 players 2 is their partner and 3 their left. Even seats are the viewer's
+  team (team 0), odd seats the other team. `players` and `handCounts` have one entry per seat (4, 6 or 8).
+  Actions never name seats.
 - **SeatView** JSON is exactly the Codable form of Swift `SeatView` (`ShengjiCore/Sources/ShengjiCore/Engine/SeatView.swift`):
   optionals may be omitted or `null`; `Trump` is `{"rank": 2, "suit": 1}`; `Declaration` is
   `{"player", "cards", "suit"?, "strength"}`; `Play` `{"player", "cards"}`; `TrickRecord` `{"plays", "winner", "points"}`;
@@ -18,7 +27,8 @@ All bodies are JSON (`content-type: application/json`). Errors are
   The server must never put a hidden card in a view (other hands, the undealt deck, a kitty the viewer may not see).
   The server writes absent optionals as `null` (Swift decodes both). `hand` is in deal order (not sorted).
   `lastRoundSummary.explanation` is written from the viewer's side ("Your team", "East and West", "Partner deals
-  next"), exactly as Swift's `RoundSummary.rotated(by:target:)`. While bidding, `phase` is `"bidding"`, `turn` is
+  next"; with 6 or 8 players "The other team" and compass names such as "Northeast deals next"), exactly as
+  Swift's `RoundSummary.rotated(by:target:players:)`. While bidding, `phase` is `"bidding"`, `turn` is
   `null` and `bidding.turn` says who bids; `bidding.available` is non-empty only on the viewer's own turn.
 - **Versions**: each game has a `version` that grows with every change (each move, including every bot move,
   each new deal, and a player's new display name). Two messages with the same `version` hold the same game, so
@@ -79,7 +89,7 @@ Invite codes use the letters and digits `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no I,
 `GameSummary` =
 ```
 {"id": "g_...", "clubId": "c_...", "createdAt": iso, "updatedAt": iso, "status": "active" | "finished",
- "players": [{"name": "Mei", "isBot": false, "userID": "u_..."} x4],   // viewer-relative, index 0 = you
+ "players": [{"name": "Mei", "isBot": false, "userID": "u_..."} x4, x6 or x8],   // viewer-relative, index 0 = you
  "teamLevels": [rank, rank], "targetRank": 14, "roundNumber": 3,
  "phase": "bidding" | "burying" | "playing" | "finished",
  "turn": seat | null,            // viewer-relative seat that must act (bid, bury or play)
@@ -90,16 +100,22 @@ Invite codes use the letters and digits `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no I,
 ```
 
 `lastEvent` is one line about the latest move, naming players by display name and the viewer as "You":
-"Mei started the game", "Lin declared ♥ (pair of 2♥)", "You passed", "Sam buried the kitty", "Mei led K♠ K♠",
-"Tiger Bot played 3♣", "You tried a throw that failed and led 9♠", "Round 3: your team took over the deal",
-"Round 4: Mei and Lin kept the deal and went up 2 levels to 7", "Round 9: your team won the game".
+"Mei started the game", "Lin declared ♥ (pair of 2♥)", "Sam declared no trump (three small jokers)", "You passed",
+"Sam buried the kitty", "Mei led K♠ K♠", "Tiger Bot played 3♣", "You tried a throw that failed and led 9♠",
+"Round 3: your team took over the deal", "Round 4: Mei and Lin kept the deal and went up 2 levels to 7",
+"Round 5: Mei, Lin and Sam kept the deal" (a team of 3 or 4 is listed in seat order), "Round 9: your team won the game".
 When a round ends during a batch of bot moves, its line is kept over the bids that follow it.
-Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot" (`userID` null).
+Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon Bot", then with 6 or 8 seats
+"Koi Bot", "Fox Bot", "Owl Bot", "Yak Bot" (`userID` null).
 
-- `POST /v1/games` `{"clubId": "...", "seats": [Seat x4], "targetRank": 5 | 10 | 14}` where
-  `Seat` = `{"userId": "u_..."}` or `{"bot": "standard" | "beginner"}`, in absolute seat order (teams 0+2 and 1+3).
+- `POST /v1/games` `{"clubId": "...", "seats": [Seat x4, x6 or x8], "targetRank": 5 | 10 | 14}` where
+  `Seat` = `{"userId": "u_..."}` or `{"bot": "standard" | "beginner"}`, in absolute seat order (teams alternate:
+  the even seats against the odd ones). Any other number of seats is `400 bad_request`.
   The creator must hold a seat; every human must be a club member. → `{"game": GameSummary}` (from the creator's view).
-  The first round deals immediately; bidding starts at the creator's seat.
+  The first round deals immediately; bidding starts at the creator's seat. Bidding goes round the table: each
+  player in turn declares (same strength rules as offline: more cards beat fewer, so three of a card beats a
+  pair of big jokers) or passes; it ends when every other player has passed since the last declaration (3, 5 or
+  7 passes), or when everyone passes with no declaration (then the kitty flip sets trump).
   `targetRank` defaults to 14. Each person sits once. At most 30 active games per player: if anyone at the
   table already has 30, the answer is `409 too_many_games` (its `message` names who).
 - `GET /v1/games` → `{"games": [GameSummary]}` (the caller's active games first, then up to 20 finished)
@@ -112,17 +128,19 @@ Bots are named by absolute seat: "Panda Bot", "Tiger Bot", "Crane Bot", "Dragon 
   `400 {"error": "illegal", "message": "<the engine's explanation, e.g. You must follow suit...>"}`,
   `403 {"error": "not_your_turn"}`.
   `Action` = `{"type": "bid", "declaration": Declaration}` | `{"type": "pass"}` | `{"type": "bury", "cards": [ids]}` |
-  `{"type": "play", "cards": [ids]}`.
+  `{"type": "play", "cards": [ids]}`. A bury holds as many cards as the kitty (8, or 6 with 6 players); a
+  declaration shows 1 to 4 cards.
   `Outcome` = `{"type": "throwFailed", "forced": [ids], "blocker": seat}` (viewer-relative) when a throw failed.
   After every human action the server runs bot turns until a human must act. Bots play exactly like the app's bots of
   their level, each deciding from its own seat's view (bids from `view.bidding.available`). When a round ends the
   server records it and immediately deals the next round (the finished round's summary is in `view.lastRoundSummary`).
   Details: send a bid's declaration back as it appears in `view.bidding.available` (its `player` is 0, you; it may be
-  left out; `suit` is left out or `null` for a joker pair). Cards are matched by id. The checks run in this order:
-  `403 not_seated`, `409 stale`, `403 not_your_turn` (also when the game is over: "The game is over."), then the
-  engine (`400 illegal`, with "You can't do that at this point in the round." for an action of the wrong phase).
-  A malformed body is `400 bad_request`. Refused actions change nothing. `outcome` is only in the mover's own reply;
-  others see the forced cards in the trick. When a team wins, the game's `status` and `phase` become `"finished"`,
+  left out; `suit` is left out or `null` for jokers). Cards are matched by id. The checks run in this order:
+  `403 not_seated`, `400 bad_request` for a card id outside this table's range (0...107, 0...161 or 0...215),
+  `409 stale`, `403 not_your_turn` (also when the game is over: "The game is over."), then the engine
+  (`400 illegal`, with "You can't do that at this point in the round." for an action of the wrong phase).
+  A malformed body (including a card id above 215) is `400 bad_request`. Refused actions change nothing.
+  `outcome` is only in the mover's own reply; others see the forced cards in the trick. When a team wins, the game's `status` and `phase` become `"finished"`,
   the last round stays on the table (its `result` and kitty visible to all), `view.gameWinnerTeam` and
   `game.winnerTeam` are set, and nobody can act any more.
 - `GET /v1/games/<id>/live?token=<session token>` → WebSocket. The server sends
@@ -154,7 +172,7 @@ Exactly: `{"aps": {"alert": {"title", "body"}, "badge": n, "sound": "default", "
   "Round 3: your team took over the deal. It's your turn in Friday Tractor.");
 - round over (to the other people): title "<club>", body "Round 3: your team took over the deal.";
 - game over: title "Game over", body "Your team won the game in Friday Tractor!" or
-  "Mei and Lin won the game in Friday Tractor.";
+  "Mei and Lin won the game in Friday Tractor." ("Mei, Lin and Sam won ..." for a team of three);
 - nudge: title "Your turn", body "Lin is waiting for you in Friday Tractor."
 Devices that APNs reports as gone (410, `BadDeviceToken`, `Unregistered`, `DeviceTokenNotForTopic`) are forgotten.
 

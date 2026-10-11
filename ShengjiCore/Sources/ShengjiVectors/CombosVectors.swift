@@ -1,7 +1,9 @@
 import ShengjiCore
 
 /// combos.json: card, rank and suit tables, the trump order for every trump context, and random
-/// card sets (biased to tricky cases) with their decomposition and shapes.
+/// card sets (biased to tricky cases) with their decomposition and shapes. `setCases` are card sets
+/// from three or four decks (6 and 8 players), where a face can appear three or four times: triples,
+/// four of a kind and tractors of them, with every shape's units.
 enum CombosVectors {
     static func make() -> [(String, JSON)] {
         [
@@ -11,9 +13,10 @@ enum CombosVectors {
             ("ranks", .array(Rank.allCases.map(rankEntry))),
             ("faces", .array(Cards.faces.map(faceEntry))),
             ("groups", .array(([.trump] + Suit.allCases.map { SuitGroup.plain($0) }).map(groupEntry))),
-            ("shapes", .array(([.single, .pair] + (2...6).map { ComboShape.tractor($0) }).map(shapeEntry))),
+            ("shapes", .array(([.single, .pair] + (2...6).map { ComboShape.tractor($0) } + setShapes).map(shapeEntry))),
             ("trumps", .array(allTrumps().map(trumpEntry))),
             ("cases", .array(cases(count: 1200))),
+            ("setCases", .array(setCases(count: 400))),
         ]
     }
 
@@ -56,6 +59,12 @@ enum CombosVectors {
     static func groupEntry(_ group: SuitGroup) -> JSON {
         .object([("group", json(group)), ("name", .string(group.name)), ("symbol", .string(group.symbol))])
     }
+
+    /// Shapes of three or more decks (after the two-deck ones in `shapes`).
+    static let setShapes: [ComboShape] = [
+        .set(3), .set(4), .set(5), .setTractor(width: 3, length: 2), .setTractor(width: 3, length: 3),
+        .setTractor(width: 4, length: 2), .setTractor(width: 4, length: 3),
+    ]
 
     static func shapeEntry(_ shape: ComboShape) -> JSON {
         .object([
@@ -171,6 +180,119 @@ enum CombosVectors {
                     ("cards", .array(components.map { json($0.cards) })),
                     ("tops", .array(components.map { .int($0.topStrength) })),
                 ])
+            })),
+            ("isThrow", .bool(Rules.isThrow(cards, trump: trump))),
+            ("kittyMultiplier", .int(Scoring.kittyMultiplier(lastLead: cards, trump: trump))),
+        ])
+    }
+
+    // MARK: Card sets from three or four decks
+
+    /// Shapes whose units every set case lists (`Combos.units(of:in:trump:)`).
+    static let unitShapes: [ComboShape] = [
+        .single, .pair, .tractor(2), .set(3), .set(4), .setTractor(width: 3, length: 2), .setTractor(width: 4, length: 2),
+    ]
+
+    static func setCases(count: Int) -> [JSON] {
+        var rand = Rand(0x5E7_CA5E)
+        return (0..<count).map { index in
+            let decks = index % 2 == 0 ? 3 : 4
+            let (trump, cards) = setCardSet(kind: (index / 2) % 7, decks: decks, rand: &rand)
+            return setEntry(trump: trump, decks: decks, cards: cards)
+        }
+    }
+
+    /// Card sets of several kinds from `decks` decks, rich in faces held three or four times.
+    static func setCardSet(kind: Int, decks: Int, rand: inout Rand) -> (Trump, [Card]) {
+        var trump = Cards.randomTrump(&rand)
+        var pool = CardPool(decks: decks)
+        var cards: [Card] = []
+        switch kind {
+        case 0:
+            // A random hand (sets come up by chance).
+            cards = rand.sample(Cards.deck(decks), rand.between(1, 34))
+        case 1:
+            // Sets of trumps.
+            cards = pool.takeCopies(Cards.faces(in: .trump, trump: trump), count: rand.between(3, 26), multiPercent: 80,
+                                    rand: &rand)
+        case 2:
+            // The trump-rank level and jokers: equal off-suit rank sets, the trump-suit rank, jokers
+            // (tractors of triples across the skipped rank).
+            trump.suit = Suit.allCases[rand.below(4)]
+            cards = pool.takeCopies(Cards.topTrumpFaces(trump), count: rand.between(4, 22), multiPercent: 85, rand: &rand)
+            cards += pool.takeCopies(Cards.faces(in: .trump, trump: trump), count: rand.between(0, 6), multiPercent: 50,
+                                     rand: &rand)
+        case 3:
+            // A plain suit around the trump rank: tractors of sets that skip the rank.
+            let suits = Suit.allCases.filter { $0 != trump.suit }
+            let suit = suits[rand.below(suits.count)]
+            let faces = Cards.faces(nearRankOf: trump, suit: suit, radius: rand.between(2, 5))
+            cards = pool.takeCopies(faces, count: rand.between(3, 20), multiPercent: 85, rand: &rand)
+            if rand.percent(30) {
+                cards += pool.takeCopies([Face.regular(suit, trump.rank)], count: 3, multiPercent: 60, rand: &rand)
+            }
+        case 4:
+            // No trump: rank sets in several suits and joker sets.
+            trump.suit = nil
+            cards = pool.takeCopies(Cards.topTrumpFaces(trump), count: rand.between(3, 16), multiPercent: 85, rand: &rand)
+            cards += pool.takeCopies(Cards.faces, count: rand.between(0, 6), multiPercent: 40, rand: &rand)
+        case 5:
+            // One random group, sets of every width.
+            let group = Cards.randomGroup(&rand, trump: trump)
+            cards = pool.takeCopies(Cards.faces(in: group, trump: trump), count: rand.between(2, 24), multiPercent: 70,
+                                    rand: &rand)
+        default:
+            // Two groups mixed together.
+            let first = Cards.randomGroup(&rand, trump: trump)
+            let second = Cards.randomGroup(&rand, trump: trump)
+            cards = pool.takeCopies(Cards.faces(in: first, trump: trump), count: rand.between(2, 12), multiPercent: 70,
+                                    rand: &rand)
+            cards += pool.takeCopies(Cards.faces(in: second, trump: trump), count: rand.between(1, 12), multiPercent: 70,
+                                     rand: &rand)
+        }
+        if cards.isEmpty { cards = [Cards.card(rand.below(54 * decks))] }
+        return (trump, rand.shuffled(cards))
+    }
+
+    static func setEntry(trump: Trump, decks: Int, cards: [Card]) -> JSON {
+        let longest = Combos.longestRun(in: cards, trump: trump)
+        let tractorLengths = longest >= 2 ? Array(2...(longest + 1)) : [2]
+        // For each width 3 and 4: the sets, the longest run of them and every tractor of them.
+        let widths: [JSON] = [3, 4].map { width in
+            let run = Combos.longestRun(in: cards, width: width, trump: trump)
+            let lengths = run >= 2 ? Array(2...(run + 1)) : [2]
+            return .object([
+                ("width", .int(width)),
+                ("sets", .array(Combos.sets(in: cards, width: width, trump: trump).map { json($0) })),
+                ("longestRun", .int(run)),
+                ("tractors", .array(lengths.map { length in
+                    let components = Combos.components(of: .setTractor(width: width, length: length), in: cards, trump: trump)
+                    return .object([
+                        ("length", .int(length)),
+                        ("cards", .array(components.map { json($0.cards) })),
+                        ("tops", .array(components.map { .int($0.topStrength) })),
+                    ])
+                })),
+            ])
+        }
+        return .object([
+            ("decks", .int(decks)),
+            ("trump", json(trump)),
+            ("cards", json(cards)),
+            ("group", json(Combos.group(of: cards, trump: trump))),
+            ("sorted", json(trump.sorted(cards))),
+            ("maxCopies", .int(Combos.maxCopies(cards))),
+            ("decompose", .array(Combos.decompose(cards, trump: trump).map { json($0) })),
+            ("shape", json(Combos.shape(of: cards, trump: trump))),
+            ("pairs", .array(Combos.pairs(in: cards, trump: trump).map { json($0) })),
+            ("pairCount", .int(Combos.pairCount(in: cards))),
+            ("longestRun", .int(longest)),
+            ("tractors", .array(tractorLengths.map { length in
+                .array(Combos.tractors(in: cards, length: length, trump: trump).map { json($0) })
+            })),
+            ("widths", .array(widths)),
+            ("units", .array(unitShapes.map { shape in
+                .array(Combos.units(of: shape, in: cards, trump: trump).map { json($0) })
             })),
             ("isThrow", .bool(Rules.isThrow(cards, trump: trump))),
             ("kittyMultiplier", .int(Scoring.kittyMultiplier(lastLead: cards, trump: trump))),

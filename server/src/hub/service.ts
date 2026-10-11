@@ -3,6 +3,7 @@
 // adds RPC and push delivery (see HubHost in host.ts).
 
 import { formatInviteCode, newId, newInviteCode, normalizeInviteCode } from "../auth/crypto.ts";
+import { TABLE_PLAYERS } from "../engine/cards.ts";
 import type { Rank } from "../engine/cards.ts";
 import { compareSummaries, seatOfUser, summarize } from "../game/summary.ts";
 import type { GameSnapshot, GameSummary } from "../game/summary.ts";
@@ -415,7 +416,7 @@ export class HubService {
     if (clubRow === null || !this.isMember(request.clubId, userId)) {
       return fail(404, "not_found", "That club doesn't exist, or you're not a member.");
     }
-    if (request.seats.length !== 4) return fail(400, "bad_request", "A table has exactly four seats.");
+    if (!TABLE_PLAYERS.includes(request.seats.length)) return fail(400, "bad_request", "A table has 4, 6 or 8 seats.");
     const humans = request.seats.flatMap((s) => ("userId" in s ? [s.userId] : []));
     if (new Set(humans).size !== humans.length) return fail(400, "bad_request", "Each person can take only one seat.");
     if (!humans.includes(userId)) return fail(400, "bad_request", "You need a seat at your own table.");

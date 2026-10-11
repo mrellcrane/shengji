@@ -97,14 +97,14 @@ enum RulesContent {
 
         return [
             RuleSection(id: "goal", title: "Goal & teams", shortTitle: "Goal", symbol: "person.2.fill", blocks: [
-                .text("This app plays the classic game: **4 players** in **two teams**. Your **partner** sits opposite you, so you and your partner play against East and West."),
+                .text("These rules are for the classic game: **4 players** in **two teams**. Your **partner** sits opposite you, so you and your partner play against East and West. You can also play with 6 or 8: see Bigger tables."),
                 .text("Each team has a **level**. Both start at 2 and climb 2, 3, 4 … 10, J, Q, K, A. The level of the dealer's team is this round's **trump rank**."),
                 .text("The dealer's team are the **declarers**; the other team are the **defenders**. The defenders try to win **80 points** or more in tricks. The declarers try to stop them."),
                 .text("Win a round as declarers while your team is at **A** and you win the game. That's where the name comes from: 升级 (shēngjí) means \"level up\"."),
             ]),
             RuleSection(id: "points", title: "Cards & points", shortTitle: "Points", symbol: "suit.heart.fill", blocks: [
                 .text("Two full decks with jokers: **108 cards**. Everyone gets 25 cards and the last 8 form the kitty."),
-                .text("**Bigger groups** add decks: at least half a deck per player, so 6 players use 3 or more and 8 use 4 or more. There's no upper limit, and a few rules change. Past 8 players the table gets too big to follow. Everything here is for 4 players and 2 decks."),
+                .text("**Bigger groups** add decks: at least half a deck per player, so 6 players use 3 or more and 8 use 4 or more. There's no upper limit, and a few rules change. Past 8 players the table gets too big to follow. The Play tab offers 6 players with 3 decks and 8 with 4 (see Bigger tables); everything else here is for 4 players and 2 decks."),
                 .text("Only three ranks score: **5s** are worth 5, **10s** and **Kings** are worth 10. That's 200 points in all."),
                 .cards(caption: "5 + 10 + 10 = 25 points", cards: [card(.five, .hearts), card(.ten, .spades), card(.king, .clubs)], trump: nil),
                 .cards(caption: "No points: aces and jokers win tricks but score nothing.", cards: [card(.ace, .spades), .bigJoker()], trump: nil),
@@ -213,6 +213,20 @@ enum RulesContent {
                 ]),
                 .text("**Next dealer:** if the declarers hold, the dealer's partner deals. If the defenders take over, the player after the dealer deals."),
                 .text("Levels stop at A. To win the game, your team must win a round as declarers while at A."),
+            ]),
+            RuleSection(id: "bigger", title: "Bigger tables", shortTitle: "6 or 8", symbol: "person.3.fill", blocks: [
+                .text("Play with **6** or **8** in the Play tab, against bots or online. Teams sit in **every other seat**, so you have two or three partners. 6 players use **3 decks** and 8 use **4**: everyone gets 26 cards, and the kitty is 6 cards with 6 players, 8 with 8."),
+                .text("Every card now exists 3 or 4 times, so three identical cards make a **triple** (刻子 kèzi), and with 4 decks four make **four of a kind**. Triples next to each other make a **tractor of triples**."),
+                .cards(caption: "A tractor of triples: 7♠ 7♠ 7♠ 8♠ 8♠ 8♠.",
+                       cards: [card(.seven, .spades), card(.seven, .spades, 1), card(.seven, .spades, 2),
+                               card(.eight, .spades), card(.eight, .spades, 1), card(.eight, .spades, 2)], trump: nil),
+                .bullets([
+                    "A triple led: play a triple of that suit if you have one, otherwise a pair. A tractor of triples asks for the same, or your biggest sets for each step.",
+                    "Only a triple beats a triple: a higher one of the suit, or a trump triple from someone out of the suit.",
+                    "Declaring: more cards beat fewer, so three rank cards beat a pair of big jokers. You may strengthen your own declaration with more of the same card.",
+                    "Points scale with the decks: 300 with 3 decks and 400 with 4. The defenders take over at 120 (160 with 4 decks), and each level is 60 points (80).",
+                    "When the declarers hold, the deal passes two seats on, to the dealer's next partner.",
+                ]),
             ]),
             RuleSection(id: "glossary", title: "Glossary", shortTitle: "Glossary", symbol: "character.book.closed.fill", blocks: [
                 .glossary(glossary),

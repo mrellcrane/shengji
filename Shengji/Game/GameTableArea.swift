@@ -2,7 +2,8 @@ import SwiftUI
 import ShengjiCore
 
 /// The middle of the table: Partner at the top, West on the left, East on the right, your play at the
-/// bottom, each seat's current play near the centre. Tap during the pause after a trick to go on.
+/// bottom, each seat's current play near the centre (6 or 8 players: `GameBigTableLayout`). Tap during
+/// the pause after a trick to go on.
 @MainActor
 struct GameTableArea: View {
     let controller: GameController
@@ -22,7 +23,20 @@ struct GameTableArea: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: snapshot.display)
     }
 
+    @ViewBuilder
     private func tableContent(size: CGSize, snapshot: GameTableSnapshot) -> some View {
+        if snapshot.seats.count > 4 {
+            GameBigTableLayout(seats: snapshot.seats, size: size,
+                               slot: { seat, cardWidth, maxWidth in
+                                   slot(seat, snapshot: snapshot, cardWidth: cardWidth, maxWidth: maxWidth)
+                               },
+                               center: { GameTableCenter(controller: controller) })
+        } else {
+            classicContent(size: size, snapshot: snapshot)
+        }
+    }
+
+    private func classicContent(size: CGSize, snapshot: GameTableSnapshot) -> some View {
         // Fixed parts: two seat labels (about 44 pt each) and the stack spacing (about 24 pt), plus margin.
         // The three play slots are 1.4 x card width + 12 each, so cards shrink until everything fits
         // (an iPhone SE with a long coach message and the declare buttons still fits).
@@ -69,7 +83,7 @@ struct GameTableArea: View {
 
 /// Everything the table area draws, read from the controller once per update.
 struct GameTableSnapshot: Equatable {
-    /// Indexed by seat 0...3.
+    /// Indexed by seat (0...3 at a table of four).
     let seats: [GameSeatInfo]
     let display: TableTrickDisplay
     let trump: Trump
@@ -78,7 +92,7 @@ struct GameTableSnapshot: Equatable {
 
     @MainActor
     init(controller: GameController) {
-        seats = Seats.all.map { controller.seatInfo($0) }
+        seats = controller.seats.map { controller.seatInfo($0) }
         display = controller.trickDisplay
         trump = controller.round.trump
         markTrumps = controller.markTrumps
@@ -203,10 +217,12 @@ struct GamePlaySlot: View {
     }
 
     @ViewBuilder private var tag: some View {
+        // Fixed size: under a single small card (a table of 8) the tag is wider than the card.
         if isWinner {
             Text("Wins")
                 .font(.caption2.weight(.heavy))
                 .foregroundStyle(Theme.cardInk)
+                .fixedSize()
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Capsule().fill(Theme.gold))
@@ -215,6 +231,7 @@ struct GamePlaySlot: View {
             Text("Winning")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(Theme.cardInk)
+                .fixedSize()
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Capsule().fill(Color.white.opacity(0.85)))
@@ -255,7 +272,7 @@ struct GameTableCenter: View {
         switch controller.stage {
         case .dealing, .declareWindow, .botsRespond:
             CardView(card: Card(.two, .spades), width: 26, faceDown: true)
-            Text("\(controller.dealtCount)/\(GameController.cardsToDeal)")
+            Text("\(controller.dealtCount)/\(controller.cardsToDeal)")
                 .monospacedDigit()
         case .burying:
             CardView(card: Card(.two, .spades), width: 26, faceDown: true)

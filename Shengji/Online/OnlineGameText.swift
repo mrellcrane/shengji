@@ -9,9 +9,17 @@ enum OnlineGameText {
     /// "You" for seat 0, otherwise the player's name (or the seat's direction if the name is missing).
     static func name(_ seat: Int, players: [SeatView.Player]) -> String {
         if seat == Seats.human { return "You" }
-        guard players.indices.contains(seat) else { return fallbackName(seat) }
+        guard players.indices.contains(seat) else { return fallbackName(seat, count: players.count) }
         let trimmed = players[seat].name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? fallbackName(seat) : trimmed
+        return trimmed.isEmpty ? fallbackName(seat, count: players.count) : trimmed
+    }
+
+    /// A seat label for a crowded table of 6 or 8: the first word of the name, at most 9 characters
+    /// ("Panda" for "Panda Bot").
+    static func shortName(_ seat: Int, players: [SeatView.Player]) -> String {
+        let full = name(seat, players: players)
+        let first = full.split(separator: " ").first.map(String.init) ?? full
+        return first.count > 9 ? String(first.prefix(8)) + "…" : first
     }
 
     /// Lower-case "you" inside a sentence.
@@ -24,7 +32,10 @@ enum OnlineGameText {
         "\(name(seat, players: players)) \(seat == Seats.human ? youForm : otherForm)"
     }
 
-    static func fallbackName(_ seat: Int) -> String {
+    /// A seat's direction when its name is missing: "Right", "Partner", "Left" at a table of four,
+    /// compass points at a bigger one.
+    static func fallbackName(_ seat: Int, count: Int = 4) -> String {
+        if count > 4 { return Seats.name(seat, players: count) }
         switch seat {
         case 1: return "Right"
         case 2: return "Partner"
@@ -33,20 +44,29 @@ enum OnlineGameText {
         }
     }
 
-    /// "You and Mei" (your team) or "Jun and Ana".
-    static func teamName(_ team: Int, players: [SeatView.Player]) -> String {
-        let seats = team == 0 ? [0, 2] : [1, 3]
-        return "\(name(seats[0], players: players)) and \(name(seats[1], players: players))"
+    /// The seats of a team (viewer-relative), in seat order: seats 0 and 2 at a table of four.
+    static func teamSeats(_ team: Int, count: Int) -> [Int] {
+        Seats.all(players: TableSize(players: count).players).filter { Seats.team(of: $0) == team }
     }
 
-    /// "Mei, Jun and Ana" for a games-list row (everyone but you).
+    /// "Mei and Lin", "Mei, Lin and Sam".
+    static func list(_ names: [String]) -> String {
+        guard let last = names.last else { return "" }
+        return names.count == 1 ? last : names.dropLast().joined(separator: ", ") + " and " + last
+    }
+
+    /// "You and Mei" (your team) or "Jun and Ana"; with 6 or 8 players everyone in the team, "You, Mei
+    /// and Lin".
+    static func teamName(_ team: Int, players: [SeatView.Player]) -> String {
+        list(teamSeats(team, count: players.count).map { name($0, players: players) })
+    }
+
+    /// "Mei, Jun and Ana" for a games-list row (everyone but you: your partners first).
     static func othersLine(_ players: [SeatView.Player]) -> String {
-        let names = [2, 1, 3].filter { players.indices.contains($0) }.map { name($0, players: players) }
-        switch names.count {
-        case 0: return "Just you"
-        case 1: return names[0]
-        default: return names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
-        }
+        let count = TableSize(players: players.count).players
+        let seats = Seats.teammates(of: Seats.human, players: count) + Seats.opponents(of: Seats.human, players: count)
+        let names = seats.filter { players.indices.contains($0) }.map { name($0, players: players) }
+        return names.isEmpty ? "Just you" : list(names)
     }
 
     // MARK: Turns
@@ -81,7 +101,7 @@ enum OnlineGameText {
         case .bidding:
             return actingSeat(view) == Seats.human ? "Declare or pass" : ""
         case .burying:
-            return actingSeat(view) == Seats.human ? "Pick 8 to bury" : ""
+            return actingSeat(view) == Seats.human ? "Pick \(view.table.kittySize) to bury" : ""
         case .playing:
             guard view.turn == Seats.human else { return "" }
             let lead = view.currentLead
@@ -95,13 +115,14 @@ enum OnlineGameText {
 
     // MARK: Bidding
 
-    /// "one 2♥", "a pair of 2♥", "small jokers".
+    /// "one 2♥", "a pair of 2♥", "small jokers", and with three or more decks "three 2♥".
     static func declarationDetail(_ d: Declaration) -> String {
         switch d.strength {
         case 1: return d.cards.first.map { "one \($0.description)" } ?? "one trump-rank card"
         case 2: return d.cards.first.map { "a pair of \($0.description)" } ?? "a pair of trump-rank cards"
         case 3: return "a pair of small jokers"
-        default: return "a pair of big jokers"
+        case 4: return "a pair of big jokers"
+        default: return d.detail
         }
     }
 
@@ -229,11 +250,12 @@ enum OnlineGameText {
         let scored = kittyBonus > 0
             ? "The defenders scored \(points) points (including \(kittyBonus) from the kitty)"
             : "The defenders scored \(points) points"
+        let threshold = Scoring.takeoverThreshold(decks: TableSize(players: players.count).decks)
         var sentences: [String] = []
         if result.outcome.declarersHold {
-            sentences.append("\(scored), short of \(Scoring.takeoverThreshold), so the declarers keep the deal.")
+            sentences.append("\(scored), short of \(threshold), so the declarers keep the deal.")
         } else {
-            sentences.append("\(scored), reaching \(Scoring.takeoverThreshold), so they take over the deal.")
+            sentences.append("\(scored), reaching \(threshold), so they take over the deal.")
         }
         if let winner = summary.gameWinner {
             let ending = winner == 0 ? "so you win the game!" : "so they win the game."
@@ -279,11 +301,16 @@ enum OnlineGameText {
         return "Waiting"
     }
 
-    /// "Round 3 · Us 4, Them 3 · to A".
+    /// "Round 3 · Us 4, Them 3 · to A" (with "· 6 players" at a bigger table).
     static func rowDetail(_ game: OnlineGameSummary) -> String {
         let us = game.level(of: 0)?.label ?? "?"
         let them = game.level(of: 1)?.label ?? "?"
-        return "Round \(game.roundNumber) · Us \(us), Them \(them) · to \(game.targetRank.label)"
+        return "Round \(game.roundNumber) · Us \(us), Them \(them) · to \(game.targetRank.label)" + tableNote(game)
+    }
+
+    /// " · 6 players" for a table of 6 or 8, nothing for the classic four.
+    static func tableNote(_ game: OnlineGameSummary) -> String {
+        game.players.count > 4 ? " · \(game.players.count) players" : ""
     }
 
     // MARK: Club games you are not in
@@ -304,8 +331,12 @@ enum OnlineGameText {
 
     /// "Ben and Cai vs Tiger Bot and Dragon Bot" for a game you are not in.
     static func everyoneLine(_ players: [SeatView.Player]) -> String {
-        let name = { (seat: Int) in playerName(seat, players: players) }
-        return "\(name(0)) and \(name(2)) vs \(name(1)) and \(name(3))"
+        "\(othersTeam(0, players: players)) vs \(othersTeam(1, players: players))"
+    }
+
+    /// "Ben and Cai": a team in a game you are not in.
+    static func othersTeam(_ team: Int, players: [SeatView.Player]) -> String {
+        list(teamSeats(team, count: players.count).map { playerName($0, players: players) })
     }
 
     /// "Waiting for Ben" or "Ben and Cai won" for a game you are not in.
@@ -313,7 +344,7 @@ enum OnlineGameText {
         let name = { (seat: Int) in playerName(seat, players: game.players) }
         if game.isFinished {
             guard let winner = game.winnerTeam else { return "Finished" }
-            return winner == 0 ? "\(name(0)) and \(name(2)) won" : "\(name(1)) and \(name(3)) won"
+            return "\(othersTeam(winner, players: game.players)) won"
         }
         if let turn = game.turn { return "Waiting for \(name(turn))" }
         return "Waiting"
@@ -321,7 +352,7 @@ enum OnlineGameText {
 
     /// "Round 3 · to A" for a game you are not in (neither team is "Us").
     static func othersGameDetail(_ game: OnlineGameSummary) -> String {
-        "Round \(game.roundNumber) · to \(game.targetRank.label)"
+        "Round \(game.roundNumber) · to \(game.targetRank.label)" + tableNote(game)
     }
 
     /// "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago".

@@ -1,12 +1,12 @@
 // A whole game: rounds while the teams climb from the start level to the target. Port of
 // Engine/Game.swift. `GameState` is plain JSON-serialisable data; `recordRound` mutates it in place.
 
-import { ACE, advanceRank, rankLabel } from "./cards.ts";
-import type { Card, Rank } from "./cards.ts";
-import { HUMAN_SEAT, nextSeat, partnerOf, seatName, teamOf } from "./rules.ts";
+import { ACE, TABLE_FOUR, advanceRank, rankLabel, tableSize } from "./cards.ts";
+import type { Card, Rank, TableSize } from "./cards.ts";
+import { HUMAN_SEAT, normalizeSeat, seatName, teamOf } from "./rules.ts";
 import { newRound, startBidding } from "./round.ts";
 import type { Round, RoundResult } from "./round.ts";
-import { TAKEOVER_THRESHOLD, levelPhrase } from "./scoring.ts";
+import { levelPhrase, takeoverThreshold } from "./scoring.ts";
 
 export interface GameSettings {
   /** Both teams start here. */
@@ -16,10 +16,25 @@ export interface GameSettings {
    * here ("you must defend your last level").
    */
   targetRank: Rank;
+  /**
+   * Players and decks: 4 with 2 decks (the classic game), 6 with 3 or 8 with 4. Absent in games
+   * stored before bigger tables existed, which are for 4 players.
+   */
+  table?: TableSize;
 }
 
 export function defaultGameSettings(): GameSettings {
-  return { startRank: 2, targetRank: ACE };
+  return { startRank: 2, targetRank: ACE, table: { ...TABLE_FOUR } };
+}
+
+/** Players and decks of the game's table. */
+export function gameTable(game: GameState): TableSize {
+  return tableSize(game.settings.table?.players ?? 4);
+}
+
+/** Players at the game's table (4, 6 or 8). */
+export function gamePlayers(game: GameState): number {
+  return gameTable(game).players;
 }
 
 /** What changed after a round, for the results screen. */
@@ -39,7 +54,7 @@ export interface RoundSummary {
 
 export interface GameState {
   settings: GameSettings;
-  /** Level per team (team 0 = seats 0 and 2, team 1 = seats 1 and 3). */
+  /** Level per team (team 0 = the even seats, 0 and 2 with 4 players; team 1 = the odd seats). */
   levels: Rank[];
   /** Dealer of the next round; null before the first round (decided by declaring). */
   nextDealer: number | null;
@@ -50,8 +65,9 @@ export interface GameState {
 }
 
 export function newGame(settings: GameSettings = defaultGameSettings()): GameState {
+  const table = tableSize(settings.table?.players ?? 4);
   return {
-    settings: { startRank: settings.startRank, targetRank: settings.targetRank },
+    settings: { startRank: settings.startRank, targetRank: settings.targetRank, table },
     levels: [settings.startRank, settings.startRank],
     nextDealer: null,
     roundsPlayed: 0,
@@ -67,9 +83,9 @@ export function nextTrumpRank(game: GameState): Rank {
   return team >= 0 && team < game.levels.length ? game.levels[team] : game.settings.startRank;
 }
 
-/** The next round, dealt from `deck` (use `shuffledDeck()` for real games). */
+/** The next round, dealt from `deck` (use `shuffledDeck(gameTable(game))` for real games). */
 export function makeRound(game: GameState, deck: readonly Card[]): Round {
-  return newRound(nextTrumpRank(game), game.nextDealer, deck);
+  return newRound(nextTrumpRank(game), game.nextDealer, deck, gameTable(game));
 }
 
 /**
@@ -84,8 +100,9 @@ export function startOnlineRound(game: GameState, deck: readonly Card[], creator
 }
 
 /**
- * Applies a finished round. Next dealer: if the declarers hold, the dealer's partner; otherwise
- * the player after the dealer (a defender). Winner: declarers holding while at targetRank.
+ * Applies a finished round. Next dealer: if the declarers hold, the dealer's next teammate (two
+ * seats on: the partner with 4 players); otherwise the player after the dealer (a defender).
+ * Winner: declarers holding while at targetRank.
  */
 export function recordRound(game: GameState, result: RoundResult): RoundSummary {
   while (game.levels.length < 2) {
@@ -95,7 +112,8 @@ export function recordRound(game: GameState, result: RoundResult): RoundSummary 
   // Swift's RoundResult is a value type: the history keeps its own copy, so later changes to the
   // round's result (or to the returned summary) never rewrite it.
   result = structuredClone(result);
-  const dealer = ((result.dealer % 4) + 4) % 4;
+  const players = gamePlayers(game);
+  const dealer = normalizeSeat(result.dealer, players);
   const declarers = teamOf(dealer);
   const defenders = 1 - declarers;
   const outcome = result.outcome;
@@ -107,7 +125,7 @@ export function recordRound(game: GameState, result: RoundResult): RoundSummary 
   const newLevel = advanceRank(before[benefiting], outcome.levels, target);
   const gained = newLevel - before[benefiting];
   game.levels[benefiting] = newLevel;
-  const next = outcome.declarersHold ? partnerOf(dealer) : nextSeat(dealer);
+  const next = normalizeSeat(dealer + (outcome.declarersHold ? 2 : 1), players);
 
   game.nextDealer = next;
   game.roundsPlayed += 1;
@@ -123,6 +141,7 @@ export function recordRound(game: GameState, result: RoundResult): RoundSummary 
     target,
     nextDealer: next,
     nextLevel: game.levels[teamOf(next)],
+    players,
   });
   const summary: RoundSummary = {
     result,
@@ -152,6 +171,8 @@ export interface RoundExplanationInput {
   target: Rank;
   nextDealer: number;
   nextLevel: Rank;
+  /** Players at the table (default 4). */
+  players?: number;
 }
 
 /**
@@ -161,6 +182,8 @@ export interface RoundExplanationInput {
  */
 export function explainRound(input: RoundExplanationInput, viewer = HUMAN_SEAT): string {
   const { result } = input;
+  const players = input.players ?? 4;
+  const threshold = takeoverThreshold(tableSize(players).decks);
   const points = result.defenderPoints;
   const kittyBonus = result.kittyPoints * result.kittyMultiplier;
   const scored =
@@ -169,14 +192,16 @@ export function explainRound(input: RoundExplanationInput, viewer = HUMAN_SEAT):
       : `The defenders scored ${points} points`;
   const sentences: string[] = [];
   if (result.outcome.declarersHold) {
-    sentences.push(`${scored}, short of ${TAKEOVER_THRESHOLD}, so the declarers keep the deal.`);
+    sentences.push(`${scored}, short of ${threshold}, so the declarers keep the deal.`);
   } else {
-    sentences.push(`${scored}, reaching ${TAKEOVER_THRESHOLD}, so they take over the deal.`);
+    sentences.push(`${scored}, reaching ${threshold}, so they take over the deal.`);
   }
 
   const viewerTeam = teamOf(viewer);
-  const subjectOf = (team: number): { name: string; plural: boolean } =>
-    team === viewerTeam ? { name: "Your team", plural: false } : { name: "East and West", plural: true };
+  const subjectOf = (team: number): { name: string; plural: boolean } => {
+    if (team === viewerTeam) return { name: "Your team", plural: false };
+    return players > 4 ? { name: "The other team", plural: false } : { name: "East and West", plural: true };
+  };
   const subject = subjectOf(input.team);
   if (input.gameWinner !== null) {
     const ending = input.gameWinner === viewerTeam ? "so you win the game!" : "so they win the game.";
@@ -196,13 +221,14 @@ export function explainRound(input: RoundExplanationInput, viewer = HUMAN_SEAT):
     sentences.push(`${subject.name} ${verb} up ${levelsText}, to ${rankLabel(input.newLevel)}${capNote}.`);
   }
   const dealerVerb = input.nextDealer === viewer ? "deal" : "deals";
-  sentences.push(`${seatName(input.nextDealer, viewer)} ${dealerVerb} next at level ${rankLabel(input.nextLevel)}.`);
+  sentences.push(`${seatName(input.nextDealer, viewer, players)} ${dealerVerb} next at level ${rankLabel(input.nextLevel)}.`);
   return sentences.join(" ");
 }
 
 /** The explanation of a recorded round as seen from `viewer` (seat 0 gives `summary.explanation`). */
 export function summaryExplanation(game: GameState, summary: RoundSummary, viewer = HUMAN_SEAT): string {
-  const declarers = teamOf(((summary.result.dealer % 4) + 4) % 4);
+  const players = gamePlayers(game);
+  const declarers = teamOf(normalizeSeat(summary.result.dealer, players));
   const team = summary.result.outcome.declarersHold ? declarers : 1 - declarers;
   const newLevel = summary.levelsAfter[team];
   return explainRound(
@@ -216,6 +242,7 @@ export function summaryExplanation(game: GameState, summary: RoundSummary, viewe
       target: game.settings.targetRank,
       nextDealer: summary.nextDealer,
       nextLevel: summary.levelsAfter[teamOf(summary.nextDealer)],
+      players,
     },
     viewer,
   );

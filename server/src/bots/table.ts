@@ -1,14 +1,16 @@
 // One seat's view of the table for the bots, built from a SeatView alone. Port of
 // ShengjiCore/Sources/ShengjiCore/Bots: BotTuning.swift, CardOrder and BotTable (BotTable.swift) and
 // BotKnowledge (Bot.swift). Seats are viewer-relative: the viewer is 0, its partner 2, the opponents
-// 1 (next to play) and 3.
+// 1 (next to play) and 3. With 6 or 8 players the partners are every even seat and the opponents
+// every odd one.
 
-import { DECK_SIZE, cardPoints, faceOf, suitOf } from "../engine/cards.ts";
+import { MAX_CARD_COUNT, cardPoints, deckCards, faceOf, suitOf } from "../engine/cards.ts";
 import type { Card, Face } from "../engine/cards.ts";
-import { groupOfCards } from "../engine/combos.ts";
+import { componentsOf, groupOfCards, longestSetRun, maxCopies, setShape, setTractorShape } from "../engine/combos.ts";
 import type { ComboShape, Component } from "../engine/combos.ts";
-import { canBeat, partnerOf, teamOf } from "../engine/rules.ts";
+import { canBeat, normalizeSeat, opponentsOf, partnerOf, teamOf, teammatesOf } from "../engine/rules.ts";
 import type { Play } from "../engine/rules.ts";
+import { viewTable } from "../engine/seatview.ts";
 import type { SeatView } from "../engine/seatview.ts";
 import {
   BIG_JOKER_STRENGTH,
@@ -80,7 +82,7 @@ export class CardOrder {
       suitIndex[suit] = position;
     });
     this.keys = [];
-    for (let card = 0; card < DECK_SIZE; card++) {
+    for (let card = 0; card < MAX_CARD_COUNT; card++) {
       const suit = suitOf(card);
       const groupIndex = isTrump(trump, card) ? 4 : suit !== null ? suitIndex[suit] : 4;
       const tiebreak = suit === null ? 0 : 3 - suit;
@@ -116,8 +118,9 @@ export function cardOrder(trump: Trump): CardOrder {
 
 /**
  * What the viewer knows (Swift `BotKnowledge(view:)`): the cards whose place is unknown to it (the
- * full deck minus its hand, every played card and the kitty it buried; a kitty shown to everyone
- * once the round is finished does not count) and which players have shown out of which groups.
+ * table's full deck minus its hand, every played card and the kitty it buried; a kitty shown to
+ * everyone once the round is finished does not count) and which players have shown out of which
+ * groups.
  */
 export class BotKnowledge {
   readonly trump: Trump;
@@ -130,18 +133,20 @@ export class BotKnowledge {
     this.trump = view.trump;
     const buried = view.phase === "playing" || view.phase === "finished";
     const buriedKitty = buried && view.dealer === 0 ? (view.kitty ?? []) : [];
-    const known: boolean[] = new Array<boolean>(DECK_SIZE).fill(false);
+    const table = viewTable(view);
+    const deck = deckCards(table.decks);
+    const known: boolean[] = new Array<boolean>(deck.length).fill(false);
     const mark = (cards: readonly Card[]): void => {
-      for (const card of cards) if (card >= 0 && card < DECK_SIZE) known[card] = true;
+      for (const card of cards) if (card >= 0 && card < deck.length) known[card] = true;
     };
     mark(view.hand);
     for (const trick of view.tricks) for (const play of trick.plays) mark(play.cards);
     for (const play of view.currentTrick) mark(play.cards);
     mark(buriedKitty);
     this.unseen = [];
-    for (let card = 0; card < DECK_SIZE; card++) if (!known[card]) this.unseen.push(card);
+    for (const card of deck) if (!known[card]) this.unseen.push(card);
 
-    this.voids = [0, 1, 2, 3].map(() => new Set<SuitGroup>());
+    this.voids = Array.from({ length: table.players }, () => new Set<SuitGroup>());
     for (const trick of view.tricks) noteVoids(trick.plays, view.trump, this.voids);
     noteVoids(view.currentTrick, view.trump, this.voids);
   }
@@ -168,7 +173,7 @@ export function noteVoids(plays: readonly Play[], trump: Trump, voids: Set<SuitG
 
 // MARK: The table
 
-/** A seat's own cards of one group as one card per face (lowest copy) and the faces held twice. */
+/** A seat's own cards of one group as one card per face (lowest copy) and the faces held at least twice. */
 export interface Pieces {
   singles: Card[];
   pairs: Card[][];
@@ -182,7 +187,12 @@ export class BotTable {
   readonly view: SeatView;
   /** Always 0: the viewer. */
   readonly seat = 0;
+  /** Seats at the table (4, 6 or 8). */
+  readonly players: number;
+  /** The partner opposite with 4 players (seat 2); with more, the first partner after this seat. */
   readonly partner: number;
+  /** Every partner, in play order after this seat (just seat 2 with 4 players). */
+  readonly teammates: number[];
   readonly trump: Trump;
   readonly order: CardOrder;
   /** Own hand, lowest first in display order. */
@@ -200,14 +210,16 @@ export class BotTable {
   /** Highest unseen strength per group, and highest unseen pair (both copies unseen). */
   private readonly topUnseen = new Map<SuitGroup, number>();
   private readonly topUnseenPair = new Map<SuitGroup, number>();
-  private readonly values: number[] = new Array<number>(DECK_SIZE).fill(-1);
+  private readonly values: number[] = new Array<number>(MAX_CARD_COUNT).fill(-1);
 
   constructor(view: SeatView, tuning: Readonly<BotTuning> = DEFAULT_TUNING) {
     this.view = view;
     this.tuning = tuning;
     const trump = view.trump;
     this.trump = trump;
+    this.players = viewTable(view).players;
     this.partner = partnerOf(0);
+    this.teammates = teammatesOf(0, this.players);
     this.order = cardOrder(trump);
     this.hand = this.order.sorted(view.hand);
     this.knowledge = new BotKnowledge(view);
@@ -253,13 +265,19 @@ export class BotTable {
     return this.view.currentTrick.length === 0;
   }
 
-  /** The two opponents, the one after the viewer first. */
+  /** The opponents, in play order after this seat (two with 4 players: East, then West). */
   get opponents(): number[] {
-    return [(this.seat + 1) % 4, (this.seat + 3) % 4];
+    return opponentsOf(this.seat, this.players);
   }
 
   isOpponent(player: number): boolean {
     return teamOf(player) !== teamOf(this.seat);
+  }
+
+  /** A partner of this seat (not this seat itself). */
+  isTeammate(player: number): boolean {
+    const p = normalizeSeat(player, this.players);
+    return p !== this.seat && teamOf(p) === teamOf(this.seat);
   }
 
   /** Own cards of a group, lowest first. */
@@ -280,17 +298,45 @@ export class BotTable {
     return this.hand.length <= 8;
   }
 
-  /** Own cards of a group as one card per face and the faces held twice, lowest first. */
+  /**
+   * Own cards of a group as one card per face (lowest copy) and the faces held at least twice (their
+   * two lowest copies), lowest first.
+   */
   pieces(group: SuitGroup): Pieces {
     const singles: Card[] = [];
     const pairs: Card[][] = [];
     let previous: Card | null = null;
+    let run = 0;
     for (const card of this.cards(group)) {
-      if (previous !== null && faceOf(previous) === faceOf(card)) pairs.push([previous, card]);
-      else singles.push(card);
+      if (previous !== null && faceOf(previous) === faceOf(card)) {
+        run += 1;
+        if (run === 2) pairs.push([previous, card]);
+      } else {
+        singles.push(card);
+        run = 1;
+      }
       previous = card;
     }
     return { singles, pairs };
+  }
+
+  /**
+   * Own sets of three or more identical cards in a group (triples, four of a kind) and tractors of
+   * them, widest first, then lowest first. Empty with two decks.
+   */
+  sets(group: SuitGroup): Component[] {
+    const mine = this.cards(group);
+    const widest = maxCopies(mine);
+    if (widest < 3) return [];
+    const out: Component[] = [];
+    for (let width = widest; width >= 3; width--) {
+      out.push(...componentsOf(setShape(width), mine, this.trump));
+      const run = longestSetRun(mine, width, this.trump);
+      for (let length = 2; length <= run; length++) {
+        out.push(...componentsOf(setTractorShape(width, length), mine, this.trump));
+      }
+    }
+    return out;
   }
 
   /** Some unseen component of that shape and group is stronger (`canBeat` against the unseen cards). */
@@ -301,6 +347,8 @@ export class BotTable {
       case "pair":
         return (this.topUnseenPair.get(group) ?? -1) > top;
       case "tractor":
+      case "set":
+      case "setTractor":
         return canBeat({ shape, cards: [], group, topStrength: top }, this.unseen(group), this.trump);
     }
   }

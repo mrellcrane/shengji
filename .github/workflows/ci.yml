@@ -325,7 +325,7 @@ jobs:
           # Warm-up launch (a demo scene, so saved progress is never touched): the first launch is slower.
           xcrun simctl launch "$SIM_UDID" "$BUNDLE_ID" -ScreenshotScene learn || true
           sleep 8
-          for scene in learn lesson predict review quiz game dealing result rules coach achievements online onlineGame; do
+          for scene in learn lesson predict review quiz game dealing result rules coach achievements online onlineGame game6 game8; do
             echo "Scene: $scene"
             mkdir -p screenshots/diagnostics
             # Debug builds print why views re-render when launched with -DebugPrintChanges YES.

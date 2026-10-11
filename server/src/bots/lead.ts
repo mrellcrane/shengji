@@ -1,14 +1,14 @@
 // Standard-level leading. Port of ShengjiCore/Sources/ShengjiCore/Bots/BotLead.swift (StandardLead,
 // LeadCheck), choices only (the learner-facing texts stay in the app). In priority order:
 // 1. a throw that is guaranteed to stand, in a plain suit no opponent has shown out of;
-// 2. a sure-winning plain tractor, pair or single;
+// 2. a sure-winning plain tractor, set, pair or single;
 // 3. declarers with many trumps draw trumps (top pairs, else low singles);
-// 4. a suit the partner is out of, so the partner can ruff;
+// 4. a suit a partner is out of, so that partner can ruff;
 // 5. a low non-point card (or low pair) from a short plain suit; last resort, the lowest trump.
 
 import { ALL_SUITS, cardPoints, faceOf, isJoker, rankOf } from "../engine/cards.ts";
 import type { Card } from "../engine/cards.ts";
-import { PAIR, SINGLE, componentsOf, decompose, longestRun, pairsIn, tractorShape } from "../engine/combos.ts";
+import { PAIR, SINGLE, componentsOf, decompose, longestRun, pairsIn, shapesEqual, tractorShape } from "../engine/combos.ts";
 import type { ComboShape, Component } from "../engine/combos.ts";
 import { checkThrowAgainstPool, isThrow, validateLead } from "../engine/rules.ts";
 import { strength } from "../engine/trump.ts";
@@ -60,7 +60,7 @@ class StandardLead {
   /** No opponent has shown out of the plain group, and enough of it is still out that an unseen void is unlikely. */
   private safeToCash(group: SuitGroup): boolean {
     for (const opponent of this.table.opponents) if (this.table.mayRuff(opponent, group)) return false;
-    return !this.table.isRunningOut(group, 1, 2);
+    return !this.table.isRunningOut(group, 1, this.table.opponents.length);
   }
 
   // MARK: 1. Throws
@@ -123,6 +123,8 @@ class StandardLead {
       for (const pair of pieces.pairs) {
         consider({ shape: PAIR, cards: pair, group, topStrength: strength(trump, pair[0]) });
       }
+      // Three or more decks: triples, four of a kind and tractors of them.
+      for (const set of table.sets(group)) consider(set);
       if (!pieces.pairs.some((pair) => table.tractorFaces.has(faceOf(pair[0])))) continue;
       const run = longestRun(mine, trump);
       for (let length = 2; length <= run; length++) {
@@ -162,16 +164,18 @@ class StandardLead {
 
   private partnerVoidLead(): Card[] | null {
     const { table } = this;
-    if (table.knowledge.isVoid(table.partner, "trump")) return null;
     let best: { card: Card; score: number } | null = null;
-    for (const suit of ALL_SUITS) {
-      const group: SuitGroup = suit;
-      if (!table.knowledge.isVoid(table.partner, group)) continue;
-      if (table.opponents.some((opponent) => table.mayRuff(opponent, group))) continue;
-      for (const card of table.cards(group)) {
-        const score = table.value(card) + table.pairPenalty(card) + 2 * cardPoints(card);
-        if (best !== null && best.score <= score) continue;
-        best = { card, score };
+    for (const partner of table.teammates) {
+      if (table.knowledge.isVoid(partner, "trump")) continue;
+      for (const suit of ALL_SUITS) {
+        const group: SuitGroup = suit;
+        if (!table.knowledge.isVoid(partner, group)) continue;
+        if (table.opponents.some((opponent) => table.mayRuff(opponent, group))) continue;
+        for (const card of table.cards(group)) {
+          const score = table.value(card) + table.pairPenalty(card) + 2 * cardPoints(card);
+          if (best !== null && best.score <= score) continue;
+          best = { card, score };
+        }
       }
     }
     return best === null ? null : [best.card];
@@ -227,13 +231,17 @@ class StandardLead {
     return cheapest(table.hand, 1, costs);
   }
 
-  /** A trump pair or tractor nobody can beat (longest first, then the lowest such). */
+  /** A trump pair, set or tractor nobody can beat (most cards first, then the lowest such). */
   private sureTrumpCombo(): Component | null {
     const { table, trump } = this;
     const mine = table.trumps;
     const pieces = table.pieces("trump");
     if (pieces.pairs.length === 0) return null;
     const shapes: ComboShape[] = [PAIR];
+    // Three or more decks: each shape of the sets held, once, in their first order.
+    for (const set of table.sets("trump")) {
+      if (!shapes.slice(1).some((shape) => shapesEqual(shape, set.shape))) shapes.push(set.shape);
+    }
     if (pieces.pairs.some((pair) => table.tractorFaces.has(faceOf(pair[0])))) {
       const run = longestRun(mine, trump);
       for (let length = 2; length <= run; length++) shapes.push(tractorShape(length));

@@ -14,9 +14,25 @@ export interface LevelOutcome {
   summary: string;
 }
 
+/** Two decks (the classic game). Every deck adds 100 points, and the lines scale with it. */
 export const TOTAL_POINTS = 200;
 export const TAKEOVER_THRESHOLD = 80;
 export const STEP_SIZE = 40;
+
+/** Points in all the cards: 100 per deck. */
+export function totalPointsFor(decks: number): number {
+  return 100 * Math.max(decks, 1);
+}
+
+/** Defenders take over the deal from 40 points per deck: 80 with 2 decks, 120 with 3, 160 with 4. */
+export function takeoverThreshold(decks: number): number {
+  return 40 * Math.max(decks, 1);
+}
+
+/** Each level is worth 20 points per deck: 40 with 2 decks, 60 with 3, 80 with 4. */
+export function stepSize(decks: number): number {
+  return 20 * Math.max(decks, 1);
+}
 
 /** "1 level", "2 levels". */
 export function levelPhrase(levels: number): string {
@@ -28,21 +44,25 @@ export function levelPhrase(levels: number): string {
  *   0 -> declarers +3 · 5 to 35 -> declarers +2 · 40 to 75 -> declarers +1
  *   80 to 115 -> defenders take over (+0) · 120 to 155 -> take over +1 · 160 to 195 -> +2 ·
  *   200+ -> +3, each further 40 -> +1
+ * With more decks the same table scales (`decks`): with 3 decks 5 to 55 -> declarers +2, 60 to 115
+ * -> +1, 120 to 175 -> take over, then +1 for every further 60.
  */
-export function scoreOutcome(defenderPoints: number): LevelOutcome {
+export function scoreOutcome(defenderPoints: number, decks = 2): LevelOutcome {
   const points = Math.max(0, defenderPoints);
-  if (points < TAKEOVER_THRESHOLD) {
+  const threshold = takeoverThreshold(decks);
+  const step = stepSize(decks);
+  if (points < threshold) {
     let levels: number;
     let scored: string;
     if (points === 0) {
       levels = 3;
       scored = "Defenders scored 0";
-    } else if (points < STEP_SIZE) {
+    } else if (points < step) {
       levels = 2;
-      scored = `Defenders scored ${points} (under ${STEP_SIZE})`;
+      scored = `Defenders scored ${points} (under ${step})`;
     } else {
       levels = 1;
-      scored = `Defenders scored ${points} (under ${TAKEOVER_THRESHOLD})`;
+      scored = `Defenders scored ${points} (under ${threshold})`;
     }
     return {
       declarersHold: true,
@@ -50,8 +70,8 @@ export function scoreOutcome(defenderPoints: number): LevelOutcome {
       summary: `${scored}: the declarers keep the deal and go up ${levelPhrase(levels)}.`,
     };
   }
-  const levels = Math.trunc((points - TAKEOVER_THRESHOLD) / STEP_SIZE);
-  const line = TAKEOVER_THRESHOLD + levels * STEP_SIZE;
+  const levels = Math.trunc((points - threshold) / step);
+  const line = threshold + levels * step;
   const effect =
     levels === 0
       ? "they take over the deal but don't go up a level."
@@ -61,7 +81,7 @@ export function scoreOutcome(defenderPoints: number): LevelOutcome {
 
 /**
  * Kitty multiplier when the defenders win the last trick: 2 x the number of cards in the largest
- * component of the last trick's lead (single x2, pair x4, 2-pair tractor x8, 3-pair x12).
+ * component of the last trick's lead (single x2, pair x4, triple x6, 2-pair tractor x8, 3-pair x12).
  */
 export function kittyMultiplier(lastLead: readonly Card[], trump: Trump): number {
   const components = decompose(lastLead, trump);

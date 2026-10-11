@@ -3,7 +3,7 @@
 // themselves are checked by the engine.
 
 import { isIdShape } from "../auth/crypto.ts";
-import { isCard } from "../engine/cards.ts";
+import { MAX_CARD_COUNT, TABLE_PLAYERS, isCard } from "../engine/cards.ts";
 import type { Card, Rank } from "../engine/cards.ts";
 import { parseDeclaration } from "../engine/round.ts";
 import { isBotLevel } from "../game/bots.ts";
@@ -18,8 +18,8 @@ export const LIMITS = {
   clubName: 40,
   identityToken: 8192,
   devSecret: 256,
-  /** The most cards a hand holds (the dealer while burying). */
-  maxCards: 33,
+  /** The most cards a hand holds (the dealer while burying: 26 and a kitty of 8 with 8 players). */
+  maxCards: 34,
 };
 
 export const TARGET_RANKS: readonly Rank[] = [5, 10, 14];
@@ -93,7 +93,7 @@ export function parseActionRequest(body: unknown): Result<ActionRequest> {
     case "bury":
     case "play": {
       const cards = parseCards(action.cards, LIMITS.maxCards);
-      if (cards === null) return badRequest("cards must be a list of card ids (0 to 107).");
+      if (cards === null) return badRequest(`cards must be a list of card ids (0 to ${MAX_CARD_COUNT - 1}).`);
       return ok({ version, action: { type: action.type, cards } });
     }
     default:
@@ -113,7 +113,9 @@ function parseSeat(value: unknown): SeatRequest | null {
 export function parseGameRequest(body: unknown): Result<GameRequest> {
   if (!isObject(body)) return badRequest("Send {\"clubId\", \"seats\", \"targetRank\"}.");
   if (typeof body.clubId !== "string" || !isIdShape(body.clubId, "c")) return badRequest("clubId is not a club id.");
-  if (!Array.isArray(body.seats) || body.seats.length !== 4) return badRequest("seats must list exactly four seats.");
+  if (!Array.isArray(body.seats) || !TABLE_PLAYERS.includes(body.seats.length)) {
+    return badRequest("seats must list 4, 6 or 8 seats.");
+  }
   const seats: SeatRequest[] = [];
   for (const value of body.seats) {
     const seat = parseSeat(value);

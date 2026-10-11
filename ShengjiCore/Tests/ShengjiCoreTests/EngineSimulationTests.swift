@@ -228,7 +228,7 @@ enum EngineTestSupport {
             guard let component = components.first else { return ([], 0) }
             let rest = components.dropFirst()
             switch component.shape {
-            case .single:
+            case .single, .set, .setTractor:
                 return walk(rest, remaining)
             case .pair:
                 guard let pair = Combos.pairs(in: remaining, trump: trump).first else { return walk(rest, remaining) }

@@ -8,8 +8,9 @@
 // (`trumpFromKitty`), every play of the current and past tricks, and the result.
 
 import type { Card, Rank } from "./cards.ts";
+import { teammatesOf } from "./rules.ts";
 import type { Play } from "./rules.ts";
-import { availableBids, declarerTeam, turn } from "./round.ts";
+import { availableBids, declarerTeam, roundPlayers, turn } from "./round.ts";
 import type { Bid, Declaration, Round, RoundPhase, RoundResult, TrickRecord } from "./round.ts";
 import { sortCards } from "./trump.ts";
 import type { Trump } from "./trump.ts";
@@ -31,7 +32,7 @@ export interface RoundView {
   /** Null only before the first round's dealer is known. */
   dealer: number | null;
   declarerTeam: number | null;
-  /** Seats of the declaring team (dealer first); empty while unknown. */
+  /** Seats of the declaring team (dealer first, then in play order); empty while unknown. */
   declarers: number[];
   /** This seat's own cards, in display order. */
   hand: Card[];
@@ -40,8 +41,8 @@ export interface RoundView {
   undealtCount: number;
   kittyCount: number;
   /**
-   * The kitty when this seat may see it: the dealer during burying (the 8 cards picked up) and
-   * after burying (the 8 cards buried); everyone once the round is finished. Otherwise null.
+   * The kitty when this seat may see it: the dealer during burying (the cards picked up) and after
+   * burying (the cards buried); everyone once the round is finished. Otherwise null.
    */
   kitty: Card[] | null;
   declaration: Declaration | null;
@@ -78,13 +79,13 @@ function copyDeclaration(d: Declaration): Declaration {
   return { player: d.player, cards: d.cards.slice(), suit: d.suit, strength: d.strength };
 }
 
-/** The view of `round` for `seat` (0...3). Shares no objects with `round`. */
+/** The view of `round` for `seat` (0...3, or up to 7 at a bigger table). Shares no objects with `round`. */
 export function viewFor(round: Round, seat: number): RoundView {
   if (!Number.isInteger(seat) || seat < 0 || seat >= round.hands.length) {
-    throw new RangeError(`seat must be 0...3, got ${seat}`);
+    throw new RangeError(`seat must be 0...${round.hands.length - 1}, got ${seat}`);
   }
   const team = declarerTeam(round);
-  const declarers = round.dealer === null ? [] : [round.dealer, (round.dealer + 2) % 4];
+  const declarers = round.dealer === null ? [] : [round.dealer, ...teammatesOf(round.dealer, roundPlayers(round))];
   return {
     seat,
     phase: round.phase,

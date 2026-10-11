@@ -52,10 +52,11 @@ struct OnlineTopBar: View {
 
     private var defenderPoints: some View {
         let points = model.defenderPoints
-        let score = Text("\(points) / \(Scoring.takeoverThreshold)")
+        let threshold = model.takeoverThreshold
+        let score = Text("\(points) / \(threshold)")
             .font(.subheadline.weight(.bold))
             .monospacedDigit()
-            .foregroundStyle(points >= Scoring.takeoverThreshold ? Theme.gold : Color.white)
+            .foregroundStyle(points >= threshold ? Theme.gold : Color.white)
         // On narrow screens the word "Defenders" goes first, so the level chips always fit.
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 4) {
@@ -69,7 +70,7 @@ struct OnlineTopBar: View {
         .lineLimit(1)
         .minimumScaleFactor(0.7)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Defenders have \(points) points. They need \(Scoring.takeoverThreshold).")
+        .accessibilityLabel("Defenders have \(points) points. They need \(threshold).")
     }
 
     private var coachButton: some View {
@@ -202,7 +203,7 @@ struct OnlineConnectionBadge: View {
 
 /// Everything the table area draws, read from the model once per update.
 struct OnlineTableSnapshot: Equatable {
-    /// Indexed by seat 0...3.
+    /// Indexed by seat (0...3 at a table of four).
     let seats: [GameSeatInfo]
     let display: TableTrickDisplay
     let trump: Trump
@@ -215,7 +216,7 @@ struct OnlineTableSnapshot: Equatable {
 
     @MainActor
     init(model: OnlineGameModel) {
-        seats = Seats.all.map { model.seatInfo($0) }
+        seats = model.seats.map { model.seatInfo($0) }
         display = model.trickDisplay
         trump = model.view?.trump ?? Trump(rank: .two, suit: nil)
         markTrumps = model.markTrumps
@@ -233,7 +234,7 @@ struct OnlineTableSnapshot: Equatable {
 }
 
 /// Partner at the top, your left and right at the sides, your play at the bottom; each seat's play near
-/// the centre. Tap to skip the last trick shown after a new one starts.
+/// the centre (6 or 8 players: `GameBigTableLayout`). Tap to skip the last trick shown after a new one starts.
 @MainActor
 struct OnlineTableArea: View {
     let model: OnlineGameModel
@@ -251,7 +252,20 @@ struct OnlineTableArea: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: snapshot.display)
     }
 
+    @ViewBuilder
     private func tableContent(size: CGSize, snapshot: OnlineTableSnapshot) -> some View {
+        if snapshot.seats.count > 4 {
+            GameBigTableLayout(seats: snapshot.seats, size: size,
+                               slot: { seat, cardWidth, maxWidth in
+                                   slot(seat, snapshot: snapshot, cardWidth: cardWidth, maxWidth: maxWidth)
+                               },
+                               center: { OnlineTableCenter(snapshot: snapshot) })
+        } else {
+            classicContent(size: size, snapshot: snapshot)
+        }
+    }
+
+    private func classicContent(size: CGSize, snapshot: OnlineTableSnapshot) -> some View {
         let cardWidth = min(44, max(18, (size.height - 150) / 4.2))
         let sideWidth = max(80, min(150, size.width * 0.36))
         return VStack(spacing: 4) {
@@ -421,7 +435,7 @@ struct OnlineActionBar: View {
                 model.pass()
             }
         case let .bury(count, enabled):
-            GamePrimaryButton(title: "Bury \(count)/\(Round.kittySize)", systemImage: "tray.and.arrow.down",
+            GamePrimaryButton(title: "Bury \(count)/\(model.kittySize)", systemImage: "tray.and.arrow.down",
                               enabled: enabled) {
                 model.bury()
             }
@@ -461,7 +475,7 @@ struct OnlineHandView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(height: CGFloat(GameHandLayout.reservedHeight(count: hand.count, width: Double(width),
-                                                             fullHand: Round.handSize)),
+                                                             fullHand: model.table.handSize)),
                alignment: .top)
         .background(widthReader)
         .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.8), value: model.selection)

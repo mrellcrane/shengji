@@ -112,6 +112,9 @@ func json(_ shape: ComboShape) -> JSON {
     case .single: return .object([("type", .string("single")), ("pairs", .int(0))])
     case .pair: return .object([("type", .string("pair")), ("pairs", .int(1))])
     case let .tractor(n): return .object([("type", .string("tractor")), ("pairs", .int(n))])
+    case let .set(n): return .object([("type", .string("set")), ("width", .int(n))])
+    case let .setTractor(width, length):
+        return .object([("type", .string("setTractor")), ("width", .int(width)), ("length", .int(length))])
     }
 }
 
@@ -146,6 +149,10 @@ func json(_ violation: FollowViolation) -> JSON {
         return .object([("case", .string("mustPlayTractor")), ("length", .int(length))])
     case let .mustPlayPairs(required):
         return .object([("case", .string("mustPlayPairs")), ("required", .int(required))])
+    case let .mustPlaySetTractor(width, length):
+        return .object([("case", .string("mustPlaySetTractor")), ("width", .int(width)), ("length", .int(length))])
+    case let .mustPlaySets(width, required):
+        return .object([("case", .string("mustPlaySets")), ("width", .int(width)), ("required", .int(required))])
     }
 }
 
@@ -178,10 +185,16 @@ func json(_ outcome: PlayOutcome) -> JSON {
 }
 
 func json(_ requirement: FollowRequirement) -> JSON {
-    .object([
+    var fields: [(String, JSON)] = [
         ("tractorLengths", .array(requirement.tractorLengths.map { .int($0) })),
         ("totalPairs", .int(requirement.totalPairs)),
-    ])
+    ]
+    // Three or more decks: every owed combination (two-deck requirements are fully described above).
+    if !requirement.isClassic || requirement.units != FollowRequirement(
+        tractorLengths: requirement.tractorLengths, totalPairs: requirement.totalPairs).units {
+        fields.append(("units", .array(requirement.units.map { json($0) })))
+    }
+    return .object(fields)
 }
 
 func json(_ declaration: Declaration) -> JSON {

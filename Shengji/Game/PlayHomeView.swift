@@ -1,7 +1,7 @@
 import SwiftUI
 import ShengjiCore
 
-/// The Play tab: start or continue a game against three bots, your moves (achievements), and how much
+/// The Play tab: start or continue a game against bots (3, 5 or 7 of them), your moves (achievements), and how much
 /// help you get. For the `game`, `dealing`, `result` and `coach` demo scenes it opens the table straight
 /// away from an in-memory game (seed 7) that never touches the saved game; `achievements` opens the badges.
 @MainActor
@@ -18,6 +18,7 @@ struct PlayHomeView: View {
     @AppStorage("play.botSpeed") private var botSpeed: GameBotSpeed = .normal
     @AppStorage("play.predictWinner") private var predictionsOn: Bool = true
     @AppStorage("play.gameLength") private var gameLength: GameLengthOption = .toAce
+    @AppStorage("play.players") private var tableOption: GameTableOption = .four
     @AppStorage("play.moveCelebrations") private var celebrationsOn: Bool = true
 
     @State private var activeGame: GameController? = nil
@@ -37,7 +38,7 @@ struct PlayHomeView: View {
     var body: some View {
         NavigationStack {
             Form {
-                PlayHomeHeader()
+                PlayHomeHeader(players: tableOption.table.players)
                 gameSection
                 OnlinePlaySection { showsOnline = true }
                 movesSection
@@ -101,9 +102,18 @@ struct PlayHomeView: View {
                     startNewGame()
                 }
             } label: {
-                PlayHomeActionLabel(title: "New game", subtitle: "You and Partner against East and West",
+                PlayHomeActionLabel(title: "New game", subtitle: tableOption.matchup,
                                     systemImage: "plus", prominent: savedGame == nil)
             }
+            Picker("Players", selection: $tableOption) {
+                ForEach(GameTableOption.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Players at the table")
+        } footer: {
+            Text("\(tableOption.detail) Applies to new games.")
         }
     }
 
@@ -194,7 +204,7 @@ struct PlayHomeView: View {
     }
 
     private func startNewGame() {
-        let settings = GameSettings(startRank: .two, targetRank: gameLength.targetRank)
+        let settings = GameSettings(startRank: .two, targetRank: gameLength.targetRank, table: tableOption.table)
         let controller = GameController.newGame(settings: settings, seed: UInt64.random(in: UInt64.min...UInt64.max),
                                                 persistence: store, isDemo: isDemoMode, coachLevel: learning.coachLevel)
         configure(controller)
@@ -228,6 +238,16 @@ struct PlayHomeView: View {
 /// Title row of the Play tab.
 @MainActor
 private struct PlayHomeHeader: View {
+    /// Players at the table a new game would have.
+    var players: Int = 4
+
+    private var blurb: String {
+        if players > 4 {
+            return "Practise against \(players - 1) friendly bots. Your partners sit in every other seat."
+        }
+        return "Practise against three friendly bots. Your partner sits opposite you."
+    }
+
     var body: some View {
         Section {
             HStack(spacing: 14) {
@@ -235,7 +255,7 @@ private struct PlayHomeHeader: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("升级 Shengji")
                         .font(.title3.weight(.bold))
-                    Text("Practise against three friendly bots. Your partner sits opposite you.")
+                    Text(blurb)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

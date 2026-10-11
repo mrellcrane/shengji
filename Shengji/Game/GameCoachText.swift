@@ -2,20 +2,26 @@ import Foundation
 import ShengjiCore
 
 /// Learner-facing sentences for the table: short, plain, second person.
-/// Pure functions so they can be checked without the UI.
+/// Pure functions so they can be checked without the UI. `players` is the table size (4, 6 or 8):
+/// seats are named "East", "Partner", "West" with 4 and by compass point with more.
 enum GameCoachText {
     // MARK: Names and grammar
 
-    static func name(_ seat: Int) -> String { Seats.name(seat) }
+    static func name(_ seat: Int, players: Int = 4) -> String { Seats.name(seat, players: players) }
 
     /// "You win" / "East wins".
-    static func subject(_ seat: Int, _ youForm: String, _ otherForm: String) -> String {
-        "\(name(seat)) \(seat == Seats.human ? youForm : otherForm)"
+    static func subject(_ seat: Int, _ youForm: String, _ otherForm: String, players: Int = 4) -> String {
+        "\(name(seat, players: players)) \(seat == Seats.human ? youForm : otherForm)"
     }
 
-    /// "you and Partner" / "East and West".
-    static func teamName(_ team: Int, capitalized: Bool = false) -> String {
-        if team == Seats.team(of: Seats.human) { return capitalized ? "You and Partner" : "you and Partner" }
+    /// "you and Partner" / "East and West" (with 6 or 8 players: "your team" / "the other team").
+    static func teamName(_ team: Int, capitalized: Bool = false, players: Int = 4) -> String {
+        let yours = team == Seats.team(of: Seats.human)
+        if players > 4 {
+            let text = yours ? "your team" : "the other team"
+            return capitalized ? text.prefix(1).uppercased() + text.dropFirst() : text
+        }
+        if yours { return capitalized ? "You and Partner" : "you and Partner" }
         return "East and West"
     }
 
@@ -51,6 +57,15 @@ enum GameCoachText {
                 }
             case .tractor:
                 return "a tractor (\(sorted.shortText))"
+            case let .set(width):
+                let count = width == 3 ? "three" : width == 4 ? "four" : String(width)
+                switch first.face {
+                case .bigJoker: return "\(count) big jokers"
+                case .smallJoker: return "\(count) small jokers"
+                case .regular: return "\(count) \(first.description)"
+                }
+            case .setTractor:
+                return "a \(comps[0].shape.name) (\(sorted.shortText))"
             }
         }
         return sorted.shortText
@@ -60,20 +75,22 @@ enum GameCoachText {
 
     static func dealerReason(_ game: GameState) -> String? {
         guard let last = game.history.last else { return nil }
+        let partner = game.players > 4 ? "the dealer's next partner" : "the dealer's partner"
         return last.result.outcome.declarersHold
-            ? "the declarers held last round, so the dealer's partner deals"
+            ? "the declarers held last round, so \(partner) deals"
             : "the defenders took over last round, so the next player deals"
     }
 
     static func dealingIntro(round: Round, game: GameState, coach: CoachLevel) -> String {
         let rank = round.trumpRank
+        let players = round.players
         let show = "Trump rank is \(rank.label): show \(article(for: rank)) to pick the trump suit."
         if let dealer = round.dealer {
             let lead: String
             if let reason = dealerReason(game) {
-                lead = "\(subject(dealer, "deal", "deals")) this round: \(reason)."
+                lead = "\(subject(dealer, "deal", "deals", players: players)) this round: \(reason)."
             } else {
-                lead = "\(subject(dealer, "deal", "deals")) this round."
+                lead = "\(subject(dealer, "deal", "deals", players: players)) this round."
             }
             return "\(lead) \(show)"
         }
@@ -85,8 +102,8 @@ enum GameCoachText {
     }
 
     /// "East declares ♥ with 2♥."
-    static func declarationLine(_ d: Declaration) -> String {
-        sentence(d.description)
+    static func declarationLine(_ d: Declaration, players: Int = 4) -> String {
+        sentence(d.description(players: players))
     }
 
     /// Title and detail for a declare button.
@@ -103,7 +120,15 @@ enum GameCoachText {
         case 1: detail = d.cards.first.map { "one \($0.description)" } ?? "one card"
         case 2: detail = d.cards.first.map { "pair of \($0.description)" } ?? "a pair"
         case 3: detail = "small jokers"
-        default: detail = "big jokers"
+        case 4: detail = "big jokers"
+        default:
+            // Three or more decks: three or four of a card.
+            let count = d.cardCount == 3 ? "three" : "\(d.cardCount)"
+            switch d.kind {
+            case .rankCards: detail = d.cards.first.map { "\(count) \($0.description)" } ?? "\(count) cards"
+            case .smallJokers: detail = "\(count) small jokers"
+            case .bigJokers: detail = "\(count) big jokers"
+            }
         }
         return (title, detail)
     }
@@ -116,20 +141,23 @@ enum GameCoachText {
     /// Guided/coached nudge when you first could declare. If an opponent holds the declaration,
     /// it keeps their line on screen and adds that you can beat it; if it's your partner's, it says
     /// there's no need; if it's yours, it suggests strengthening it to a pair.
-    static func canDeclareNudge(_ options: [Declaration], current: Declaration?, coach: CoachLevel) -> String? {
+    static func canDeclareNudge(_ options: [Declaration], current: Declaration?, coach: CoachLevel,
+                                players: Int = 4) -> String? {
         guard coach != .solo, let first = options.first else { return nil }
         if let current, current.player == Seats.human {
-            // You already hold the declaration: the only option is turning your single into a pair.
+            // You already hold the declaration: the only option is more of the same card (a single becomes a pair).
             guard coach == .guided, let card = first.cards.first else { return "You can strengthen your declaration." }
-            return "You now have a pair of \(card.description). Strengthen your declaration so it's harder to beat."
+            let count = first.cardCount == 3 ? "three" : "\(first.cardCount)"
+            let shown = first.cardCount == 2 ? "a pair of \(card.description)" : "\(count) \(card.description)"
+            return "You now have \(shown). Strengthen your declaration so it's harder to beat."
         }
-        if let current, current.player == Seats.partner(of: Seats.human) {
+        if let current, current.player != Seats.human, Seats.team(of: current.player) == Seats.team(of: Seats.human) {
             // Beating your partner is allowed but rarely wise: their declaration already helps your team.
-            return join([declarationLine(current),
+            return join([declarationLine(current, players: players),
                          coach == .guided ? "That's your partner, so it helps your team too. You don't need to beat it." : nil])
         }
         if let current, current.player != Seats.human {
-            return join([declarationLine(current),
+            return join([declarationLine(current, players: players),
                          coach == .guided ? "You can beat it: tap a Declare button below." : "You can beat it."])
         }
         guard coach == .guided else { return "You can declare now." }
@@ -143,32 +171,35 @@ enum GameCoachText {
     /// Why the dealer is the dealer (said once the deal closes).
     static func dealerExplanation(round: Round, game: GameState) -> String {
         guard let dealer = round.dealer else { return "" }
+        let players = round.players
         let team = Seats.team(of: dealer)
-        let declarers = "\(teamName(team, capitalized: true)) are the declarers."
+        let teamText = teamName(team, capitalized: true, players: players)
+        let declarers = "\(teamText) are the declarers."
+        let dealerName = name(dealer, players: players)
         if game.history.isEmpty {
             if let d = round.declaration, d.player == dealer {
-                let whose = dealer == Seats.human ? "Your" : "\(name(dealer))'s"
-                return "\(whose) declaration won, so \(dealer == Seats.human ? "you deal" : "\(name(dealer)) deals"). \(declarers)"
+                let whose = dealer == Seats.human ? "Your" : "\(dealerName)'s"
+                return "\(whose) declaration won, so \(dealer == Seats.human ? "you deal" : "\(dealerName) deals"). \(declarers)"
             }
-            var text = "Nobody declared, so \(dealer == Seats.human ? "you deal" : "\(name(dealer)) deals") this first round."
+            var text = "Nobody declared, so \(dealer == Seats.human ? "you deal" : "\(dealerName) deals") this first round."
             if let kitty = kittyTrumpLine(round: round) { text += " " + kitty }
             return "\(text) \(declarers)"
         }
         var text: String
         if let reason = dealerReason(game) {
-            text = "\(subject(dealer, "deal", "deals")): \(reason)."
+            text = "\(subject(dealer, "deal", "deals", players: players)): \(reason)."
         } else {
-            text = "\(subject(dealer, "deal", "deals")) this round."
+            text = "\(subject(dealer, "deal", "deals", players: players)) this round."
         }
         if round.declaration == nil, let kitty = kittyTrumpLine(round: round) { text += " " + kitty }
         return "\(text) \(declarers)"
     }
 
     /// "East picks up the kitty and buries 8 cards." / "You pick up the kitty and bury 8 cards."
-    static func kittyPickupLine(dealer: Int?) -> String {
-        guard let dealer else { return "The dealer picks up the kitty and buries \(Round.kittySize) cards." }
+    static func kittyPickupLine(dealer: Int?, kittySize: Int = Round.kittySize, players: Int = 4) -> String {
+        guard let dealer else { return "The dealer picks up the kitty and buries \(kittySize) cards." }
         let bury = dealer == Seats.human ? "bury" : "buries"
-        return "\(subject(dealer, "pick", "picks")) up the kitty and \(bury) \(Round.kittySize) cards."
+        return "\(subject(dealer, "pick", "picks", players: players)) up the kitty and \(bury) \(kittySize) cards."
     }
 
     /// A shorter reason used in your bury prompt (the prompt itself says you're the dealer).
@@ -180,8 +211,9 @@ enum GameCoachText {
             return join(["Nobody declared, so you deal.", kitty])
         }
         guard let last = game.history.last else { return kitty }
+        let partner = game.players > 4 ? "the dealer's next partner" : "the dealer's partner"
         let reason = last.result.outcome.declarersHold
-            ? "Your team held the deal, so the dealer's partner deals."
+            ? "Your team held the deal, so \(partner) deals."
             : "Your team took over the deal."
         return join([reason, kitty])
     }
@@ -199,12 +231,13 @@ enum GameCoachText {
 
     // MARK: Playing
 
-    static func throwFailedLine(player: Int, forced: [Card], blocker: Int, trump: Trump) -> String {
+    static func throwFailedLine(player: Int, forced: [Card], blocker: Int, trump: Trump, players: Int = 4) -> String {
         let played = describePlay(forced, trump: trump)
+        let blockerName = name(blocker, players: players)
         if player == Seats.human {
-            return "Your throw failed: \(name(blocker)) could beat part of it, so only \(played) was played."
+            return "Your throw failed: \(blockerName) could beat part of it, so only \(played) was played."
         }
-        return "\(name(player))'s throw failed: \(blocker == Seats.human ? "you" : name(blocker)) could beat part of it, so only \(played) was played."
+        return "\(name(player, players: players))'s throw failed: \(blocker == Seats.human ? "you" : blockerName) could beat part of it, so only \(played) was played."
     }
 
     /// Concept tag for an illegal move.
@@ -214,7 +247,8 @@ enum GameCoachText {
             switch violation {
             case .mustFollowSuit: return "Follow suit"
             case .mustPlayPairs: return "Follow a pair"
-            case .mustPlayTractor: return "Follow a tractor"
+            case .mustPlayTractor, .mustPlaySetTractor: return "Follow a tractor"
+            case .mustPlaySets: return "Follow a triple"
             case .wrongCount: return "Card count"
             case .cardsNotInHand: return nil
             }
@@ -234,7 +268,7 @@ enum GameCoachText {
         guard case let .illegalFollow(violation) = error else { return nil }
         switch violation {
         case .mustFollowSuit: return lead.count == 1 ? .cardBeats : .legalFollow
-        case .mustPlayPairs, .mustPlayTractor: return .legalFollow
+        case .mustPlayPairs, .mustPlayTractor, .mustPlaySets, .mustPlaySetTractor: return .legalFollow
         case .wrongCount, .cardsNotInHand: return nil
         }
     }
@@ -252,6 +286,7 @@ enum GameCoachText {
                                  winnerIsDefender: Bool, isLastTrick: Bool) -> (text: String, concept: String?)? {
         let full = detailed || coach == .guided
         if !full && coach == .solo { return nil }
+        let players = TableSize(players: trick.plays.count).players
         var concept: String?
         var parts: [String] = []
         if full {
@@ -259,7 +294,7 @@ enum GameCoachText {
             parts.append(why.text)
             concept = why.concept
         } else {
-            parts.append("\(subject(trick.winner, "win", "wins")) the trick.")
+            parts.append("\(subject(trick.winner, "win", "wins", players: players)) the trick.")
         }
         if let pts = pointsLine(points: trick.points, winnerIsDefender: winnerIsDefender) { parts.append(pts) }
         if isLastTrick {
@@ -274,6 +309,10 @@ enum GameCoachText {
     /// "Partner wins with A♠, the highest spade." / "East ruffs with 3♥, a trump."
     static func whyWon(_ trick: TrickRecord, trump: Trump) -> (text: String, concept: String?) {
         let winnerSeat = trick.winner
+        let players = TableSize(players: trick.plays.count).players
+        func subject(_ seat: Int, _ youForm: String, _ otherForm: String) -> String {
+            GameCoachText.subject(seat, youForm, otherForm, players: players)
+        }
         guard let lead = trick.plays.first, let leadCard = lead.cards.first,
               let win = trick.plays.first(where: { $0.player == winnerSeat }), !win.cards.isEmpty else {
             return ("\(subject(winnerSeat, "win", "wins")) the trick.", nil)
@@ -305,7 +344,7 @@ enum GameCoachText {
                 && shapes(p.cards, trump: trump) == winShape
                 && keyStrength(p.cards, trump: trump) == winKey
         }) {
-            let tiedName = tied.player == Seats.human ? "You" : name(tied.player)
+            let tiedName = tied.player == Seats.human ? "You" : name(tied.player, players: players)
             return ("\(subject(winnerSeat, "win", "wins")) with \(what). \(tiedName) played an equal card, "
                     + "and a tie goes to whoever played first.", "Ties")
         }
@@ -327,9 +366,12 @@ enum GameCoachText {
         case .pair:
             shapeWord = " pair"
             concept = "Pairs"
-        case .tractor:
+        case .tractor, .setTractor:
             shapeWord = " tractor"
             concept = "Tractors"
+        case let .set(width):
+            shapeWord = width == 3 ? " triple" : " set"
+            concept = "Triples"
         }
         if win.player == lead.player, lead.cards.count > 1 {
             let matched = trick.plays.dropFirst().contains { p in
@@ -381,17 +423,20 @@ enum GameCoachText {
     // MARK: Round result
 
     /// "Defenders won the last trick with a pair: kitty 15 x 4 = 60"
-    static func kittyLine(_ result: RoundResult) -> String {
+    static func kittyLine(_ result: RoundResult, decks: Int = 2) -> String {
         if result.kittyMultiplier <= 0 {
             if result.kittyPoints == 0 { return "Declarers won the last trick. The kitty had no points anyway." }
             return "Declarers won the last trick, so the kitty's \(result.kittyPoints) points don't count."
         }
         let shape: String
-        switch result.kittyMultiplier / 2 {
+        let size = result.kittyMultiplier / 2
+        switch size {
         case 1: shape = "a single"
         case 2: shape = "a pair"
-        case 4: shape = "a tractor"
-        default: shape = "a long tractor"
+        case 3: shape = "a triple"
+        case 4 where decks <= 2: shape = "a tractor"
+        case 4: shape = "a 4-card tractor or set"
+        default: shape = decks <= 2 ? "a long tractor" : "a \(size)-card combination"
         }
         if result.kittyPoints == 0 {
             return "Defenders won the last trick with \(shape), but the kitty had no points."
@@ -401,8 +446,9 @@ enum GameCoachText {
     }
 
     /// One takeaway sentence for the results screen.
-    static func takeaway(_ summary: RoundSummary) -> String {
+    static func takeaway(_ summary: RoundSummary, decks: Int = 2) -> String {
         let result = summary.result
+        let threshold = Scoring.takeoverThreshold(decks: decks)
         let humanTeam = Seats.team(of: Seats.human)
         let humanDeclares = result.declarerTeam == humanTeam
         if result.kittyMultiplier > 0 && result.kittyPoints > 0 {
@@ -411,12 +457,12 @@ enum GameCoachText {
                 : "Tip: winning the last trick as defenders multiplies the kitty. Save a strong pair for the end."
         }
         if humanDeclares {
-            if result.defenderPoints >= Scoring.takeoverThreshold {
+            if result.defenderPoints >= threshold {
                 return "Tip: as declarers, draw out trumps early so the defenders can't ruff your winners."
             }
             return "Tip: nice holding! Play your sure winners before the defenders run you out of a suit."
         }
-        if result.defenderPoints >= Scoring.takeoverThreshold {
+        if result.defenderPoints >= threshold {
             return "Tip: you took over the deal. Next round your team's level sets the trump rank."
         }
         return "Tip: as a defender, give 5s, 10s and Kings to your partner when they are winning a trick."

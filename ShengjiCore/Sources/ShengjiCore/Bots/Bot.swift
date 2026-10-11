@@ -37,13 +37,13 @@ public struct BotKnowledge: Sendable {
 
     /// Knowledge of `seat` in an offline round; seats are absolute (`voids[2]` is North's).
     public init(round: Round, seat: Int) {
-        let me = ((seat % 4) + 4) % 4
+        let me = Seats.normalized(seat, players: round.players)
         // Once the dealer has buried, the kitty holds exactly the cards they chose.
         let phase: RoundPhase = round.phase
         let buried: Bool = phase == RoundPhase.playing || phase == RoundPhase.finished
         self.init(seat: me, trump: round.trump, hand: round.hands.indices.contains(me) ? round.hands[me] : [],
                   tricks: round.tricks, currentTrick: round.currentTrick,
-                  buriedKitty: buried && round.dealer == me ? round.kitty : [])
+                  buriedKitty: buried && round.dealer == me ? round.kitty : [], table: round.table)
     }
 
     /// Knowledge of the viewer of `view`; seats are viewer-relative (the viewer is seat 0, `voids[2]`
@@ -52,14 +52,15 @@ public struct BotKnowledge: Sendable {
     public init(view: SeatView) {
         let buried = view.phase == .playing || view.phase == .finished
         self.init(seat: 0, trump: view.trump, hand: view.hand, tricks: view.tricks, currentTrick: view.currentTrick,
-                  buriedKitty: buried && view.dealer == 0 ? view.kitty ?? [] : [])
+                  buriedKitty: buried && view.dealer == 0 ? view.kitty ?? [] : [], table: view.table)
     }
 
     private init(seat: Int, trump: Trump, hand: [Card], tricks: [TrickRecord], currentTrick: [Play],
-                 buriedKitty: [Card]) {
+                 buriedKitty: [Card], table: TableSize) {
         self.seat = seat
         self.trump = trump
-        var known = [Bool](repeating: false, count: 108)
+        let deck = table == .four ? BotKnowledge.fullDeck : Deck.cards(decks: table.decks)
+        var known = [Bool](repeating: false, count: deck.count)
         func mark(_ cards: [Card]) {
             for card in cards where known.indices.contains(card.id) { known[card.id] = true }
         }
@@ -70,11 +71,11 @@ public struct BotKnowledge: Sendable {
         for play in currentTrick { mark(play.cards) }
         mark(buriedKitty)
         var unseen: [Card] = []
-        unseen.reserveCapacity(108)
-        for card in BotKnowledge.fullDeck where !known[card.id] { unseen.append(card) }
+        unseen.reserveCapacity(deck.count)
+        for card in deck where !known[card.id] { unseen.append(card) }
         self.unseen = unseen
 
-        var shown = [Set<SuitGroup>](repeating: [], count: 4)
+        var shown = [Set<SuitGroup>](repeating: [], count: table.players)
         for trick in tricks {
             BotKnowledge.noteVoids(trick.plays, trump: trump, into: &shown)
         }
@@ -135,29 +136,32 @@ public struct Bot: Sendable {
         self.level = level
     }
 
-    /// Seat in 0...3.
-    var normalizedSeat: Int { ((seat % 4) + 4) % 4 }
+    /// Seat in 0...3 (texts name seats from here; the table's own size wraps it again).
+    var normalizedSeat: Int { seat >= 0 ? seat : ((seat % 4) + 4) % 4 }
+
+    /// This bot's seat at an offline round's table.
+    private func seat(in round: Round) -> Int { Seats.normalized(seat, players: round.players) }
 
     // MARK: Offline (Round)
 
     /// Called during dealing (after each card this seat receives, and once when dealing completes).
     /// Returns a declaration from `round.availableDeclarations(for: seat)` or nil. Never overrides its partner.
     public func declaration(in round: Round) -> Declaration? {
-        let me = normalizedSeat
+        let me = seat(in: round)
         let available = round.availableDeclarations(for: me).map { $0.withPlayer(0) }
         let choice = declaration(view: round.seatView(for: me), available: available)
         return choice?.withPlayer(me)
     }
 
-    /// Dealer only, phase `.burying`: exactly 8 cards from the hand to bury.
+    /// Dealer only, phase `.burying`: exactly `round.kittySize` cards from the hand to bury.
     public func cardsToBury(in round: Round) -> BotDecision {
-        cardsToBury(view: round.seatView(for: normalizedSeat)) ?? BotText.notBurying()
+        cardsToBury(view: round.seatView(for: seat(in: round))) ?? BotText.notBurying()
     }
 
     /// Phase `.playing`, `round.turn == seat`: a legal lead or follow. Leads that are throws are
     /// only made when guaranteed to succeed against the unseen cards.
     public func decide(in round: Round) -> BotDecision {
-        let view = round.seatView(for: normalizedSeat)
+        let view = round.seatView(for: seat(in: round))
         guard view.phase == .playing else { return BotText.waiting() }
         return decide(view: view) ?? BotText.waiting()
     }

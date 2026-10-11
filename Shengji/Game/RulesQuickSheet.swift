@@ -4,6 +4,9 @@ import ShengjiCore
 /// Eight short reminders with example cards, opened from the table menu.
 @MainActor
 struct RulesQuickSheet: View {
+    /// Seats at the table (6 or 8 add triples and scale the point lines).
+    var players: Int = 4
+
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -14,7 +17,7 @@ struct RulesQuickSheet: View {
                 } footer: {
                     Text("The examples use this trump: hearts are the trump suit and 2 is the trump rank.")
                 }
-                ForEach(GameRuleReminder.all) { rule in
+                ForEach(GameRuleReminder.all(players: players)) { rule in
                     RulesQuickRow(rule: rule)
                 }
             }

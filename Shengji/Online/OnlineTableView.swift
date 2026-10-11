@@ -92,7 +92,7 @@ struct OnlineTableView: View {
         case .coach:
             CoachSheet(conversation: coach)
         case .rules:
-            RulesQuickSheet()
+            RulesQuickSheet(players: model.table.players)
         case .whatHappened:
             OnlineWhatHappenedSheet(info: model.whatHappened, players: model.players, trump: model.view?.trump,
                                     lastRound: model.lastRoundSummary) { summary in

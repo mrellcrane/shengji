@@ -3,7 +3,8 @@
 // leading and following), for both levels, the port must choose exactly the cards the Swift bots
 // chose, in the same order. Each round is rebuilt with the TypeScript engine (its parity is proven
 // by vectors.test.ts) from the recorded deal and moves, and each view comes from `toSeatView`, the
-// view the server sends.
+// view the server sends. Rounds at tables of 6 and 8 players (a `players` field) follow the classic
+// ones in both lists.
 // Regenerate with: cd ShengjiCore && swift run ShengjiVectors ../server/test/vectors
 
 import assert from "node:assert/strict";
@@ -27,6 +28,7 @@ interface Step {
 }
 
 interface BotRound {
+  players?: number;
   seed: number;
   mode: "online" | "offline";
   trumpRank: Rank;
@@ -48,8 +50,15 @@ interface BotsFile {
 }
 
 const LEVELS: readonly BotLevel[] = ["standard", "beginner"];
-const PLAYERS: SeatPlayer[] = [0, 1, 2, 3].map((seat) => ({ name: `Seat ${seat}`, isBot: true, userID: null }));
-const SEAT_NAMES = ["you", "right", "partner", "left"];
+
+function seatPlayers(players: number): SeatPlayer[] {
+  return E.allSeats(players).map((seat) => ({ name: `Seat ${seat}`, isBot: true, userID: null }));
+}
+
+/** A viewer-relative seat in words: "you", "right", "partner" and "left" with 4 players, else "seat 3". */
+function seatName(seat: number, players: number): string {
+  return players === 4 ? ["you", "right", "partner", "left"][seat] : seat === 0 ? "you" : `seat ${seat}`;
+}
 
 function sameCards(a: readonly Card[], b: readonly Card[]): boolean {
   return a.length === b.length && a.every((card, index) => card === b[index]);
@@ -62,15 +71,16 @@ function show(cards: readonly Card[], trump: Trump): string {
 
 /** The situation a decision was made in, in words, for mismatch reports. */
 function situation(view: SeatView): string {
+  const n = view.handCounts.length;
   const lines = [
-    `phase ${view.phase}, trump ${E.trumpDescription(view.trump)}, dealer ${view.dealer === null ? "none" : SEAT_NAMES[view.dealer]}`,
+    `${n} players, phase ${view.phase}, trump ${E.trumpDescription(view.trump)}, dealer ${view.dealer === null ? "none" : seatName(view.dealer, n)}`,
     `hand: ${E.shortText(E.sortCards(view.trump, view.hand))}`,
   ];
   if (view.declaration !== null) {
-    lines.push(`declaration: ${SEAT_NAMES[view.declaration.player]} ${E.shortText(view.declaration.cards)}`);
+    lines.push(`declaration: ${seatName(view.declaration.player, n)} ${E.shortText(view.declaration.cards)}`);
   }
   if (view.currentTrick.length > 0) {
-    lines.push(`trick so far: ${view.currentTrick.map((p) => `${SEAT_NAMES[p.player]} ${E.shortText(p.cards)}`).join(", ")}`);
+    lines.push(`trick so far: ${view.currentTrick.map((p) => `${seatName(p.player, n)} ${E.shortText(p.cards)}`).join(", ")}`);
   }
   if (view.tricks.length > 0) lines.push(`tricks played: ${view.tricks.length}`);
   return lines.join("\n    ");
@@ -83,7 +93,7 @@ function unseenCount(view: SeatView, group: E.SuitGroup): number {
   for (const play of view.currentTrick) for (const card of play.cards) known.add(card);
   if (view.phase === "playing" && view.dealer === 0) for (const card of view.kitty ?? []) known.add(card);
   let count = 0;
-  for (let card = 0; card < E.DECK_SIZE; card++) if (!known.has(card) && E.groupOf(view.trump, card) === group) count++;
+  for (const card of E.deckCards(E.viewTable(view).decks)) if (!known.has(card) && E.groupOf(view.trump, card) === group) count++;
   return count;
 }
 
@@ -108,6 +118,8 @@ function newCoverage() {
     throwRuffs: 0,
     shortSuitRuffs: 0,
     seats: [0, 0, 0, 0],
+    /** Tables of 6 and 8 players: rounds, and standard leads and follows with sets of three or more. */
+    bigTables: { rounds: { six: 0, eight: 0 }, setLeads: 0, setFollows: 0, setDeclarations: 0, decisions: 0 },
   };
 }
 
@@ -133,15 +145,20 @@ function replay(): Replay {
   const fallbacksBefore = botDiagnostics.fallbacks;
 
   for (const entry of [...file.rounds, ...file.deals]) {
-    const round: Round = E.newRound(entry.trumpRank, entry.dealer, entry.deck);
-    const game = E.newGame({ startRank: entry.trumpRank, targetRank: 14 });
+    const table = E.tableSize(entry.players ?? 4);
+    const big = table.players > 4;
+    const players = seatPlayers(table.players);
+    const round: Round = E.newRound(entry.trumpRank, entry.dealer, entry.deck, table);
+    const game = E.newGame({ startRank: entry.trumpRank, targetRank: 14, table });
     coverage.rounds[entry.mode] += 1;
+    if (big) coverage.bigTables.rounds[table.players === 6 ? "six" : "eight"] += 1;
     const label = (part: string, index: number, step: Step): string =>
-      `seed ${entry.seed} (${entry.mode}), ${part} step ${index}, absolute seat ${step.seat}`;
+      `seed ${entry.seed} (${entry.mode}, ${table.players} players), ${part} step ${index}, absolute seat ${step.seat}`;
 
     /** Compares both levels' choices with Swift's; returns the move to make (Swift's, so the replay stays in step). */
     const compare = (context: string, step: Step, view: SeatView, choose: (level: BotLevel) => Card[]): Card[] => {
       coverage.decisions += 1;
+      if (big) coverage.bigTables.decisions += 1;
       for (const level of LEVELS) {
         const expected = step[level];
         const actual = choose(level);
@@ -174,7 +191,7 @@ function replay(): Replay {
         assert.equal(last, step.seat, `${context}: the step's seat did not receive the last card`);
       }
       if (entry.mode === "online") assert.equal(E.biddingTurn(round), step.seat, `${context}: not this seat's turn to bid`);
-      const view = E.toSeatView(game, round, step.seat, PLAYERS);
+      const view = E.toSeatView(game, round, step.seat, players);
       const available =
         entry.mode === "online"
           ? (view.bidding?.available ?? [])
@@ -185,6 +202,7 @@ function replay(): Replay {
         const choice = declaration(view, available, level);
         if (choice !== null) {
           coverage.declared[level] += 1;
+          if (big && level === "standard" && choice.strength >= 5) coverage.bigTables.setDeclarations += 1;
           if (level === "standard" && choice.suit === null) coverage.noTrumpDeclared += 1;
           if (level === "standard" && view.declaration !== null && view.declaration.player !== 0) coverage.overridden += 1;
         }
@@ -210,7 +228,7 @@ function replay(): Replay {
       const step = entry.burying;
       const context = label("burying", 0, step);
       assert.equal(round.dealer, step.seat, `${context}: not the dealer`);
-      const view = E.toSeatView(game, round, step.seat, PLAYERS);
+      const view = E.toSeatView(game, round, step.seat, players);
       coverage.buries += 1;
       const move = compare(context, step, view, (level) => {
         const cards = cardsToBury(view, level) ?? [];
@@ -228,9 +246,9 @@ function replay(): Replay {
     entry.playing.forEach((step, index) => {
       const context = label("playing", index, step);
       assert.equal(E.turn(round), step.seat, `${context}: not this seat's turn`);
-      const view = E.toSeatView(game, round, step.seat, PLAYERS);
+      const view = E.toSeatView(game, round, step.seat, players);
       const leading = view.currentTrick.length === 0;
-      coverage.seats[step.seat] += 1;
+      if (step.seat < 4) coverage.seats[step.seat] += 1;
       if (leading) coverage.leads += 1;
       else coverage.follows += 1;
       const lead = leading ? [] : view.currentTrick[0].cards;
@@ -241,12 +259,14 @@ function replay(): Replay {
         if (level === "standard" && leading && cards.length > 0) {
           if (E.isThrow(cards, view.trump)) coverage.throws += 1;
           if (E.decompose(cards, view.trump).some((c) => c.shape.type === "tractor")) coverage.tractorLeads += 1;
+          if (big && E.maxCopies(cards) >= 3) coverage.bigTables.setLeads += 1;
         }
+        if (big && level === "standard" && !leading && E.maxCopies(lead) >= 3) coverage.bigTables.setFollows += 1;
         if (level === "standard" && ledGroup !== null && ledGroup !== "trump" && cards.length > 0) {
           if (cards.every((card) => E.isTrump(view.trump, card))) {
             coverage.ruffs += 1;
-            const later = 3 - view.currentTrick.length;
-            const laterOpponents = later >= 3 ? 2 : later >= 1 ? 1 : 0;
+            const later = table.players - 1 - view.currentTrick.length;
+            const laterOpponents = Math.ceil(later / 2);
             if (E.isThrow(lead, view.trump)) coverage.throwRuffs += 1;
             else if (laterOpponents > 0 && unseenCount(view, ledGroup) < Math.max(1, lead.length * laterOpponents)) {
               coverage.shortSuitRuffs += 1;
@@ -293,4 +313,8 @@ test("bots.json covers every kind of decision", () => {
   // Rare at random, so ShengjiVectors keeps extra rounds that hold them (BotVectors `ruffRounds`).
   assert.ok(c.throwRuffs >= 30 && c.shortSuitRuffs >= 100, `few ruffs of throws or of short suits: ${report}`);
   assert.ok(c.seats.every((n) => n >= 5000), `every seat decides: ${report}`);
+  // Tables of 6 and 8 players: both sizes, sets led and followed, and declarations of three or more.
+  const b = c.bigTables;
+  assert.ok(b.rounds.six >= 50 && b.rounds.eight >= 50 && b.decisions >= 10000, `bigger tables: ${report}`);
+  assert.ok(b.setLeads >= 30 && b.setFollows >= 150 && b.setDeclarations >= 20, `bigger tables: ${report}`);
 });

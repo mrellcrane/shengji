@@ -47,10 +47,11 @@ struct GameTopBar: View {
 
     private var defenderPoints: some View {
         let points = controller.defenderPoints
-        let score = Text("\(points) / \(Scoring.takeoverThreshold)")
+        let threshold = controller.takeoverThreshold
+        let score = Text("\(points) / \(threshold)")
             .font(.subheadline.weight(.bold))
             .monospacedDigit()
-            .foregroundStyle(points >= Scoring.takeoverThreshold ? Theme.gold : Color.white)
+            .foregroundStyle(points >= threshold ? Theme.gold : Color.white)
         // On narrow screens the word "Defenders" goes first, so the level chips always fit.
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 4) {
@@ -64,7 +65,7 @@ struct GameTopBar: View {
         .lineLimit(1)
         .minimumScaleFactor(0.75)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Defenders have \(points) points. They need \(Scoring.takeoverThreshold).")
+        .accessibilityLabel("Defenders have \(points) points. They need \(threshold).")
     }
 
     // MARK: Trump and dealer
@@ -93,7 +94,7 @@ struct GameTopBar: View {
     private var dealerView: some View {
         let text: String
         if let dealer = controller.round.dealer {
-            text = "Dealer: \(Seats.name(dealer))"
+            text = "Dealer: \(controller.name(dealer))"
         } else {
             text = "Dealer: first to declare"
         }

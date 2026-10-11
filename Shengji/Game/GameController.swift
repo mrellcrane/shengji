@@ -24,8 +24,9 @@ final class GameController: Identifiable {
     var speed: GameBotSpeed
     /// Replaces the speed's delay scale; 0 means no delays at all (tests, headless runs).
     @ObservationIgnored var delayScaleOverride: Double?
-    /// Seats played by bots. East, Partner and West normally; demos and headless runs add seat 0.
-    var botSeats: Set<Int> = [1, 2, 3]
+    /// Seats played by bots: everyone but you normally (East, Partner and West at a table of four);
+    /// demos and headless runs add seat 0.
+    var botSeats: Set<Int>
     /// Demo controllers live in memory only: they never save and never touch the saved game.
     let isDemo: Bool
     /// When true the bots and the dealer wait (used by the dealing demo). Any action of yours resumes.
@@ -110,6 +111,7 @@ final class GameController: Identifiable {
         self.coachLevel = coachLevel
         self.speed = speed
         self.predictionsEnabled = predictionsEnabled
+        self.botSeats = Set(1..<round.players)
         self.stage = GameController.stage(for: round)
         restoreUIState()
     }
@@ -155,7 +157,8 @@ final class GameController: Identifiable {
             if let declaration = round.declaration, declaration.player == Seats.human, !isBot(Seats.human) {
                 // Saved just after you declared (the stage isn't saved): the bots still get their answer.
                 stage = .botsRespond
-                banner = GameCoachMessage(GameCoachText.declarationLine(declaration), concept: "Declaring", kind: .success)
+                banner = GameCoachMessage(GameCoachText.declarationLine(declaration, players: players), concept: "Declaring",
+                                          kind: .success)
             } else {
                 openDeclareWindow(messages: [])
             }
@@ -166,12 +169,13 @@ final class GameController: Identifiable {
                 refreshBuryPrompt()
             } else {
                 banner = GameCoachMessage(GameCoachText.join([GameCoachText.dealerExplanation(round: round, game: game),
-                                                              GameCoachText.kittyPickupLine(dealer: round.dealer)]),
+                                                              kittyPickupLine]),
                                           concept: "The kitty")
             }
         case .playing:
             if round.tricks.isEmpty && round.currentTrick.isEmpty {
-                banner = GameCoachMessage(GameCoachText.sentence("\(GameCoachText.subject(round.leader, "lead", "leads")) the first trick"))
+                banner = GameCoachMessage(GameCoachText.sentence(
+                    "\(GameCoachText.subject(round.leader, "lead", "leads", players: players)) the first trick"))
             } else {
                 banner = GameCoachMessage("Welcome back! This is trick \(round.tricks.count + 1).")
             }
@@ -189,6 +193,20 @@ final class GameController: Identifiable {
     var delayScale: Double { delayScaleOverride ?? speed.delayScale }
 
     func isBot(_ seat: Int) -> Bool { botSeats.contains(seat) }
+
+    /// Seats at this table (4, 6 or 8).
+    var players: Int { round.players }
+
+    /// Every seat, you first.
+    var seats: [Int] { Seats.all(players: players) }
+
+    /// How the table names a seat: "East", "Partner" with 4 players, compass points with more.
+    func name(_ seat: Int) -> String { Seats.name(seat, players: players) }
+
+    /// "East picks up the kitty and buries 8 cards." for this table.
+    private var kittyPickupLine: String {
+        GameCoachText.kittyPickupLine(dealer: round.dealer, kittySize: round.kittySize, players: players)
+    }
 
     func hand(of seat: Int) -> [Card] {
         round.hands.indices.contains(seat) ? round.hands[seat] : []
@@ -219,9 +237,16 @@ final class GameController: Identifiable {
 
     var isFirstRound: Bool { game.history.isEmpty }
 
-    var dealtCount: Int { round.hands.reduce(0) { $0 + $1.count } - (round.phase == .dealing ? 0 : Round.kittySize) }
+    var dealtCount: Int { round.hands.reduce(0) { $0 + $1.count } - (round.phase == .dealing ? 0 : round.kittySize) }
 
-    static let cardsToDeal = Round.handSize * 4
+    /// Cards dealt to the players (100 with 4 players).
+    var cardsToDeal: Int { round.handSize * players }
+
+    /// Points the defenders need to take over the deal: 40 per deck (80 with 4 players).
+    var takeoverThreshold: Int { Scoring.takeoverThreshold(decks: round.table.decks) }
+
+    /// Points in all the cards: 100 per deck.
+    var totalPoints: Int { round.table.totalPoints }
 
     /// False while dealing before anyone has declared (the suit is still open).
     var isTrumpSet: Bool { !(round.phase == .dealing && round.declaration == nil) }
@@ -258,7 +283,7 @@ final class GameController: Identifiable {
 
     var canPlay: Bool { isHumanTurn && isPlausiblePlay }
 
-    var canBury: Bool { isHumanBurying && selection.count == Round.kittySize }
+    var canBury: Bool { isHumanBurying && selection.count == round.kittySize }
 
     /// Hints are offered in Guided and Coached.
     var hintsAvailable: Bool { coachLevel != .solo }
@@ -322,10 +347,11 @@ final class GameController: Identifiable {
     func seatInfo(_ seat: Int) -> GameSeatInfo {
         let turn = turnSeat
         let display = trickDisplay
-        return GameSeatInfo(seat: seat, name: Seats.name(seat), team: Seats.team(of: seat),
+        return GameSeatInfo(seat: seat, name: name(seat), team: Seats.team(of: seat),
                             cardCount: cardCount(of: seat), role: role(of: seat),
                             isTurn: turn == seat, isThinking: isBotThinking && turn == seat,
-                            isTrickWinner: display.winner == seat, isLeading: leadingSeat == seat)
+                            isTrickWinner: display.winner == seat, isLeading: leadingSeat == seat,
+                            shortName: Seats.shortName(seat, players: players))
     }
 
     var primaryAction: GamePrimaryAction {
@@ -344,20 +370,20 @@ final class GameController: Identifiable {
     var statusText: String {
         switch stage {
         case .dealing:
-            return autoplayPaused ? "Dealing paused" : "Dealing \(dealtCount)/\(GameController.cardsToDeal)"
+            return autoplayPaused ? "Dealing paused" : "Dealing \(dealtCount)/\(cardsToDeal)"
         case .declareWindow:
             return availableDeclarations.isEmpty ? "All cards dealt" : "Last chance to declare"
         case .botsRespond:
             return "Others may respond…"
         case .burying:
-            if isHumanBurying { return "Pick 8 to bury" }
-            return "\(round.dealer.map(Seats.name) ?? "Dealer") is burying…"
+            if isHumanBurying { return "Pick \(round.kittySize) to bury" }
+            return "\(round.dealer.map(name) ?? "Dealer") is burying…"
         case .playing:
             if isHumanTurn {
                 let lead = round.currentLead
                 return lead.isEmpty ? "Your lead" : "Play \(lead.count) card\(lead.count == 1 ? "" : "s")"
             }
-            if let turn = round.turn { return "\(Seats.name(turn)) to play" }
+            if let turn = round.turn { return "\(name(turn)) to play" }
             return ""
         case .trickPause:
             return "Tap the table to go on"
@@ -510,7 +536,7 @@ final class GameController: Identifiable {
         }
         if round.isDealingComplete {
             // Every bot gets one last look once the deal is complete.
-            for seat in [1, 2, 3, 0] where isBot(seat) {
+            for seat in Array(seats.dropFirst()) + [Seats.human] where isBot(seat) {
                 if let line = botDeclares(seat) { messages.append(line) }
             }
             openDeclareWindow(messages: messages)
@@ -532,7 +558,8 @@ final class GameController: Identifiable {
         }
         guard !hadDeclarationOption else { return }
         hadDeclarationOption = true
-        if let text = GameCoachText.canDeclareNudge(options, current: round.declaration, coach: coachLevel) {
+        if let text = GameCoachText.canDeclareNudge(options, current: round.declaration, coach: coachLevel,
+                                                    players: players) {
             banner = GameCoachMessage(text, concept: "Declaring", kind: .hint)
         }
     }
@@ -546,7 +573,7 @@ final class GameController: Identifiable {
             return nil
         }
         if seat != Seats.human { hadDeclarationOption = false }
-        return GameCoachText.declarationLine(d)
+        return GameCoachText.declarationLine(d, players: players)
     }
 
     private func openDeclareWindow(messages: [String]) {
@@ -575,7 +602,7 @@ final class GameController: Identifiable {
             return
         }
         hadDeclarationOption = true
-        var text = GameCoachText.declarationLine(declaration)
+        var text = GameCoachText.declarationLine(declaration, players: players)
         if round.dealer == nil {
             text += " If nobody beats it, you'll be the dealer."
         }
@@ -595,7 +622,7 @@ final class GameController: Identifiable {
     private func botsRespond() {
         guard stage == .botsRespond else { return }
         var messages: [String] = []
-        for seat in [1, 2, 3] where isBot(seat) {
+        for seat in seats.dropFirst() where isBot(seat) {
             if let line = botDeclares(seat) { messages.append(line) }
         }
         if !isBot(Seats.human), !round.availableDeclarations(for: Seats.human).isEmpty {
@@ -619,8 +646,7 @@ final class GameController: Identifiable {
             refreshBuryPrompt()
         } else {
             let why = GameCoachText.dealerExplanation(round: round, game: game)
-            banner = GameCoachMessage(GameCoachText.join([prefix, why, GameCoachText.kittyPickupLine(dealer: round.dealer)]),
-                                      concept: "The kitty")
+            banner = GameCoachMessage(GameCoachText.join([prefix, why, kittyPickupLine]), concept: "The kitty")
         }
         save()
     }
@@ -631,7 +657,7 @@ final class GameController: Identifiable {
         guard isHumanBurying else { return }
         let count = selection.count
         var text = GameCoachText.join([buryPromptPrefix,
-                                       "You're the dealer: choose 8 cards to bury (\(count)/\(Round.kittySize))."])
+                                       "You're the dealer: choose \(round.kittySize) cards to bury (\(count)/\(round.kittySize))."])
         if coachLevel == .guided {
             text += " Cards marked new came from the kitty."
         }
@@ -650,7 +676,7 @@ final class GameController: Identifiable {
             // Defensive fallback: the lowest cards that are not trumps where possible.
             let sorted = round.trump.sorted(hand(of: dealer))
             let plain = sorted.filter { !round.trump.isTrump($0) }
-            let pick = Array((plain + sorted.filter { round.trump.isTrump($0) }).prefix(Round.kittySize))
+            let pick = Array((plain + sorted.filter { round.trump.isTrump($0) }).prefix(round.kittySize))
             buried = (try? round.bury(pick)) != nil
         }
         guard buried else {
@@ -658,11 +684,12 @@ final class GameController: Identifiable {
             return
         }
         if dealer == Seats.human { selection = [] }
-        let line = dealer == Seats.human ? "The bot buried 8 cards for you." : "\(Seats.name(dealer)) buried 8 cards face down."
+        let size = round.kittySize
+        let line = dealer == Seats.human ? "The bot buried \(size) cards for you." : "\(name(dealer)) buried \(size) cards face down."
         beginPlay(prefix: line)
     }
 
-    /// You bury the 8 selected cards.
+    /// You bury the selected cards (8, or 6 at a table of six).
     func burySelected() {
         guard canBury else { return }
         let cards = hand(of: Seats.human).filter { selection.contains($0.id) }
@@ -677,8 +704,8 @@ final class GameController: Identifiable {
         }
         let points = cards.points
         let line = points > 0
-            ? "You buried 8 cards with \(points) points. They count for the defenders if they win the last trick."
-            : "You buried 8 cards with no points. Safe!"
+            ? "You buried \(cards.count) cards with \(points) points. They count for the defenders if they win the last trick."
+            : "You buried \(cards.count) cards with no points. Safe!"
         beginPlay(prefix: line)
         restartDriver()
     }
@@ -691,7 +718,7 @@ final class GameController: Identifiable {
         let leader = round.leader
         let leadLine = leader == Seats.human
             ? "You lead the first trick."
-            : "\(Seats.name(leader)) leads the first trick."
+            : "\(name(leader)) leads the first trick."
         let reminder = coachLevel == .guided ? "Remember: follow the led suit if you can." : nil
         banner = GameCoachMessage(GameCoachText.join([prefix, leadLine, reminder]))
         save()
@@ -731,11 +758,25 @@ final class GameController: Identifiable {
         if bannerIsBuryPrompt { refreshBuryPrompt() }
     }
 
-    /// The longest tractor holding `card`, else its pair, else the card alone.
+    /// The longest tractor holding `card`, else its pair, else the card alone. With three or more
+    /// decks, every copy of the card held (a triple) and tractors of triples come first.
     nonisolated static func combo(containing card: Card, in hand: [Card], trump: Trump) -> [Card] {
         guard hand.contains(card) else { return [] }
         let group = trump.group(card)
         let groupCards = hand.filter { trump.group($0) == group }
+        let twinCount = groupCards.filter { $0.face == card.face }.count
+        if twinCount >= 3 {
+            for width in stride(from: twinCount, through: 3, by: -1) {
+                let longestSets = Combos.longestRun(in: groupCards, width: width, trump: trump)
+                for length in stride(from: longestSets, through: 2, by: -1) {
+                    if let tractor = Combos.setTractors(in: groupCards, width: width, length: length, trump: trump)
+                        .first(where: { t in t.contains { $0.face == card.face } }) {
+                        return tractor
+                    }
+                }
+            }
+            return groupCards.filter { $0.face == card.face }
+        }
         let longest = Combos.longestRun(in: groupCards, trump: trump)
         if longest >= 2 {
             for length in stride(from: longest, through: 2, by: -1) {
@@ -850,7 +891,7 @@ final class GameController: Identifiable {
             banner = nil
             if case let .throwFailed(forced, blocker) = outcome {
                 let note = GameCoachText.throwFailedLine(player: Seats.human, forced: forced,
-                                                         blocker: blocker, trump: round.trump)
+                                                         blocker: blocker, trump: round.trump, players: players)
                 throwNote = (note, true)
                 banner = GameCoachMessage(note, concept: "Throws", kind: .warning)
             }
@@ -883,12 +924,13 @@ final class GameController: Identifiable {
             outcome = try? round.play(fallback, by: seat)
         }
         guard let outcome else {
-            stall("\(Seats.name(seat)) couldn't find a legal play.")
+            stall("\(name(seat)) couldn't find a legal play.")
             return
         }
         if seat == Seats.human { selection = [] }
         if case let .throwFailed(forced, blocker) = outcome {
-            let note = GameCoachText.throwFailedLine(player: seat, forced: forced, blocker: blocker, trump: round.trump)
+            let note = GameCoachText.throwFailedLine(player: seat, forced: forced, blocker: blocker, trump: round.trump,
+                                                     players: players)
             throwNote = (note, seat == Seats.human)
             banner = GameCoachMessage(note, concept: "Throws", kind: seat == Seats.human ? .warning : .info)
         }
@@ -908,7 +950,7 @@ final class GameController: Identifiable {
         let group = trump.group(leadCard)
         let suited = hand.filter { trump.group($0) == group }
         let others = hand.filter { trump.group($0) != group }
-        var candidates: [[Card]] = []
+        var candidates: [[Card]] = [Rules.legalFollow(hand: hand, lead: lead, trump: trump)]
         if suited.count >= n {
             candidates.append(Array(suited.prefix(n)))
             let pairCards = Combos.pairs(in: suited, trump: trump).flatMap { $0 }
@@ -952,7 +994,7 @@ final class GameController: Identifiable {
     /// "Who wins?" prompts: Guided and Coached only, about 1 trick in 3, never two in a row,
     /// more likely on tricks with a ruff, pairs or a close call.
     private func shouldAskPrediction(for trick: TrickRecord) -> Bool {
-        guard predictionsEnabled, coachLevel != .solo, !isBot(Seats.human), trick.plays.count == 4 else { return false }
+        guard predictionsEnabled, coachLevel != .solo, !isBot(Seats.human), trick.plays.count == players else { return false }
         let number = round.tricks.count
         if let last = lastPredictionTrick, number - last < 2 { return false }
         let interest = GameCoachText.predictionInterest(trick, trump: round.trump)
@@ -986,7 +1028,7 @@ final class GameController: Identifiable {
         if let result = predictionResult {
             let explanation = GameCoachText.trickExplanation(trick, trump: round.trump, coach: coachLevel, detailed: true,
                                                              winnerIsDefender: isDefender, isLastTrick: isLast)
-            let guessName = result.guess == Seats.human ? "yourself" : Seats.name(result.guess)
+            let guessName = result.guess == Seats.human ? "yourself" : name(result.guess)
             let opener = result.correct ? "Yes, well spotted!" : "Not quite: you picked \(guessName)."
             banner = GameCoachMessage(GameCoachText.join([opener, explanation?.text]),
                                       concept: explanation?.concept ?? "Who wins?",

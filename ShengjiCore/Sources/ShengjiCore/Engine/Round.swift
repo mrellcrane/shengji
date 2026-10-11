@@ -3,11 +3,13 @@ import Foundation
 /// A bid for trump made by revealing cards during the deal (亮主).
 public struct Declaration: Hashable, Codable, Sendable, CustomStringConvertible {
     public var player: Int
-    /// The revealed cards: one or two trump-rank cards of one suit, or two identical jokers.
+    /// The revealed cards: trump-rank cards of one suit, or identical jokers (two or more).
     public var cards: [Card]
-    /// Trump suit chosen; nil = no trump suit (joker pair).
+    /// Trump suit chosen; nil = no trump suit (jokers).
     public var suit: Suit?
     /// 1 = single rank card, 2 = pair of rank cards, 3 = pair of small jokers, 4 = pair of big jokers.
+    /// With three or more decks more cards beat fewer: 5 = three rank cards, 6 = three small jokers,
+    /// 7 = three big jokers, then 8 to 10 for four of each (see `strength(count:kind:)`).
     public var strength: Int
 
     public init(player: Int, cards: [Card], suit: Suit?, strength: Int) {
@@ -17,20 +19,59 @@ public struct Declaration: Hashable, Codable, Sendable, CustomStringConvertible 
         self.strength = strength
     }
 
+    /// What a declaration shows: rank cards of one suit, small jokers or big jokers.
+    public enum Kind: Int, Hashable, Sendable {
+        case rankCards = 0, smallJokers, bigJokers
+    }
+
+    /// Strength of showing `count` identical cards of `kind` (jokers need at least two):
+    /// one rank card 1; two: rank 2, small jokers 3, big jokers 4; three: 5, 6, 7; four: 8, 9, 10.
+    public static func strength(count: Int, kind: Kind) -> Int {
+        if count <= 1 { return 1 }
+        return 3 * count - 4 + kind.rawValue
+    }
+
+    /// Cards shown for a strength (1 → 1, 2...4 → 2, 5...7 → 3, 8...10 → 4).
+    public static func cardCount(forStrength strength: Int) -> Int {
+        strength <= 1 ? 1 : (strength + 4) / 3
+    }
+
+    /// The kind of cards shown for a strength.
+    public static func kind(forStrength strength: Int) -> Kind {
+        strength <= 1 ? .rankCards : Kind(rawValue: (strength + 4) % 3) ?? .rankCards
+    }
+
+    /// Cards shown.
+    public var cardCount: Int { Declaration.cardCount(forStrength: strength) }
+    public var kind: Kind { Declaration.kind(forStrength: strength) }
+
     /// e.g. "East declares ♥ (one 2♥)", "You declare no trump (pair of big jokers)"
-    public var description: String {
-        let who = player == Seats.human ? "You declare" : "\(Seats.name(player)) declares"
-        let what = suit.map { $0.symbol } ?? "no trump"
+    public var description: String { description(players: 4) }
+
+    /// The description at a table of `players`, e.g. "Northeast declares ♠ (three 2♠)".
+    public func description(players: Int) -> String {
+        let name = players > 4 ? Seats.name(player, players: players) : Seats.name(player)
+        let who = player == Seats.human ? "You declare" : "\(name) declares"
+        return "\(who) \(suit.map { $0.symbol } ?? "no trump") (\(detail))"
+    }
+
+    /// The cards shown, e.g. "one 2♥", "pair of 2♥", "three small jokers".
+    public var detail: String {
         let shown = cards.first?.description
-        let detail: String
         switch strength {
-        case 1: detail = shown.map { "one \($0)" } ?? "one trump-rank card"
-        case 2: detail = shown.map { "pair of \($0)" } ?? "pair of trump-rank cards"
-        case 3: detail = "pair of small jokers"
-        case 4: detail = "pair of big jokers"
-        default: detail = cards.shortText
+        case 1: return shown.map { "one \($0)" } ?? "one trump-rank card"
+        case 2: return shown.map { "pair of \($0)" } ?? "pair of trump-rank cards"
+        case 3: return "pair of small jokers"
+        case 4: return "pair of big jokers"
+        case 5...:
+            let count = FollowViolation.count(cardCount)
+            switch kind {
+            case .rankCards: return shown.map { "\(count) \($0)" } ?? "\(count) trump-rank cards"
+            case .smallJokers: return "\(count) small jokers"
+            case .bigJokers: return "\(count) big jokers"
+            }
+        default: return cards.shortText
         }
-        return "\(who) \(what) (\(detail))"
     }
 }
 
@@ -118,7 +159,7 @@ public enum RoundError: Error, Equatable, Sendable {
             return violation.explanation
         case .invalidDeclaration:
             return "You can't declare that right now. A declaration must beat the current one, "
-                + "and if the current one is yours you can only strengthen it to a pair."
+                + "and if the current one is yours you can only strengthen it with more of the same card."
         case let .invalidBury(reason):
             return reason
         }
@@ -128,6 +169,8 @@ public enum RoundError: Error, Equatable, Sendable {
 /// The complete state of one deal (one "round"), from dealing to scoring.
 /// Value type: every mutation goes through the mutating methods below, which enforce the rules.
 public struct Round: Codable, Sendable {
+    /// Kitty and hand sizes of the classic 4-player, 2-deck game (`kittySize` and `handSize` on a
+    /// round give its own table's).
     public static let kittySize = 8
     public static let handSize = 25
 
@@ -162,19 +205,32 @@ public struct Round: Codable, Sendable {
     public private(set) var trumpFromKitty: Card?
     /// Set when phase == .finished.
     public private(set) var result: RoundResult?
+    /// Players and decks; absent in rounds saved before bigger tables existed (4 players, 2 decks).
+    private var tableSize: TableSize?
 
-    /// `deck` must be all 108 cards in dealing order: the first 100 are dealt one at a time
-    /// starting with `dealer ?? 0`, the last 8 are the kitty.
-    public init(trumpRank: Rank, dealer: Int?, deck: [Card]) {
-        precondition(deck.count == 108, "A Shengji deal needs all 108 cards (two decks with jokers).")
-        let seat = dealer.map { (($0 % 4) + 4) % 4 }
-        let dealtCount = deck.count - Round.kittySize
+    /// Players and decks at this table.
+    public var table: TableSize { tableSize ?? .four }
+    /// Number of seats (4, 6 or 8).
+    public var players: Int { table.players }
+    /// Cards the dealer picks up and buries: 8 with 4 or 8 players, 6 with 6.
+    public var kittySize: Int { table.kittySize }
+    /// Cards dealt to each player: 25 with 4 players, 26 with 6 or 8.
+    public var handSize: Int { table.handSize }
+
+    /// `deck` must be every card of the table's decks in dealing order (108 for 4 players): all but
+    /// the kitty are dealt one at a time starting with `dealer ?? 0`, the last `kittySize` are the kitty.
+    public init(trumpRank: Rank, dealer: Int?, deck: [Card], table: TableSize = .four) {
+        precondition(deck.count == table.cardCount,
+                     "A Shengji deal for \(table) needs all \(table.cardCount) cards (\(table.decks) decks with jokers).")
+        let seat = dealer.map { Seats.normalized($0, players: table.players) }
+        let dealtCount = deck.count - table.kittySize
+        self.tableSize = table == .four ? nil : table
         self.trumpRank = trumpRank
         self.dealer = seat
         self.phase = .dealing
-        self.hands = [[], [], [], []]
+        self.hands = Array(repeating: [], count: table.players)
         self.undealt = Array(deck.prefix(dealtCount))
-        self.kitty = Array(deck.suffix(Round.kittySize))
+        self.kitty = Array(deck.suffix(table.kittySize))
         self.declaration = nil
         self.declarationHistory = []
         self.trump = Trump(rank: trumpRank, suit: nil)
@@ -187,22 +243,22 @@ public struct Round: Codable, Sendable {
         self.result = nil
     }
 
-    public init<G: RandomNumberGenerator>(trumpRank: Rank, dealer: Int?, rng: inout G) {
-        self.init(trumpRank: trumpRank, dealer: dealer, deck: Deck.shuffled(using: &rng))
+    public init<G: RandomNumberGenerator>(trumpRank: Rank, dealer: Int?, rng: inout G, table: TableSize = .four) {
+        self.init(trumpRank: trumpRank, dealer: dealer, deck: Deck.shuffled(decks: table.decks, using: &rng), table: table)
     }
 
     // MARK: Dealing & declaring
 
     public var isDealingComplete: Bool { undealt.isEmpty }
 
-    /// Deals one card to `nextToReceive`. Returns nil when all 100 cards are dealt.
+    /// Deals one card to `nextToReceive`. Returns nil when every card but the kitty is dealt.
     @discardableResult
     public mutating func dealNext() -> (player: Int, card: Card)? {
         guard phase == .dealing, !undealt.isEmpty else { return nil }
         let card = undealt.removeFirst()
         let player = nextToReceive
         hands[player].append(card)
-        nextToReceive = Seats.next(after: player)
+        nextToReceive = Seats.next(after: player, players: players)
         return (player, card)
     }
 
@@ -212,27 +268,27 @@ public struct Round: Codable, Sendable {
 
     /// Declarations `player` could make right now with the cards in hand. A new declaration must
     /// be strictly stronger than the current one; a player who holds the current declaration may
-    /// only strengthen it in the same suit (single → pair). Partners may override each other.
+    /// only strengthen it with more of the same card (single → pair, and with three or more decks
+    /// pair → triple). Partners may override each other.
     public func availableDeclarations(for player: Int) -> [Declaration] {
         guard phase == .dealing, hands.indices.contains(player) else { return [] }
         let hand = hands[player].sorted { $0.id < $1.id }
         var options: [Declaration] = []
         for suit in Suit.allCases {
             let rankCards = hand.filter { $0.face == .regular(suit, trumpRank) }
-            if let first = rankCards.first {
-                options.append(Declaration(player: player, cards: [first], suit: suit, strength: 1))
-            }
-            if rankCards.count >= 2 {
-                options.append(Declaration(player: player, cards: Array(rankCards.prefix(2)), suit: suit, strength: 2))
+            guard !rankCards.isEmpty else { continue }
+            for count in 1...rankCards.count {
+                options.append(Declaration(player: player, cards: Array(rankCards.prefix(count)), suit: suit,
+                                           strength: Declaration.strength(count: count, kind: .rankCards)))
             }
         }
-        let smallJokers = hand.filter { $0.face == .smallJoker }
-        if smallJokers.count >= 2 {
-            options.append(Declaration(player: player, cards: Array(smallJokers.prefix(2)), suit: nil, strength: 3))
-        }
-        let bigJokers = hand.filter { $0.face == .bigJoker }
-        if bigJokers.count >= 2 {
-            options.append(Declaration(player: player, cards: Array(bigJokers.prefix(2)), suit: nil, strength: 4))
+        for (face, kind) in [(Face.smallJoker, Declaration.Kind.smallJokers), (.bigJoker, .bigJokers)] {
+            let jokers = hand.filter { $0.face == face }
+            guard jokers.count >= 2 else { continue }
+            for count in 2...jokers.count {
+                options.append(Declaration(player: player, cards: Array(jokers.prefix(count)), suit: nil,
+                                           strength: Declaration.strength(count: count, kind: kind)))
+            }
         }
 
         options.sort { a, b in
@@ -240,9 +296,9 @@ public struct Round: Codable, Sendable {
         }
         guard let current = declaration else { return options }
         if current.player == player {
-            // Holding the current declaration: only a single can be reinforced to a pair of that suit.
+            // Holding the current declaration: only more of the same card (a single becomes a pair).
             return options.filter { option in
-                current.strength == 1 && option.strength == 2 && option.suit != nil && option.suit == current.suit
+                option.kind == current.kind && option.suit == current.suit && option.cardCount > current.cardCount
             }
         }
         return options.filter { $0.strength > current.strength }
@@ -286,11 +342,11 @@ public struct Round: Codable, Sendable {
 
     // MARK: Burying
 
-    /// Dealer buries exactly 8 cards from their (33-card) hand → `.playing`, dealer leads.
+    /// Dealer buries exactly `kittySize` cards (8 from 33 with 4 players) → `.playing`, dealer leads.
     public mutating func bury(_ cards: [Card]) throws {
         guard phase == .burying, let seat = dealer else { throw RoundError.wrongPhase }
-        guard cards.count == Round.kittySize else {
-            throw RoundError.invalidBury("Choose exactly \(Round.kittySize) cards to bury (you chose \(cards.count)).")
+        guard cards.count == kittySize else {
+            throw RoundError.invalidBury("Choose exactly \(kittySize) cards to bury (you chose \(cards.count)).")
         }
         guard Set(cards.map(\.id)).count == cards.count else {
             throw RoundError.invalidBury("Each card can only be buried once.")
@@ -309,7 +365,7 @@ public struct Round: Codable, Sendable {
     /// Whose turn it is to play (nil outside `.playing`).
     public var turn: Int? {
         guard phase == .playing else { return nil }
-        return (leader + currentTrick.count) % 4
+        return (leader + currentTrick.count) % players
     }
 
     /// Team of the dealer (nil before the dealer is known).
@@ -337,7 +393,7 @@ public struct Round: Codable, Sendable {
     }
 
     /// Plays cards for the player whose turn it is. Leads that are throws are checked against
-    /// the other hands; a failing throw plays only the forced component. When the 4th play lands
+    /// the other hands; a failing throw plays only the forced component. When the last play lands
     /// the trick is scored and appended to `tricks`, `currentTrick` is emptied and the winner leads.
     /// After the last trick the round is scored (`result`, phase `.finished`).
     @discardableResult
@@ -354,7 +410,7 @@ public struct Round: Codable, Sendable {
 
         hands[player].remove(cards: played)
         currentTrick.append(Play(player: player, cards: played))
-        if currentTrick.count == 4 { completeTrick() }
+        if currentTrick.count == players { completeTrick() }
         return outcome
     }
 
@@ -387,26 +443,23 @@ public struct Round: Codable, Sendable {
         result = RoundResult(
             dealer: seat, declarerTeam: Seats.team(of: seat), trump: trump,
             trickPoints: defenderTrickPoints, kittyPoints: kittyPoints, kittyMultiplier: multiplier,
-            defenderPoints: defenderPoints, outcome: Scoring.outcome(defenderPoints: defenderPoints),
+            defenderPoints: defenderPoints, outcome: Scoring.outcome(defenderPoints: defenderPoints, decks: table.decks),
             kitty: kitty, lastTrickWinner: lastWinner)
         phase = .finished
     }
 
     /// True if `cards` are exactly what a declaration of that suit and strength reveals.
     static func cardsMatchDeclaration(_ cards: [Card], suit: Suit?, strength: Int, rank: Rank) -> Bool {
-        switch strength {
-        case 1:
+        guard strength >= 1, cards.count == Declaration.cardCount(forStrength: strength),
+              Set(cards.map(\.id)).count == cards.count else { return false }
+        switch Declaration.kind(forStrength: strength) {
+        case .rankCards:
             guard let suit = suit else { return false }
-            return cards.count == 1 && cards[0].face == .regular(suit, rank)
-        case 2:
-            guard let suit = suit else { return false }
-            return cards.count == 2 && cards.allSatisfy { $0.face == .regular(suit, rank) }
-        case 3:
-            return suit == nil && cards.count == 2 && cards.allSatisfy { $0.face == .smallJoker }
-        case 4:
-            return suit == nil && cards.count == 2 && cards.allSatisfy { $0.face == .bigJoker }
-        default:
-            return false
+            return cards.allSatisfy { $0.face == .regular(suit, rank) }
+        case .smallJokers:
+            return suit == nil && cards.count >= 2 && cards.allSatisfy { $0.face == .smallJoker }
+        case .bigJokers:
+            return suit == nil && cards.count >= 2 && cards.allSatisfy { $0.face == .bigJoker }
         }
     }
 

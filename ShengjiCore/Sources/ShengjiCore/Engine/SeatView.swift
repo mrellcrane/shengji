@@ -1,7 +1,9 @@
 import Foundation
 
 /// Everything one seat can see at the table, with seats rotated so the viewer is seat 0
-/// (seat 1 = the viewer's right, 2 = partner, 3 = left; team 0 = the viewer's team).
+/// (seat 1 = the viewer's right, 2 = partner, 3 = left; team 0 = the viewer's team). Bigger tables
+/// go on round the same way: with 6 or 8 players `players` has 6 or 8 entries, the viewer's team is
+/// every even seat and the opponents every odd one.
 ///
 /// This is the single model behind both offline and online play:
 ///  - offline, `Round.seatView(...)` builds it from the full round;
@@ -140,6 +142,12 @@ public struct SeatView: Codable, Hashable, Sendable {
     public var playedCards: [Card] { tricks.flatMap { $0.plays.flatMap(\.cards) } + currentTrick.flatMap(\.cards) }
 
     public var isViewerTurn: Bool { turn == 0 || bidding?.turn == 0 }
+
+    /// Players and decks at this table (from the number of seats: 4, 6 or 8).
+    public var table: TableSize { TableSize(players: handCounts.isEmpty ? players.count : handCounts.count) }
+
+    /// Number of seats.
+    public var playerCount: Int { table.players }
 }
 
 // MARK: - Building views from a Round (offline, and the reference for the server)
@@ -148,8 +156,9 @@ extension Round {
     /// The view of `viewer`, rotated so the viewer is seat 0. `players` are in absolute seat order;
     /// `game` supplies levels, target and round number (defaults are used without it).
     public func seatView(for viewer: Int, players: [SeatView.Player]? = nil, game: GameState? = nil) -> SeatView {
-        let v = ((viewer % 4) + 4) % 4
-        func seat(_ s: Int) -> Int { ((s - v) % 4 + 4) % 4 }
+        let n = self.players
+        let v = Seats.normalized(viewer, players: n)
+        func seat(_ s: Int) -> Int { Seats.normalized(s - v, players: n) }
         func team(_ t: Int) -> Int { (t + v) % 2 }
         func rotateTeams<T>(_ values: [T]) -> [T] {
             guard values.count == 2 else { return values }
@@ -172,8 +181,9 @@ extension Round {
                         lastTrickWinner: seat(r.lastTrickWinner))
         }
 
-        let absolutePlayers = players ?? Seats.all.map { SeatView.Player(name: Seats.name($0), isBot: $0 != Seats.human) }
-        let rotatedPlayers = (0..<4).map { absolutePlayers[(($0 + v) % 4)] }
+        let absolutePlayers = players
+            ?? Seats.all(players: n).map { SeatView.Player(name: Seats.name($0, players: n), isBot: $0 != Seats.human) }
+        let rotatedPlayers = (0..<n).map { absolutePlayers[(($0 + v) % n) % max(absolutePlayers.count, 1)] }
 
         let levels = game?.levels ?? [trumpRank, trumpRank]
         let viewPhase: SeatView.Phase
@@ -193,7 +203,7 @@ extension Round {
 
         var lastSummary = game?.history.last
         if let summary = lastSummary {
-            lastSummary = summary.rotated(by: v, target: game?.settings.targetRank ?? .ace)
+            lastSummary = summary.rotated(by: v, target: game?.settings.targetRank ?? .ace, players: n)
         }
 
         return SeatView(
@@ -206,7 +216,7 @@ extension Round {
             trumpFromKitty: trumpFromKitty,
             dealer: dealer.map(seat),
             hand: hands.indices.contains(v) ? hands[v] : [],
-            handCounts: (0..<4).map { hands.indices.contains(($0 + v) % 4) ? hands[($0 + v) % 4].count : 0 },
+            handCounts: (0..<n).map { hands.indices.contains(($0 + v) % n) ? hands[($0 + v) % n].count : 0 },
             declaration: declaration.map(rotate),
             declarationHistory: declarationHistory.map(rotate),
             bidding: nil,
@@ -223,11 +233,13 @@ extension Round {
 }
 
 extension RoundSummary {
-    /// The same summary from `viewer`'s point of view (seats and teams rotated, explanation rewritten).
-    public func rotated(by viewer: Int, target: Rank) -> RoundSummary {
-        let v = ((viewer % 4) + 4) % 4
+    /// The same summary from `viewer`'s point of view (seats and teams rotated, explanation rewritten),
+    /// at a table of `players`.
+    public func rotated(by viewer: Int, target: Rank, players: Int = 4) -> RoundSummary {
+        let n = TableSize(players: players).players
+        let v = Seats.normalized(viewer, players: n)
         guard v != 0 else { return self }
-        func seat(_ s: Int) -> Int { ((s - v) % 4 + 4) % 4 }
+        func seat(_ s: Int) -> Int { Seats.normalized(s - v, players: n) }
         func team(_ t: Int) -> Int { (t + v) % 2 }
         func rotateTeams(_ values: [Rank]) -> [Rank] {
             guard values.count == 2 else { return values }
@@ -247,7 +259,7 @@ extension RoundSummary {
         let explanation = GameState.explain(
             result: rotatedResult, team: benefiting, nominal: rotatedResult.outcome.levels, gained: levelsGained,
             newLevel: after[benefiting], gameWinner: gameWinner.map(team), target: target, nextDealer: next,
-            nextLevel: after[Seats.team(of: next)])
+            nextLevel: after[Seats.team(of: next)], players: n)
         return RoundSummary(result: rotatedResult, advancingTeam: advancingTeam.map(team), levelsGained: levelsGained,
                             levelsBefore: rotateTeams(levelsBefore), levelsAfter: after, nextDealer: next,
                             gameWinner: gameWinner.map(team), explanation: explanation)

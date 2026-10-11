@@ -140,6 +140,10 @@ struct OnlineRoundSummarySheet: View {
         .presentationDetents([.large])
     }
 
+    /// Decks at this table (2 for 4 players, 3 for 6, 4 for 8).
+    private var decks: Int { TableSize(players: players.count).decks }
+    private var threshold: Int { Scoring.takeoverThreshold(decks: decks) }
+
     private var header: some View {
         Text(OnlineGameText.roundHeadline(summary, players: players))
             .font(.title2.weight(.bold))
@@ -163,10 +167,10 @@ struct OnlineRoundSummarySheet: View {
                 Spacer()
                 Text("\(result.defenderPoints)").fontWeight(.bold).monospacedDigit()
             }
-            GamePointsBar(points: result.defenderPoints, color: Theme.teamColor(1 - result.declarerTeam))
-            Text(result.defenderPoints >= Scoring.takeoverThreshold
-                 ? "That's at least 80, so the defenders take over the deal."
-                 : "Under 80, so the declarers keep the deal.")
+            GamePointsBar(points: result.defenderPoints, color: Theme.teamColor(1 - result.declarerTeam), decks: decks)
+            Text(result.defenderPoints >= threshold
+                 ? "That's at least \(threshold), so the defenders take over the deal."
+                 : "Under \(threshold), so the declarers keep the deal.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -188,7 +192,7 @@ struct OnlineRoundSummarySheet: View {
                 .accessibilityLabel("Kitty: \(result.kitty.map { $0.face.longName }.joined(separator: ", "))")
             Text("Kitty points: \(result.kittyPoints)")
                 .font(.subheadline)
-            Text(GameCoachText.kittyLine(result))
+            Text(GameCoachText.kittyLine(result, decks: decks))
                 .font(.subheadline.weight(.semibold))
         }
     }
@@ -242,7 +246,7 @@ struct OnlineRoundSummarySheet: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "lightbulb.fill")
                 .foregroundStyle(Theme.gold)
-            Text(GameCoachText.takeaway(summary))
+            Text(GameCoachText.takeaway(summary, decks: decks))
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
         }

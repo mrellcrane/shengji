@@ -47,8 +47,9 @@ public enum CoachContext {
     public static func describe(view: SeatView, hint: HintLadder?, selection: [Card],
                                 lastIllegal: IllegalAttempt?) -> String {
         let total = view.handCounts.reduce(0, +)
+        let size = view.table
         let table = TableDescription(view: view, levelsKnown: true, available: view.bidding?.available,
-                                     dealingComplete: total >= 4 * Round.handSize || view.phase != .dealing)
+                                     dealingComplete: total >= size.players * size.handSize || view.phase != .dealing)
         return table.text(hint: hint, selection: selection, lastIllegal: lastIllegal)
     }
 
@@ -123,6 +124,16 @@ struct TableDescription {
 
     var trump: Trump { view.trump }
 
+    /// Players and decks at this table.
+    var table: TableSize { view.table }
+    var players: Int { table.players }
+
+    /// How the table names a seat: "East", "Partner" with 4 players, compass points with more.
+    func name(_ seat: Int) -> String { CoachText.name(seat, players: players) }
+
+    /// "East and West" at a table of four, "the other team" at a bigger one.
+    var otherTeam: String { players > 4 ? "the other team" : "East and West" }
+
     func text(hint: HintLadder?, selection: [Card], lastIllegal: IllegalAttempt?,
               limit: Int = CoachContext.maxTableCharacters) -> String {
         // Lines in order of importance; optional ones are dropped from the end of the list (lowest
@@ -185,32 +196,32 @@ struct TableDescription {
             if dealingComplete {
                 return "Phase: dealing is finished (you have \(held) cards). Last chance to declare trump before the kitty goes to the dealer."
             }
-            return "Phase: dealing. Cards are still arriving (you have \(held) of \(Round.handSize)). Anyone may declare trump now."
+            return "Phase: dealing. Cards are still arriving (you have \(held) of \(table.handSize)). Anyone may declare trump now."
         case .bidding:
             if let turn = view.bidding?.turn {
                 if turn == Seats.human { return "Phase: declaring. Your turn to declare trump or pass." }
-                return "Phase: declaring. Waiting for \(Seats.name(turn)) to declare trump or pass."
+                return "Phase: declaring. Waiting for \(name(turn)) to declare trump or pass."
             }
             return "Phase: declaring trump."
         case .burying:
             guard let dealer = view.dealer else { return "Phase: burying the kitty." }
             if dealer == Seats.human {
-                return "Phase: burying. You are the dealer: you picked up the \(Round.kittySize) kitty cards and now choose \(Round.kittySize) cards to bury face down."
+                return "Phase: burying. You are the dealer: you picked up the \(table.kittySize) kitty cards and now choose \(table.kittySize) cards to bury face down."
             }
-            return "Phase: burying. \(Seats.name(dealer)) (the dealer) is burying \(Round.kittySize) cards face down. Play starts after that."
+            return "Phase: burying. \(name(dealer)) (the dealer) is burying \(table.kittySize) cards face down. Play starts after that."
         case .playing:
             let number = view.tricks.count + 1
             if view.currentTrick.isEmpty {
                 if view.turn == Seats.human {
                     return "Phase: playing, trick \(number). Your turn to lead."
                 }
-                return "Phase: playing, trick \(number). Waiting for \(Seats.name(view.leader)) to lead."
+                return "Phase: playing, trick \(number). Waiting for \(name(view.leader)) to lead."
             }
             if view.turn == Seats.human {
                 return "Phase: playing, trick \(number). Your turn to follow."
             }
             if let turn = view.turn {
-                return "Phase: playing, trick \(number). Waiting for \(Seats.name(turn)) to play."
+                return "Phase: playing, trick \(number). Waiting for \(name(turn)) to play."
             }
             return "Phase: playing, trick \(number)."
         case .finished:
@@ -222,10 +233,11 @@ struct TableDescription {
         guard levelsKnown, view.teamLevels.count == 2 else { return nil }
         let ours = view.teamLevels[0].label
         let theirs = view.teamLevels[1].label
-        var line = "Levels: your team \(ours), East and West \(theirs) (the game is won by holding the deal at \(view.targetRank.label))."
+        var line = "Levels: your team \(ours), \(otherTeam) \(theirs) (the game is won by holding the deal at \(view.targetRank.label))."
         line = "Round \(view.roundNumber) of this game. " + line
         if let winner = view.gameWinnerTeam {
-            line += winner == 0 ? " Your team has won the game!" : " East and West have won the game."
+            let theyWon = players > 4 ? " The other team has won the game." : " East and West have won the game."
+            line += winner == 0 ? " Your team has won the game!" : theyWon
         }
         return line
     }
@@ -236,24 +248,25 @@ struct TableDescription {
             var lines: [String] = []
             if let declaration = view.declaration {
                 let suit = declaration.suit.map { "\($0.symbol) would be the trump suit" } ?? "there would be no trump suit"
-                lines.append("Trump rank: \(trump.rank.label). Current declaration: \(declaration.description), so \(suit). A stronger declaration can still replace it.")
+                lines.append("Trump rank: \(trump.rank.label). Current declaration: \(declaration.description(players: players)), so \(suit). A stronger declaration can still replace it.")
                 lines.append(contentsOf: CoachText.orderLines(trump))
             } else {
                 lines.append("Trump rank: \(trump.rank.label). Trump suit: not declared yet. If nobody declares, the kitty is flipped to choose it.")
             }
             return lines
         case .burying, .playing, .finished:
-            var lines = CoachText.trumpLines(trump)
+            var lines = CoachText.trumpLines(trump, decks: table.decks)
             if let flipped = view.trumpFromKitty {
                 lines.append("Nobody declared, so the kitty was flipped: the \(flipped.description) set the trump.")
             } else if let declaration = view.declaration {
-                lines.append("Trump was set by this declaration: \(declaration.description).")
+                lines.append("Trump was set by this declaration: \(declaration.description(players: players)).")
             }
             return lines
         }
     }
 
     func teamsLine() -> String {
+        if players > 4 { return bigTeamsLine() }
         guard let dealer = view.dealer else {
             return "Seats: you (South), East, Partner (North, your partner), West. Dealer: not decided yet. In the first round, whoever wins the declaration deals."
         }
@@ -265,15 +278,38 @@ struct TableDescription {
         return "Seats: you (South) and Partner (North) against East and West. Dealer: \(dealerName). East and West are the declarers; your team are the defenders."
     }
 
+    /// Seats and teams at a table of 6 or 8: seats in play order, every other seat a partner.
+    func bigTeamsLine() -> String {
+        let order = Seats.all(players: players).map { $0 == Seats.human ? "you (South)" : name($0) }
+        let partners = Seats.teammates(of: Seats.human, players: players).map(name)
+        let opponents = Seats.opponents(of: Seats.human, players: players).map(name)
+        var line = "Seats in order of play: \(order.joined(separator: ", ")). Teams sit in every other seat: "
+            + "your team is you, \(CoachText.list(partners)); the other team is \(CoachText.list(opponents)). "
+            + "This table has \(players) players and \(table.decks) decks (\(table.cardCount) cards, \(table.totalPoints) points): "
+            + "every card exists \(table.decks) times, so triples\(table.decks >= 4 ? " and four of a kind" : "") "
+            + "are combinations too, \(Scoring.takeoverThreshold(decks: table.decks)) points take over the deal, "
+            + "and each level is worth \(Scoring.stepSize(decks: table.decks)) points."
+        guard let dealer = view.dealer else {
+            return line + " Dealer: not decided yet. In the first round, whoever wins the declaration deals."
+        }
+        let dealerName = dealer == Seats.human ? "you" : name(dealer)
+        let declarersAreUs = Seats.team(of: dealer) == Seats.team(of: Seats.human)
+        line += " Dealer: \(dealerName). "
+        line += declarersAreUs ? "Your team are the declarers; the other team are the defenders."
+            : "The other team are the declarers; your team are the defenders."
+        return line
+    }
+
     func pointsLine() -> String? {
         guard view.phase == .playing else { return nil }
         let defenders = view.defenderTrickPoints
         let played = view.playedCards.points
-        let need = max(0, Scoring.takeoverThreshold - defenders)
-        let who = view.isDefender(Seats.human) ? "your team (the defenders)" : "the defenders (East and West)"
-        var line = "Points: \(who) have \(defenders) so far; 80 takes over the deal"
+        let threshold = Scoring.takeoverThreshold(decks: table.decks)
+        let need = max(0, threshold - defenders)
+        let who = view.isDefender(Seats.human) ? "your team (the defenders)" : "the defenders (\(otherTeam))"
+        var line = "Points: \(who) have \(defenders) so far; \(threshold) takes over the deal"
         line += need > 0 ? " (\(need) more needed)." : " (already reached)."
-        line += " Points in the cards played so far: \(played) of \(Scoring.totalPoints)."
+        line += " Points in the cards played so far: \(played) of \(table.totalPoints)."
         return line
     }
 
@@ -310,8 +346,8 @@ struct TableDescription {
             for component in Combos.decompose(cards, trump: trump) {
                 let text = trump.sorted(component.cards).shortText
                 switch component.shape {
-                case .tractor: tractors.append(text)
-                case .pair: pairs.append(text)
+                case .tractor, .setTractor: tractors.append(text)
+                case .pair, .set: pairs.append(text)
                 case .single: break
                 }
             }
@@ -346,7 +382,7 @@ struct TableDescription {
         var myTurnToBid = false
         if view.phase == .bidding, let turn = view.bidding?.turn {
             if turn != Seats.human {
-                return "It is \(Seats.name(turn))'s turn to declare or pass; you can declare when your turn comes."
+                return "It is \(name(turn))'s turn to declare or pass; you can declare when your turn comes."
             }
             myTurnToBid = true
         }
@@ -354,8 +390,10 @@ struct TableDescription {
         if let current = view.declaration {
             if current.player != Seats.human {
                 reason = "You can't declare right now (no rank cards or jokers that beat the current declaration)."
-            } else if current.strength == 1 {
-                reason = "Your declaration is the current one. You can only strengthen it with a pair of the same card."
+            } else if current.strength == 1 || (table.decks > 2 && current.cardCount < table.decks) {
+                reason = current.strength == 1 && table.decks <= 2
+                    ? "Your declaration is the current one. You can only strengthen it with a pair of the same card."
+                    : "Your declaration is the current one. You can only strengthen it with more of the same card."
             } else {
                 reason = "Your declaration is the current one, and it can't be strengthened any further."
             }
@@ -378,10 +416,10 @@ struct TableDescription {
         case .playing:
             guard let dealer = view.dealer else { return nil }
             if dealer == Seats.human {
-                guard let kitty = view.kitty else { return "Kitty: you buried \(Round.kittySize) cards face down." }
+                guard let kitty = view.kitty else { return "Kitty: you buried \(table.kittySize) cards face down." }
                 return "Kitty you buried (\(kitty.points) points): \(trump.sorted(kitty).shortText). If the defenders win the last trick, its points count for them, multiplied."
             }
-            return "Kitty: \(Round.kittySize) cards buried face down by \(Seats.name(dealer)). They stay hidden until the round ends."
+            return "Kitty: \(table.kittySize) cards buried face down by \(name(dealer)). They stay hidden until the round ends."
         case .finished:
             return nil
         }
@@ -391,12 +429,12 @@ struct TableDescription {
         guard view.phase == .playing, !view.currentTrick.isEmpty else { return nil }
         let plays = view.currentTrick
         var line = "Current trick (\(plays.flatMap(\.cards).points) points so far): "
-        line += CoachText.playsSentence(plays, trump: trump)
-        line += " " + CoachText.winningSentence(plays, trump: trump)
+        line += CoachText.playsSentence(plays, trump: trump, players: players)
+        line += " " + CoachText.winningSentence(plays, trump: trump, players: players)
         var waiting: [String] = []
-        // A trick has four plays; an online view could hold more by mistake, which must not crash.
-        if plays.count < 4 {
-            for offset in plays.count..<4 { waiting.append(Seats.name((view.leader + offset) % 4)) }
+        // A trick has a play per seat; an online view could hold more by mistake, which must not crash.
+        if plays.count < players {
+            for offset in plays.count..<players { waiting.append(name((view.leader + offset) % players)) }
         }
         if !waiting.isEmpty { line += " Still to play: \(waiting.joined(separator: ", "))." }
         return line
@@ -407,19 +445,20 @@ struct TableDescription {
         let number = view.tricks.count
         let justFinished = view.phase == .playing && view.currentTrick.isEmpty
         let label = justFinished ? "Trick just finished (#\(number))" : "Last finished trick (#\(number))"
-        let winner = last.winner == Seats.human ? "You won it" : "\(Seats.name(last.winner)) won it"
-        return "\(label): " + CoachText.playsSentence(last.plays, trump: trump) + " \(winner) (\(last.points) points)."
+        let winner = last.winner == Seats.human ? "You won it" : "\(name(last.winner)) won it"
+        return "\(label): " + CoachText.playsSentence(last.plays, trump: trump, players: players)
+            + " \(winner) (\(last.points) points)."
     }
 
     func tricksWonLine() -> String? {
         guard !view.tricks.isEmpty else { return nil }
         var parts: [String] = []
-        for seat in Seats.all {
+        for seat in Seats.all(players: players) {
             let won = view.tricks.filter { $0.winner == seat }
             guard !won.isEmpty else { continue }
             let points = won.reduce(0) { $0 + $1.points }
             let tricks = won.count == 1 ? "1 trick" : "\(won.count) tricks"
-            parts.append("\(Seats.name(seat)) \(tricks) (\(points) points)")
+            parts.append("\(name(seat)) \(tricks) (\(points) points)")
         }
         guard !parts.isEmpty else { return nil }
         let header = view.phase == .finished ? "Tricks won" : "Tricks won so far"
@@ -453,14 +492,15 @@ struct TableDescription {
         if let kitty = view.kitty { known += kitty }
         var counts: [SuitGroup: Int] = [:]
         var seen = Set(known.map(\.id))
-        for card in Deck.double() where seen.insert(card.id).inserted {
+        for card in Deck.cards(decks: table.decks) where seen.insert(card.id).inserted {
             counts[trump.group(card), default: 0] += 1
         }
         var parts: [String] = []
         for group in CoachText.groupOrder(trump) {
             parts.append("\(CoachText.groupTitle(group)) \(counts[group] ?? 0)")
         }
-        let note = kittyKnown ? "in the other three hands" : "in the other hands or the kitty"
+        let others = players > 4 ? "\(players - 1)" : "three"
+        let note = kittyKnown ? "in the other \(others) hands" : "in the other hands or the kitty"
         return "Cards still out (\(note)): " + parts.joined(separator: ", ") + "."
     }
 
@@ -468,10 +508,10 @@ struct TableDescription {
         guard view.phase == .playing else { return nil }
         let voids = CoachText.knownVoids(tricks: view.tricks, current: view.currentTrick, trump: trump)
         var parts: [String] = []
-        for seat in [1, 2, 3] {
+        for seat in 1..<players {
             guard let groups = voids[seat], !groups.isEmpty else { continue }
             let names = CoachText.groupOrder(trump).filter { groups.contains($0) }.map(\.name)
-            parts.append("\(Seats.name(seat)) has no \(CoachText.list(names))")
+            parts.append("\(name(seat)) has no \(CoachText.list(names))")
         }
         guard !parts.isEmpty else { return nil }
         return "Known to be out of a suit: " + parts.joined(separator: "; ") + "."
@@ -485,7 +525,7 @@ struct TableDescription {
         scored += bonus > 0 ? " (\(result.trickPoints) from tricks + \(bonus) kitty bonus)." : "."
         parts.append(scored)
         let kittyText = trump.sorted(result.kitty).shortText
-        let buriedBy = result.dealer == Seats.human ? "you" : Seats.name(result.dealer)
+        let buriedBy = result.dealer == Seats.human ? "you" : name(result.dealer)
         var kitty = "Kitty (buried by \(buriedBy), \(result.kittyPoints) points): \(kittyText)."
         if result.kittyMultiplier > 0 {
             kitty += " The defenders won the last trick, so the kitty's points counted ×\(result.kittyMultiplier)."
@@ -553,21 +593,29 @@ enum CoachText {
         return out
     }
 
+    /// How a table of `players` names a seat: "East", "Partner" with 4, compass points with 6 or 8.
+    static func name(_ seat: Int, players: Int = 4) -> String {
+        players > 4 ? Seats.name(seat, players: players) : Seats.name(seat)
+    }
+
     /// What the table calls `seat` (someone other than you): the player's name in the view. Offline views
     /// carry the compass names ("East", "Partner", "West"); online ones carry people's names, as the table shows.
     static func seatName(_ seat: Int, in view: SeatView) -> String {
-        let s = ((seat % 4) + 4) % 4
-        guard view.players.indices.contains(s) else { return Seats.name(s) }
-        let name = plain(view.players[s].name).trimmingCharacters(in: .whitespaces)
-        return name.isEmpty ? Seats.name(s) : clip(name, 24)
+        let players = view.playerCount
+        let s = Seats.normalized(seat, players: players)
+        guard view.players.indices.contains(s) else { return name(s, players: players) }
+        let text = plain(view.players[s].name).trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? name(s, players: players) : clip(text, 24)
     }
 
     /// "Names at this table: East is Bo, Partner (North) is Cy, West is Di." for an online table, which
     /// shows names rather than compass seats. Nil offline, where the table says East and West too.
     static func namesLine(_ view: SeatView) -> String? {
-        let seats = [1, 2, 3]
-        guard seats.contains(where: { seatName($0, in: view) != Seats.name($0) }) else { return nil }
-        let labels = ["", "East", "Partner (North)", "West"]
+        let players = view.playerCount
+        let seats = Array(1..<players)
+        guard seats.contains(where: { seatName($0, in: view) != name($0, players: players) }) else { return nil }
+        let labels = players > 4 ? Seats.all(players: players).map { Seats.name($0, players: players) }
+            : ["", "East", "Partner (North)", "West"]
         let pairs = seats.map { "\(labels[$0]) is \(seatName($0, in: view))" }
         return "Names at this table: \(pairs.joined(separator: ", ")). The table shows these names, so call players by them, not by compass seats."
     }
@@ -636,8 +684,8 @@ enum CoachText {
     }
 
     /// "your", "East's", "Partner's"
-    static func possessive(_ seat: Int) -> String {
-        seat == Seats.human ? "your" : Seats.name(seat) + "'s"
+    static func possessive(_ seat: Int, players: Int = 4) -> String {
+        seat == Seats.human ? "your" : name(seat, players: players) + "'s"
     }
 
     /// Cards of `cards` that are in `pool` (as a multiset, by identity).
@@ -696,10 +744,11 @@ enum CoachText {
     // MARK: Trump
 
     /// "Trump: suit ♥, rank 2." plus the trump order and the plain-suit order.
-    static func trumpLines(_ trump: Trump) -> [String] {
+    static func trumpLines(_ trump: Trump, decks: Int = 2) -> [String] {
         let first: String
         if let suit = trump.suit {
-            first = "Trump: suit \(suit.symbol) (\(suit.name.lowercased())), rank \(trump.rank.label). Trumps are all four jokers, every \(rankSingular(trump.rank)) and every \(suit.singularName)."
+            let jokers = decks > 2 ? "all \(2 * decks) jokers" : "all four jokers"
+            first = "Trump: suit \(suit.symbol) (\(suit.name.lowercased())), rank \(trump.rank.label). Trumps are \(jokers), every \(rankSingular(trump.rank)) and every \(suit.singularName)."
         } else {
             first = "Trump: no trump suit this round, rank \(trump.rank.label). Only the jokers and the \(rankPlural(trump.rank)) are trumps."
         }
@@ -771,6 +820,7 @@ enum CoachText {
             case .single: return "single \(groupSingular(group))"
             case .pair: return "pair of \(group.name)"
             case let .tractor(n): return n == 2 ? "tractor of \(group.name)" : "\(n)-pair tractor of \(group.name)"
+            case .set, .setTractor: return "\(component.shape.name) of \(group.name)"
             }
         }
         let shapes = components.map(\.shape.name).joined(separator: " + ")
@@ -778,15 +828,15 @@ enum CoachText {
     }
 
     /// "East led K♠ K♠ (pair of spades). Partner played A♠ 3♠ (not the same shape, can't win). ..."
-    static func playsSentence(_ plays: [Play], trump: Trump) -> String {
+    static func playsSentence(_ plays: [Play], trump: Trump, players: Int = 4) -> String {
         guard let lead = plays.first else { return "" }
         let leadCards = lead.cards
         let ledGroup = Combos.group(of: leadCards, trump: trump) ?? leadCards.first.map { trump.group($0) } ?? .trump
         var sentences: [String] = []
-        let leader = lead.player == Seats.human ? "You" : Seats.name(lead.player)
+        let leader = lead.player == Seats.human ? "You" : name(lead.player, players: players)
         sentences.append("\(leader) led \(trump.sorted(leadCards).shortText) (\(shapeText(leadCards, trump: trump))).")
         for play in plays.dropFirst() {
-            let who = play.player == Seats.human ? "You" : Seats.name(play.player)
+            let who = play.player == Seats.human ? "You" : name(play.player, players: players)
             let note = followNote(play.cards, lead: leadCards, ledGroup: ledGroup, trump: trump)
             let suffix = note.isEmpty ? "" : " (\(note))"
             sentences.append("\(who) played \(trump.sorted(play.cards).shortText)\(suffix).")
@@ -805,13 +855,13 @@ enum CoachText {
     }
 
     /// "Winning now: Partner with A♠ (the highest spade so far)."
-    static func winningSentence(_ plays: [Play], trump: Trump) -> String {
+    static func winningSentence(_ plays: [Play], trump: Trump, players: Int = 4) -> String {
         guard let lead = plays.first?.cards, let firstCard = lead.first else { return "" }
         let index = Rules.winningIndex(plays, trump: trump)
         guard plays.indices.contains(index) else { return "" }
         let winner = plays[index]
         let ledGroup = Combos.group(of: lead, trump: trump) ?? trump.group(firstCard)
-        let who = winner.player == Seats.human ? "you" : Seats.name(winner.player)
+        let who = winner.player == Seats.human ? "you" : name(winner.player, players: players)
         let cards = trump.sorted(winner.cards).shortText
         let reason: String
         if plays.count == 1 {

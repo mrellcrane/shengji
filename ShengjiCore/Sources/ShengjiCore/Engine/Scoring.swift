@@ -17,15 +17,31 @@ public struct LevelOutcome: Hashable, Codable, Sendable {
 }
 
 public enum Scoring {
+    /// Two decks (the classic game). Every deck adds 100 points, and the lines scale with it.
     public static let totalPoints = 200
     public static let takeoverThreshold = 80
     public static let stepSize = 40
+
+    /// Points in all the cards: 100 per deck.
+    public static func totalPoints(decks: Int) -> Int { 100 * max(decks, 1) }
+    /// Defenders take over the deal from 40 points per deck: 80 with 2 decks, 120 with 3, 160 with 4.
+    public static func takeoverThreshold(decks: Int) -> Int { 40 * max(decks, 1) }
+    /// Each level is worth 20 points per deck: 40 with 2 decks, 60 with 3, 80 with 4.
+    public static func stepSize(decks: Int) -> Int { 20 * max(decks, 1) }
 
     /// Standard table (two decks):
     ///   0 → declarers +3 · 5–35 → declarers +2 · 40–75 → declarers +1
     ///   80–115 → defenders take over (+0) · 120–155 → take over +1 · 160–195 → +2 · 200+ → +3, each further 40 → +1
     public static func outcome(defenderPoints: Int) -> LevelOutcome {
+        outcome(defenderPoints: defenderPoints, decks: 2)
+    }
+
+    /// The same table scaled to the number of decks: with 3 decks 5–55 → declarers +2, 60–115 → +1,
+    /// 120–175 → take over, then +1 for every further 60.
+    public static func outcome(defenderPoints: Int, decks: Int) -> LevelOutcome {
         let points = max(0, defenderPoints)
+        let takeoverThreshold = takeoverThreshold(decks: decks)
+        let stepSize = stepSize(decks: decks)
         if points < takeoverThreshold {
             let levels: Int
             let scored: String
@@ -53,7 +69,7 @@ public enum Scoring {
     }
 
     /// Kitty multiplier when the defenders win the last trick: 2 × the number of cards in the
-    /// largest component of the last trick's lead (single ×2, pair ×4, 2-pair tractor ×8, 3-pair ×12).
+    /// largest component of the last trick's lead (single ×2, pair ×4, triple ×6, 2-pair tractor ×8, 3-pair ×12).
     public static func kittyMultiplier(lastLead: [Card], trump: Trump) -> Int {
         let largest = Combos.decompose(lastLead, trump: trump).map(\.shape.cardCount).max() ?? 1
         return 2 * largest

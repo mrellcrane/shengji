@@ -416,12 +416,18 @@ final class OnlineSession {
     /// Seats in absolute order: you (0), your right (1), your partner opposite you (2), your left (3).
     func createGame(club: OnlineClub, right: OnlineSeatChoice, partner: OnlineSeatChoice, left: OnlineSeatChoice,
                     targetRank: Rank) async -> OnlineGameSummary? {
+        await createGame(club: club, others: [right, partner, left], targetRank: targetRank)
+    }
+
+    /// `others` are the seats after yours in play order (seat 1, your right, first): 3, 5 or 7 of them for
+    /// a table of 4, 6 or 8. Teams alternate, so your partners are seats 2, 4 and 6.
+    func createGame(club: OnlineClub, others: [OnlineSeatChoice], targetRank: Rank) async -> OnlineGameSummary? {
         if user == nil { await refreshMe() }
         guard let me = user else {
             errorMessage = errorMessage ?? OnlineError.offlineMessage
             return nil
         }
-        let seats: [OnlineSeatSpec] = [.user(id: me.id), right.spec, partner.spec, left.spec]
+        let seats: [OnlineSeatSpec] = [.user(id: me.id)] + others.map(\.spec)
         do {
             let game = try await api.createGame(clubId: club.id, seats: seats, targetRank: targetRank)
             games = OnlineSession.sorted(games.filter { $0.id != game.id } + [game])

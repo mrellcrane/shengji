@@ -7,10 +7,10 @@
 import { handleRequest } from "../src/api/router.ts";
 import type { Limiter, Services } from "../src/api/router.ts";
 import type { VerifyResult } from "../src/auth/apple.ts";
-import { doubleDeck } from "../src/engine/cards.ts";
+import { deckCards } from "../src/engine/cards.ts";
 import { shuffle } from "../src/engine/shuffle.ts";
 import type { RandomSource } from "../src/engine/shuffle.ts";
-import type { Card } from "../src/engine/cards.ts";
+import type { Card, TableSize } from "../src/engine/cards.ts";
 import { HubHost } from "../src/hub/host.ts";
 import type { HubApi } from "../src/hub/host.ts";
 import { HubService } from "../src/hub/service.ts";
@@ -104,7 +104,7 @@ export function fakePush(): FakePush {
 export interface CloudOptions {
   devSecret?: string | null;
   seed?: number;
-  /** Decks for new rounds, in order (then seeded shuffles). */
+  /** Decks for new rounds, in order (then seeded shuffles of the table's decks). */
   decks?: Card[][];
   apple?: (token: string) => VerifyResult;
   push?: boolean;
@@ -141,7 +141,7 @@ export function makeCloud(options: CloudOptions = {}): Cloud {
   const now = () => new Date(clock.now);
   const source = seededSource(options.seed ?? 1);
   const decks = (options.decks ?? []).slice();
-  const deck = () => decks.shift() ?? shuffle(doubleDeck(), source);
+  const deck = (table: TableSize) => decks.shift() ?? shuffle(deckCards(table.decks), source);
   const push = fakePush();
   const logs: string[] = [];
   const hub = new HubHost(new HubService(memorySql(), { now, random: () => 0.5 }), options.push === false ? null : push, (m) =>

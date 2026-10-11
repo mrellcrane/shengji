@@ -12,7 +12,7 @@ import type { BotLevel } from "../bots/index.ts";
 import { decide, declaration } from "../bots/index.ts";
 import { ruleFollow } from "../bots/builder.ts";
 import type { Card } from "../engine/cards.ts";
-import { KITTY_SIZE, biddingTurn, turn } from "../engine/round.ts";
+import { biddingTurn, kittySizeOf, turn } from "../engine/round.ts";
 import type { Declaration, Round } from "../engine/round.ts";
 import type { SeatView } from "../engine/seatview.ts";
 import { sortCards } from "../engine/trump.ts";
@@ -47,14 +47,15 @@ export function chooseBotAction(view: SeatView, level: BotLevel): BotAction | nu
 
 /**
  * Plain legal moves for absolute `seat` from the rules alone (no strategy), in the order to try
- * them: pass a bid; bury the 8 lowest cards in display order; lead the lowest card; follow with the
- * play built straight from the follow rules. Empty when the seat has nothing to do.
+ * them: pass a bid; bury the lowest cards in display order (as many as the kitty holds); lead the
+ * lowest card; follow with the play built straight from the follow rules. Empty when the seat has
+ * nothing to do.
  */
 export function safeActions(round: Round, seat: number): BotAction[] {
   if (biddingTurn(round) === seat) return [{ type: "pass" }];
   const hand = seat >= 0 && seat < round.hands.length ? round.hands[seat] : [];
   if (round.phase === "burying") {
-    return round.dealer === seat ? [{ type: "bury", cards: sortCards(round.trump, hand).slice(0, KITTY_SIZE) }] : [];
+    return round.dealer === seat ? [{ type: "bury", cards: sortCards(round.trump, hand).slice(0, kittySizeOf(round)) }] : [];
   }
   if (turn(round) !== seat || hand.length === 0) return [];
   if (round.currentTrick.length === 0) return [{ type: "play", cards: sortCards(round.trump, hand).slice(0, 1) }];

@@ -4,12 +4,19 @@ import ShengjiCore
 /// isThrow, checkThrow against the hands and against a pool), follow checks for each follower
 /// (followRequirement, validateFollow with explanation, matchesStructure) and tricks with the
 /// winning index of every prefix (singles, pairs, tractors, throws, ruffs, over-ruffs, discards).
+/// After them, `bigPositions` positions at tables of 6 and 8 players (3 and 4 decks, a `players`
+/// field), rich in triples, four of a kind and tractors of them.
 enum RulesVectors {
-    static func make(positions count: Int) -> [(String, JSON)] {
+    static func make(positions count: Int, bigPositions: Int) -> [(String, JSON)] {
         var rand = Rand(0x2B_1E5)
         var positions: [JSON] = []
         for index in 0..<count {
             positions.append(position(kind: index % 6, rand: &rand))
+        }
+        var bigRand = Rand(0xB16_2B1E5)
+        for index in 0..<bigPositions {
+            let table = Cards.bigTables[index % 2]
+            positions.append(bigPosition(kind: (index / 2) % 6, table: table, rand: &bigRand))
         }
         return [
             ("format", .int(1)),
@@ -220,6 +227,217 @@ enum RulesVectors {
         }
 
         return .object([
+            ("trump", json(trump)),
+            ("leader", .int(leader)),
+            ("hands", json(hands)),
+            ("leads", .array(leads)),
+            ("lead", json(lead)),
+            ("follows", .array(follows)),
+            ("tricks", .array(tricks)),
+        ])
+    }
+
+    // MARK: Bigger tables
+
+    /// `table.players` hands from `table.decks` decks, and the group they concentrate on (nil for a
+    /// plain random deal).
+    static func bigDeal(kind: Int, table: TableSize, trump: inout Trump,
+                        rand: inout Rand) -> (hands: [[Card]], focus: SuitGroup?) {
+        let n = table.players
+        switch kind {
+        case 0:
+            // A real deal, possibly some way into the round (equal hands).
+            let deck = rand.shuffled(Cards.deck(table.decks))
+            let hand = table.handSize
+            let size = rand.percent(40) ? hand : rand.between(1, hand)
+            return ((0..<n).map { seat in Array(deck[(seat * hand)..<(seat * hand + size)]) }, nil)
+        case 1, 2:
+            let group = Cards.randomGroup(&rand, trump: trump)
+            let multi = kind == 1 ? rand.between(40, 90) : 95
+            return (bigFocusedDeal(table: table, trump: trump, group: group, faces: nil, multiPercent: multi,
+                                   rand: &rand), group)
+        case 5:
+            // Nearly all sets in the trump group for two seats (throws of tractors of sets).
+            trump.suit = Suit.allCases[rand.below(4)]
+            let heavy = rand.shuffled(Array(0..<n)).prefix(2)
+            let counts = (0..<n).map { heavy.contains($0) ? rand.between(14, 22) : rand.between(0, 4) }
+            return (bigFocusedDeal(table: table, trump: trump, group: .trump, faces: nil, multiPercent: 100,
+                                   counts: counts, rand: &rand), .trump)
+        case 3:
+            // Set-rich trumps near the rank: tractors of sets through rank cards and jokers.
+            if rand.percent(80) { trump.suit = Suit.allCases[rand.below(4)] }
+            let faces = rand.percent(50) ? Cards.topTrumpFaces(trump) : Cards.faces(in: .trump, trump: trump)
+            return (bigFocusedDeal(table: table, trump: trump, group: .trump, faces: faces,
+                                   multiPercent: rand.between(60, 95), rand: &rand), .trump)
+        default:
+            // A plain suit around the trump rank.
+            let suits = Suit.allCases.filter { $0 != trump.suit }
+            let suit = suits[rand.below(suits.count)]
+            let faces = Cards.faces(nearRankOf: trump, suit: suit, radius: rand.between(2, 6))
+            return (bigFocusedDeal(table: table, trump: trump, group: .plain(suit), faces: faces,
+                                   multiPercent: rand.between(60, 95), rand: &rand), .plain(suit))
+        }
+    }
+
+    /// Hands concentrated on one group (often sets of two to four cards); some players are void in it.
+    /// All hands get the same size by filling with cards of other groups.
+    static func bigFocusedDeal(table: TableSize, trump: Trump, group: SuitGroup, faces: [Face]?, multiPercent: Int,
+                               counts: [Int]? = nil, rand: inout Rand) -> [[Card]] {
+        let focus = faces ?? Cards.faces(in: group, trump: trump)
+        var pool = CardPool(decks: table.decks)
+        var hands: [[Card]] = []
+        for seat in 0..<table.players {
+            let count = counts?[seat] ?? (rand.percent(15) ? 0 : rand.between(2, 18))
+            hands.append(pool.takeCopies(focus, count: count, multiPercent: multiPercent, rand: &rand))
+        }
+        let size = min(table.handSize, max(1, (hands.map(\.count).max() ?? 0) + rand.between(0, 5)))
+        var filler = rand.shuffled(pool.remaining { trump.group($0) != group })
+        for seat in hands.indices {
+            while hands[seat].count < size, let card = filler.popLast() {
+                hands[seat].append(card)
+            }
+            hands[seat] = rand.shuffled(hands[seat])
+        }
+        let common = hands.map(\.count).min() ?? 0
+        return hands.map { Array($0.prefix(max(1, common))) }
+    }
+
+    /// `size` cards of `group` from `decks` decks, mostly sets, none of them in `avoiding`.
+    static func setRichPlay(size: Int, group: SuitGroup, decks: Int, avoiding: [Card], trump: Trump,
+                            rand: inout Rand) -> [Card] {
+        var pool = CardPool(decks: decks)
+        for card in avoiding { _ = pool.take(card) }
+        return rand.shuffled(pool.takeCopies(Cards.faces(in: group, trump: trump), count: size, multiPercent: 90,
+                                             rand: &rand))
+    }
+
+    static func bigPosition(kind: Int, table: TableSize, rand: inout Rand) -> JSON {
+        let n = table.players
+        var trump = Cards.randomTrump(&rand)
+        let (hands, focus) = bigDeal(kind: kind, table: table, trump: &trump, rand: &rand)
+        var leader = rand.below(n)
+        if kind == 5 {
+            let counts = hands.map { Combos.cards($0, in: .trump, trump: trump).count }
+            leader = counts.firstIndex(of: counts.max() ?? 0) ?? leader
+        }
+        let hand = hands[leader]
+
+        let otherHands = (1..<n).map { hands[(leader + $0) % n] }
+        let focusCards = focus.map { Combos.cards(hand, in: $0, trump: trump) } ?? []
+        let leadFrom = !focusCards.isEmpty && rand.percent(75) ? focusCards : hand
+        var chosen = Plays.setLead(hand: leadFrom, others: otherHands, trump: trump, rand: &rand)
+        if kind == 5 {
+            // Two or more tractors (of sets or pairs) thrown together, maybe with a set.
+            let components = Combos.decompose(leadFrom, trump: trump)
+            let tractors = components.filter { $0.shape.isTractor }
+            if tractors.count >= 2 {
+                var parts = rand.sample(tractors, rand.between(2, min(3, tractors.count)))
+                if rand.percent(50), let set = rand.pick(components.filter { !$0.shape.isTractor && $0.shape.width >= 2 }) {
+                    parts.append(set)
+                }
+                chosen = rand.shuffled(parts.flatMap(\.cards))
+            }
+        }
+        if chosen.isEmpty { chosen = [hand[0]] }
+        var attempts = [chosen]
+        let others = otherHands.flatMap { $0 }
+        for _ in 0..<rand.between(0, 2) {
+            switch rand.below(4) {
+            case 0:
+                let groups = Cards.groups(hand, trump: trump)
+                if groups.count >= 2 { attempts.append([groups[0][0], groups[1][0]]) }
+            case 1:
+                if let stranger = rand.pick(others) { attempts.append([stranger] + rand.sample(hand, rand.between(0, 2))) }
+            default:
+                attempts.append(Plays.setLead(hand: hand, others: otherHands, trump: trump, rand: &rand))
+            }
+        }
+        let pool = rand.sample(others, rand.between(0, min(others.count, 60)))
+        let leads: [JSON] = attempts.map { cards in
+            let violation = Rules.validateLead(cards, hand: hand, trump: trump)
+            return .object([
+                ("cards", json(cards)),
+                ("violation", violation.map { json($0) } ?? .null),
+                ("explanation", violation.map { .string($0.explanation) } ?? .null),
+                ("isThrow", .bool(Rules.isThrow(cards, trump: trump))),
+                ("check", json(Rules.checkThrow(cards, leader: leader, hands: hands, trump: trump))),
+                ("pool", json(pool)),
+                ("poolCheck", json(Rules.checkThrow(cards, against: pool, trump: trump))),
+            ])
+        }
+
+        var lead = chosen
+        if rand.percent(25), Rules.isThrow(chosen, trump: trump),
+           case let .fails(forced, _) = Rules.checkThrow(chosen, leader: leader, hands: hands, trump: trump) {
+            lead = forced.cards
+        }
+
+        var follows: [JSON] = []
+        var trick = [Play(player: leader, cards: lead)]
+        var candidates: [[[Card]]] = []
+        let ledGroup = Combos.group(of: lead, trump: trump) ?? trump.group(lead[0])
+        for step in 1..<n {
+            let seat = (leader + step) % n
+            let own = hands[seat]
+            let held = Combos.cards(own, in: ledGroup, trump: trump)
+            let elsewhere = (0..<n).filter { $0 != seat }.flatMap { hands[$0] }
+            let legal = Plays.follow(hand: own, lead: lead, trump: trump, rand: &rand)
+            var plays = [legal]
+            // Every follower gets random attempts; a few also get the rules-built legal play and the
+            // attempts aimed at sets, so the file stays small.
+            if step <= 3 {
+                let built = Plays.legalFollow(hand: own, lead: lead, trump: trump, rand: &rand)
+                plays.append(built)
+                plays += Plays.setAttempts(hand: own, lead: lead, trump: trump, legal: built, rand: &rand)
+            }
+            plays += Plays.randomAttempts(hand: own, lead: lead, trump: trump, elsewhere: elsewhere, rand: &rand)
+            candidates.append(plays)
+            trick.append(Play(player: seat, cards: legal))
+            follows.append(.object([
+                ("seat", .int(seat)),
+                ("requirement", json(Rules.followRequirement(lead: lead, suitCards: held, trump: trump))),
+                ("plays", .array(plays.map { cards in
+                    var fields: [(String, JSON)] = [
+                        ("cards", json(cards)),
+                        ("matches", .bool(Rules.matchesStructure(cards, lead: lead, trump: trump))),
+                    ]
+                    if let violation = Rules.validateFollow(cards, hand: own, lead: lead, trump: trump) {
+                        fields.append(("violation", json(violation)))
+                        fields.append(("explanation", .string(violation.explanation)))
+                    }
+                    return .object(fields)
+                })),
+            ]))
+        }
+
+        var other = [Play(player: leader, cards: lead)]
+        for step in 1..<n {
+            let options = candidates[step - 1]
+            other.append(Play(player: (leader + step) % n, cards: options[rand.below(options.count)]))
+        }
+        // Probe tricks for leads with sets or tractors: set-rich plays of the led group or trumps.
+        var allTricks = [trick, other]
+        if Combos.decompose(lead, trump: trump).contains(where: { $0.shape.width >= 2 }) {
+            for _ in 0..<2 {
+                var probe = [Play(player: leader, cards: lead)]
+                for step in 1..<n {
+                    let group: SuitGroup = rand.percent(60) ? ledGroup : .trump
+                    probe.append(Play(player: (leader + step) % n,
+                                      cards: setRichPlay(size: lead.count, group: group, decks: table.decks,
+                                                         avoiding: lead, trump: trump, rand: &rand)))
+                }
+                allTricks.append(probe)
+            }
+        }
+        let tricks: [JSON] = allTricks.map { plays in
+            .object([
+                ("plays", .array(plays.map { json($0) })),
+                ("winners", .array((1...plays.count).map { .int(Rules.winningIndex(Array(plays.prefix($0)), trump: trump)) })),
+            ])
+        }
+
+        return .object([
+            ("players", .int(n)),
             ("trump", json(trump)),
             ("leader", .int(leader)),
             ("hands", json(hands)),

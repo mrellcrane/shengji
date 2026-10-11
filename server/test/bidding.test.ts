@@ -397,3 +397,51 @@ test("random bidding: every rule holds over many deals", () => {
   }
   assert.ok(declarationsSeen > 300 && allPassed > 20, `declarations ${declarationsSeen}, all passed ${allPassed}`);
 });
+
+test("tables of 6 and 8: every other player must pass after a declaration, everyone without one", () => {
+  const rng = seededRandom(68);
+  const seen = { declarations: 0, allPassed: 0, sets: 0 };
+  for (let n = 0; n < 240; n++) {
+    const table = E.tableSize(n % 2 === 0 ? 6 : 8);
+    const players = table.players;
+    const rank = E.ALL_RANKS[rng.below(13)];
+    const dealer = rng.chance(30) ? null : rng.below(players);
+    const round = E.newRound(rank, dealer, rng.shuffle(E.deckCards(table.decks)), table);
+    const firstBidder = dealer ?? rng.below(players);
+    ok(E.startBidding(round, firstBidder));
+    // Every card but the kitty is dealt: 26 each, a kitty of 6 or 8.
+    assert.deepEqual(round.hands.map((h) => h.length), new Array(players).fill(26));
+    assert.equal(round.kitty.length, E.kittySizeOf(round));
+    let expectedTurn = firstBidder;
+    let passes = 0;
+    let winning: Declaration | null = null;
+    while (E.biddingTurn(round) !== null) {
+      const seat = E.biddingTurn(round) as number;
+      assert.equal(seat, expectedTurn, "turns go round the whole table");
+      assert.notEqual(seat, round.declaration?.player, "the holder never gets a turn");
+      const options = E.availableBids(round, seat);
+      for (const o of options) assert.ok(winning === null || o.strength > winning.strength, "bids must be stronger");
+      if (options.length > 0 && rng.chance(30)) {
+        // Often the strongest: three or four of a card where the hand has them.
+        const choice = rng.chance(50) ? options[options.length - 1] : rng.pick(options);
+        ok(E.bid(round, seat, choice));
+        winning = choice;
+        passes = 0;
+        seen.declarations++;
+        if (choice.cards.length >= 3) seen.sets++;
+      } else {
+        ok(E.bid(round, seat, "pass"));
+        passes++;
+      }
+      const shouldEnd: boolean = winning === null ? passes === players : passes === players - 1;
+      assert.equal(round.phase === "burying", shouldEnd, `bidding ends after ${players - 1} passes (${players} without a declaration)`);
+      expectedTurn = (seat + 1) % players;
+    }
+    const declared = winning as Declaration | null;
+    if (declared === null) seen.allPassed++;
+    const expectedDealer = dealer ?? declared?.player ?? firstBidder;
+    assert.equal(round.dealer, expectedDealer);
+    assert.deepEqual(round.hands.map((h) => h.length), E.allSeats(players).map((s) => (s === expectedDealer ? 26 + E.kittySizeOf(round) : 26)));
+  }
+  assert.ok(seen.declarations > 150 && seen.allPassed > 10 && seen.sets > 5, JSON.stringify(seen));
+});

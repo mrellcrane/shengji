@@ -37,6 +37,12 @@ enum Cards {
     static let all: [Card] = (0..<108).map { card($0) }
     static let faces: [Face] = (0..<54).map { face($0) }
 
+    /// Every card of `decks` decks (54 per deck), in id order: `all` with 2.
+    static func deck(_ decks: Int) -> [Card] { decks == 2 ? all : (0..<(54 * decks)).map { card($0) } }
+
+    /// The tables with three or more decks, the ones the bigger-table vectors cover.
+    static let bigTables: [TableSize] = [.six, .eight]
+
     static func card(_ id: Int) -> Card {
         guard let card = Card(id: id) else { fatalError("bad card id \(id)") }
         return card
@@ -87,23 +93,48 @@ enum Cards {
     }
 }
 
-/// A set of distinct cards being handed out (no card twice).
+/// A set of distinct cards being handed out (no card twice), from two decks or more.
 struct CardPool {
-    private var used = [Bool](repeating: false, count: 108)
+    private var used: [Bool]
+    /// Decks the cards come from (2 for four players).
+    let decks: Int
+
+    init(decks: Int = 2) {
+        self.decks = decks
+        used = [Bool](repeating: false, count: 54 * decks)
+    }
 
     mutating func take(_ card: Card) -> Bool {
-        guard !used[card.id] else { return false }
+        guard used.indices.contains(card.id), !used[card.id] else { return false }
         used[card.id] = true
         return true
     }
 
-    /// One or both copies of `face` still available.
+    /// The copies of `face` still available (one per deck at most).
     func copies(of face: Face) -> [Card] {
-        [Cards.card(face.index), Cards.card(face.index + 54)].filter { !used[$0.id] }
+        (0..<decks).map { Cards.card(face.index + 54 * $0) }.filter { !used[$0.id] }
     }
 
     func remaining(where include: (Card) -> Bool = { _ in true }) -> [Card] {
-        Cards.all.filter { !used[$0.id] && include($0) }
+        Cards.deck(decks).filter { !used[$0.id] && include($0) }
+    }
+
+    /// Takes cards of `faces` (picked at random) until `count` cards are taken or nothing is left:
+    /// `multiPercent` of the time several copies of the face at once (from two up to as many as are
+    /// left and fit: pairs, triples, four of a kind), otherwise one.
+    mutating func takeCopies(_ faces: [Face], count: Int, multiPercent: Int, rand: inout Rand) -> [Card] {
+        var cards: [Card] = []
+        var attempts = 0
+        while cards.count < count && attempts < 300 {
+            attempts += 1
+            guard let face = rand.pick(faces) else { break }
+            let available = copies(of: face)
+            if available.isEmpty { continue }
+            let room = min(available.count, count - cards.count)
+            let width = room >= 2 && rand.percent(multiPercent) ? rand.between(2, room) : 1
+            for card in rand.sample(available, width) where take(card) { cards.append(card) }
+        }
+        return cards
     }
 
     /// Takes cards of `faces` (picked at random, both copies `pairPercent` of the time) until
@@ -177,6 +208,83 @@ enum Plays {
         return randomLead(hand: hand, trump: trump, rand: &rand, throwPercent: 30)
     }
 
+    /// Bigger tables: a lead from a hand that may hold triples and four of a kind. Often a set or a
+    /// tractor of sets (sometimes only part of one: two cards of a triple, a tractor of pairs taken
+    /// from a tractor of triples), sometimes a throw with a set in it, otherwise `structuredLead`.
+    static func setLead(hand: [Card], others: [[Card]], trump: Trump, rand: inout Rand) -> [Card] {
+        let byGroup = Cards.groups(hand, trump: trump)
+        guard let groupCards = rand.pick(byGroup) else { return [] }
+        let roll = rand.below(100)
+        if roll < 12, let sure = sureThrow(hand: hand, others: others, trump: trump, rand: &rand) { return sure }
+        if roll < 55 {
+            var options: [Component] = []
+            for cards in byGroup {
+                options += Combos.decompose(cards, trump: trump).filter { $0.shape.width >= 3 }
+            }
+            if let pick = rand.pick(options) {
+                guard rand.percent(30) else { return rand.shuffled(pick.cards) }
+                // Fewer copies at each step of the set or tractor.
+                let width = rand.between(2, pick.shape.width - 1)
+                var cards: [Card] = []
+                var start = 0
+                while start < pick.cards.count {
+                    cards += pick.cards[start..<(start + width)]
+                    start += pick.shape.width
+                }
+                return rand.shuffled(cards)
+            }
+        }
+        if roll < 70 {
+            // A throw: a set with other components of its group.
+            let components = Combos.decompose(groupCards, trump: trump)
+            let sets = components.filter { $0.shape.width >= 3 }
+            if let set = rand.pick(sets), components.count >= 2 {
+                let rest = components.filter { $0.cards != set.cards }
+                let extra = rand.sample(rest, rand.between(1, min(3, rest.count)))
+                return rand.shuffled(([set] + extra).flatMap(\.cards))
+            }
+        }
+        return structuredLead(hand: hand, others: others, trump: trump, rand: &rand)
+    }
+
+    /// Follow attempts aimed at the obligations of sets (bigger tables): every owed combination but
+    /// one (each in turn), filled with single cards first; and `legal` with one card of its widest
+    /// combination swapped for another card of the led group.
+    static func setAttempts(hand: [Card], lead: [Card], trump: Trump, legal: [Card], rand: inout Rand) -> [[Card]] {
+        guard let first = lead.first else { return [] }
+        let n = lead.count
+        let ledGroup = Combos.group(of: lead, trump: trump) ?? trump.group(first)
+        let held = Cards.byID(hand).filter { trump.group($0) == ledGroup }
+        guard held.count >= n, n >= 2 else { return [] }
+        let requirement = Rules.followRequirement(lead: lead, suitCards: held, trump: trump)
+        let shapes = widestFirst(requirement.units)
+        var attempts: [[Card]] = []
+        for skip in shapes.indices {
+            var kept = shapes
+            kept.remove(at: skip)
+            guard let units = disjointUnits(in: held, shapes: kept, trump: trump, rand: &rand) else { continue }
+            var rest = held
+            var play: [Card] = []
+            for unit in units {
+                play += unit
+                rest.remove(cards: unit)
+            }
+            let singles = Combos.components(of: .single, in: rest, trump: trump).map { $0.cards[0] }
+            let others = rest.filter { !singles.contains($0) }
+            play += Array((rand.shuffled(singles) + rand.shuffled(others)).prefix(n - play.count))
+            if play.count == n { attempts.append(rand.shuffled(play)) }
+        }
+        if let widest = Combos.decompose(legal, trump: trump).first(where: { $0.shape.width >= 2 }),
+           let last = widest.cards.last,
+           let spare = held.first(where: { !legal.contains($0) && $0.face != last.face }) {
+            var broken = legal
+            broken.remove(cards: [last])
+            broken.append(spare)
+            attempts.append(broken)
+        }
+        return attempts
+    }
+
     /// True if `cards` hold a component of the same shape and group as `component` with a higher top.
     static func canBeat(_ component: Component, with cards: [Card], trump: Trump) -> Bool {
         let own = Combos.cards(cards, in: component.group, trump: trump)
@@ -229,6 +337,8 @@ enum Plays {
         var play: [Card]
         if held.count <= n {
             play = held + rand.sample(others, n - held.count)
+        } else if let units = setFollow(held: held, lead: lead, trump: trump, rand: &rand) {
+            play = units
         } else {
             let requirement = Rules.followRequirement(lead: lead, suitCards: held, trump: trump)
             var pool = held
@@ -253,6 +363,46 @@ enum Plays {
             fatalError("ShengjiVectors could not build a legal follow to \(lead.shortText) from \(hand.shortText)")
         }
         return play
+    }
+
+    /// Three or more decks (a face held or led three or more times): every owed combination of the
+    /// requirement, chosen at random, then random filler from the led group. Nil with two decks, so
+    /// the two-deck vectors draw exactly the random numbers they always did.
+    static func setFollow(held: [Card], lead: [Card], trump: Trump, rand: inout Rand) -> [Card]? {
+        guard Combos.maxCopies(held) > 2 || Combos.maxCopies(lead) > 2 else { return nil }
+        let requirement = Rules.followRequirement(lead: lead, suitCards: held, trump: trump)
+        guard let units = disjointUnits(in: held, shapes: widestFirst(requirement.units), trump: trump, rand: &rand) else {
+            fatalError("ShengjiVectors could not find the owed units \(requirement.units) in \(held.shortText)")
+        }
+        var pool = held
+        var play: [Card] = []
+        for unit in units {
+            play += unit
+            pool.remove(cards: unit)
+        }
+        return play + rand.sample(pool, lead.count - play.count)
+    }
+
+    /// Shapes widest first, then longest (the order the rules search them in).
+    static func widestFirst(_ shapes: [ComboShape]) -> [ComboShape] {
+        shapes.enumerated().sorted { a, b in
+            if a.element.width != b.element.width { return a.element.width > b.element.width }
+            if a.element.length != b.element.length { return a.element.length > b.element.length }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// Disjoint combinations of the given shapes, chosen at random among the possible ones.
+    static func disjointUnits(in cards: [Card], shapes: [ComboShape], trump: Trump, rand: inout Rand) -> [[Card]]? {
+        guard let shape = shapes.first else { return [] }
+        for unit in rand.shuffled(Combos.units(of: shape, in: cards, trump: trump)) {
+            var rest = cards
+            rest.remove(cards: unit)
+            if let more = disjointUnits(in: rest, shapes: Array(shapes.dropFirst()), trump: trump, rand: &rand) {
+                return [unit] + more
+            }
+        }
+        return nil
     }
 
     /// Disjoint tractors of the given lengths, chosen at random among the possible ones.

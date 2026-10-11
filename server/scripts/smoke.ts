@@ -447,6 +447,66 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
     gameId = "";
     checks.push("game deleted by its creator (not by the other player); sockets closed with 4004");
 
+    // Bigger tables: 6 seats (3 decks) with both people play into the first trick; 8 seats are
+    // accepted and 5 refused.
+    const sixSeats = [
+      { userId: a.userId }, { bot: "standard" }, { bot: "standard" },
+      { userId: b.userId }, { bot: "beginner" }, { bot: "standard" },
+    ];
+    const sixMade = expectStatus(
+      await call("POST", "/v1/games", a.token, { clubId: club.id, seats: sixSeats, targetRank: 5 }),
+      200,
+      "create a 6-player game",
+    );
+    gameId = (sixMade.game as GameSummary).id;
+    assert((sixMade.game as GameSummary).players.length === 6, "a 6-player game should list 6 players");
+    const readSix = async (session: Session): Promise<Table> => {
+      const body = expectStatus(await call("GET", `/v1/games/${gameId}`, session.token), 200, `GET 6-player game (${session.label})`);
+      const table = body as unknown as Table;
+      checkView(table.view, `6-player view of ${session.label}`);
+      assert(table.view.handCounts.length === 6, "a 6-player view should count 6 hands");
+      assert(table.view.hand.every((card) => card >= 0 && card < 162), "a 6-player hand holds ids of 3 decks");
+      return table;
+    };
+    let sixActions = 0;
+    let sixPlaying = false;
+    for (let step = 0; step < 60 && !sixPlaying; step++) {
+      let acted = false;
+      for (const session of [a, b]) {
+        const table = await readSix(session);
+        if (table.view.phase === "playing" && table.view.tricks.length + table.view.currentTrick.length > 0) {
+          sixPlaying = true;
+          break;
+        }
+        if (!myTurn(table.view)) continue;
+        const action = chooseBotAction(table.view, "standard");
+        if (action === null) throw new SmokeFailure(`no move at the 6-player table in phase ${table.view.phase}`);
+        const reply = await call("POST", `/v1/games/${gameId}/actions`, session.token, { version: table.version, action });
+        if (reply.status === 409) continue;
+        expectStatus(reply, 200, `${session.label} ${String(action.type)} at the 6-player table`);
+        sixActions++;
+        acted = true;
+      }
+      if (!acted && !sixPlaying) await sleep(200);
+    }
+    assert(sixPlaying, "the 6-player game should reach its first trick");
+    expectStatus(await call("DELETE", `/v1/games/${gameId}`, a.token), 204, "delete the 6-player game");
+    gameId = "";
+    const eightSeats = [{ userId: a.userId }, ...Array.from({ length: 7 }, () => ({ bot: "beginner" }))];
+    const eightMade = expectStatus(
+      await call("POST", "/v1/games", a.token, { clubId: club.id, seats: eightSeats, targetRank: 5 }),
+      200,
+      "create an 8-player game",
+    );
+    gameId = (eightMade.game as GameSummary).id;
+    assert((eightMade.game as GameSummary).players.length === 8, "an 8-player game should list 8 players");
+    expectStatus(await call("DELETE", `/v1/games/${gameId}`, a.token), 204, "delete the 8-player game");
+    gameId = "";
+    const fiveSeats = [{ userId: a.userId }, ...Array.from({ length: 4 }, () => ({ bot: "standard" }))];
+    expectStatus(await call("POST", "/v1/games", a.token, { clubId: club.id, seats: fiveSeats, targetRank: 5 }), 400,
+                 "a 5-seat game is refused");
+    checks.push(`a 6-player game reached its first trick (${sixActions} human moves); 8 seats accepted, 5 refused`);
+
     const report: SmokeReport = {
       url: base,
       serverVersion: String(health.version),

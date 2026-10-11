@@ -12,7 +12,7 @@ enum GameStage: String, Codable, Sendable {
     case declareWindow
     /// You declared at the end of the deal; each bot gets one more chance to override.
     case botsRespond
-    /// The dealer has the kitty and buries 8 cards.
+    /// The dealer has the kitty and buries it (8 cards, 6 at a table of six).
     case burying
     case playing
     /// A trick just finished; it stays on the table for a moment (tap to skip).
@@ -100,7 +100,45 @@ enum GameLengthOption: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// "Who wins this trick?" asked after the 4th card lands and before the winner is shown.
+/// How many play: 4 with 2 decks (the classic game), 6 with 3 or 8 with 4. Teams sit alternately, so
+/// your partners are every other seat.
+enum GameTableOption: String, CaseIterable, Identifiable, Sendable {
+    case four = "4"
+    case six = "6"
+    case eight = "8"
+
+    var id: String { rawValue }
+
+    var table: TableSize {
+        switch self {
+        case .four: return .four
+        case .six: return .six
+        case .eight: return .eight
+        }
+    }
+
+    /// Segment title: "4 players".
+    var title: String { "\(rawValue) players" }
+
+    /// Who plays whom, for the New game button.
+    var matchup: String {
+        switch self {
+        case .four: return "You and Partner against East and West"
+        case .six: return "Your team of 3 against 3 bots, with 3 decks"
+        case .eight: return "Your team of 4 against 4 bots, with 4 decks"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .four: return "4 players use 2 decks."
+        case .six: return "6 players use 3 decks, so triples come into play, and 120 points take over the deal."
+        case .eight: return "8 players use 4 decks, so triples and four of a kind come into play, and 160 points take over the deal."
+        }
+    }
+}
+
+/// "Who wins this trick?" asked after the last card lands and before the winner is shown.
 struct GamePredictionPrompt: Equatable, Sendable {
     /// 1-based trick number within the round.
     var trickNumber: Int
@@ -153,6 +191,8 @@ struct GameSeatInfo: Equatable, Sendable {
     var isTrickWinner: Bool
     /// Guided only: this seat is winning the trick in progress.
     var isLeading: Bool
+    /// A short label for crowded tables of 6 or 8 ("NE"); nil to show `name`.
+    var shortName: String? = nil
 
     var accessibilityText: String {
         var parts = [name, "\(cardCount) cards"]

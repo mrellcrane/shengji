@@ -8,6 +8,8 @@ import { test } from "node:test";
 import * as E from "../src/engine/index.ts";
 import type { Card, SeatView } from "../src/engine/index.ts";
 import { chooseBotAction } from "../src/game/bots.ts";
+import { snapshotOf } from "../src/game/online.ts";
+import { summarize } from "../src/game/summary.ts";
 import type { GameSummary } from "../src/game/summary.ts";
 import { checkSeatView } from "../scripts/viewcheck.ts";
 import { buildDeck } from "./support.ts";
@@ -562,4 +564,98 @@ test("bot turns left over by an interrupted request run on the next read", async
   const t = await read(cloud, mei, gameId);
   assert.ok(t.version > broken.version, "the bots caught up");
   assert.ok(isMyTurn(t.view) || t.view.phase !== "bidding", "the game waits for Mei again");
+});
+
+test("tables of 6 and 8: seat counts, card ids of the table, a whole round with bots, and team names", async () => {
+  const cloud = makeCloud({ seed: 68 });
+  const [mei, lin, sam] = [await cloud.signIn("Mei"), await cloud.signIn("Lin"), await cloud.signIn("Sam")];
+  const clubId = await clubOf(cloud, mei, [lin, sam]);
+  const bot = { bot: "standard" };
+  for (const count of [3, 5, 7, 9]) {
+    const seats = [{ userId: mei.id }, ...new Array(count - 1).fill(bot)];
+    const reply = await cloud.call("POST", "/v1/games", { token: mei.token, body: { clubId, seats } });
+    assert.deepEqual([reply.status, reply.body.error], [400, "bad_request"], `${count} seats`);
+  }
+
+  // Six seats: Mei, Lin and Sam on the even seats (one team) against three bots.
+  const sixId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, bot, { userId: lin.id }, { bot: "beginner" }, { userId: sam.id }, bot]);
+  let t = await read(cloud, lin, sixId);
+  assert.deepEqual(t.game.players.map((p) => p.name), ["Lin", "Dragon Bot", "Sam", "Fox Bot", "Mei", "Tiger Bot"]);
+  assert.deepEqual([t.view.hand.length, t.view.handCounts, t.view.players.length], [26, [26, 26, 26, 26, 26, 26], 6]);
+  assert.deepEqual([t.view.phase, t.view.bidding?.turn, t.game.turn], ["bidding", 4, 4], "bidding opens at the creator (Mei)");
+  // Card ids: up to 161 with three decks; 162 and above are refused before anything else.
+  const meiTable = await read(cloud, mei, sixId);
+  const act = (p: Player, body: unknown) => cloud.call("POST", `/v1/games/${sixId}/actions`, { token: p.token, body });
+  const tooHigh = await act(mei, { version: meiTable.version, action: { type: "play", cards: [162] } });
+  assert.deepEqual([tooHigh.status, tooHigh.body.error], [400, "bad_request"]);
+  assert.match(tooHigh.body.message, /0 to 161/);
+  const badBid = await act(mei, { version: meiTable.version, action: { type: "bid", declaration: { cards: [0, 54, 200], suit: 0, strength: 5 } } });
+  assert.deepEqual([badBid.status, badBid.body.error], [400, "bad_request"]);
+  const inRange = await act(mei, { version: meiTable.version, action: { type: "play", cards: [161] } });
+  assert.deepEqual([inRange.status, inRange.body.error], [400, "illegal"], "an id of the table is the engine's to judge");
+  const offTable = await act(mei, { version: meiTable.version, action: { type: "play", cards: [216] } });
+  assert.deepEqual([offTable.status, offTable.body.error], [400, "bad_request"]);
+
+  const phases = new Set<string>();
+  const { last } = await drive(cloud, [mei, lin, sam], sixId, (table) => {
+    phases.add(table.view.phase);
+    return table.view.roundNumber === 2;
+  });
+  assert.ok(phases.has("burying") || phases.has("playing"));
+  const summary = last.view.lastRoundSummary;
+  assert.ok(summary !== null);
+  assert.equal(summary.result.kitty.length, 6, "a kitty of 6 with 6 players");
+  assert.match(summary.explanation, /, (short of|reaching) 120, /, "the line is 40 points per deck");
+  assert.match(last.game.lastEvent ?? "", /^Round 1: (your team|Tiger Bot, Dragon Bot and Fox Bot) (kept|took over) the deal/);
+  const state = cloud.rooms.get(sixId)!.service.load()!;
+  assert.match(summarize(snapshotOf(state), null).lastEvent ?? "",
+    /^Round 1: (Mei, Lin and Sam|Tiger Bot, Dragon Bot and Fox Bot) (kept|took over) the deal/);
+  // Every trick of round 1 had one play per seat.
+  const log = cloud.rooms.get(sixId)!.service.log();
+  const plays = log.filter((e) => (e.data as { type?: string }).type === "play");
+  const firstDeal = log.findIndex((e) => e.kind === "deal");
+  assert.equal(plays.filter((e) => log.indexOf(e) < firstDeal).length % 6, 0);
+
+  // Eight seats: one person and seven bots.
+  const eightId = await newGame(cloud, sam, clubId, [bot, bot, bot, { userId: sam.id }, bot, bot, { bot: "beginner" }, bot]);
+  t = await read(cloud, sam, eightId);
+  assert.deepEqual(t.game.players.map((p) => p.name), ["Sam", "Koi Bot", "Fox Bot", "Owl Bot", "Yak Bot", "Panda Bot", "Tiger Bot", "Crane Bot"]);
+  assert.deepEqual([t.view.hand.length, t.view.handCounts.length], [26, 8]);
+  const eight = await drive(cloud, [sam], eightId, (table) => table.view.roundNumber === 2);
+  assert.equal(eight.last.view.lastRoundSummary?.result.kitty.length, 8);
+  assert.match(eight.last.view.lastRoundSummary?.explanation ?? "", /, (short of|reaching) 160, /);
+  assert.match(eight.last.game.lastEvent ?? "", /^Round 1: (your team|Panda Bot, Crane Bot, Koi Bot and Owl Bot) (kept|took over) the deal/);
+});
+
+test("a failed throw at a table of 6 names the blocker from the thrower's side", async () => {
+  // Round 1, rank 2, three decks. Mei (seat 0) holds A♠ Q♠ and seat 5 (a bot, on her left) every
+  // other A♠ and K♠, so the throw fails on Q♠ and seat 5 blocks it. Nobody can declare (seats 1 to 3 hold one copy
+  // each of every 2 and joker; beginner bots only declare with two or more), so the kitty flip
+  // makes hearts trump (A♥ is its highest card) and Mei, the first bidder, deals.
+  const c = (rank: E.Rank, suit: E.Suit, copy = 0): Card => E.makeCard(rank, suit, copy);
+  const kitty = [c(14, 1), c(3, 2), c(4, 2), c(6, 3), c(7, 3), c(8, 3)];
+  const meiCards = [c(14, 0), c(12, 0), ...[3, 4, 6, 7, 8, 9].map((r) => c(r as E.Rank, 2, 1))];
+  const ranks = (copy: number): Card[] => [0, 1, 2, 3].map((suit) => c(2, suit as E.Suit, copy)).concat([E.smallJoker(copy), E.bigJoker(copy)]);
+  const deck = buildDeck([meiCards, ranks(0), ranks(1), ranks(2), [], [c(13, 0), c(13, 0, 1), c(13, 0, 2), c(14, 0, 1), c(14, 0, 2)]], kitty, 0, 5, 6);
+  const cloud = makeCloud({ decks: [deck] });
+  const mei = await cloud.signIn("Mei");
+  const clubId = await clubOf(cloud, mei, []);
+  const beginner = { bot: "beginner" };
+  const gameId = await newGame(cloud, mei, clubId, [{ userId: mei.id }, beginner, beginner, beginner, beginner, beginner]);
+  let t = await read(cloud, mei, gameId);
+  const act = (body: unknown) => cloud.call("POST", `/v1/games/${gameId}/actions`, { token: mei.token, body });
+  let reply = await act({ version: t.version, action: { type: "pass" } });
+  assert.equal(reply.status, 200);
+  t = reply.body;
+  assert.deepEqual([t.view.phase, t.view.dealer, t.view.trump, t.view.kitty], ["burying", 0, { rank: 2, suit: 1 }, kitty]);
+  const bury = t.view.hand.filter((card) => !meiCards.slice(0, 2).includes(card) && E.groupOf(t.view.trump, card) !== 1).slice(0, 6);
+  const tooFew = await act({ version: t.version, action: { type: "bury", cards: bury.slice(0, 5) } });
+  assert.deepEqual(tooFew.body, { error: "illegal", message: "Choose exactly 6 cards to bury (you chose 5)." });
+  reply = await act({ version: t.version, action: { type: "bury", cards: bury } });
+  assert.equal(reply.status, 200);
+  t = reply.body;
+  reply = await act({ version: t.version, action: { type: "play", cards: [c(14, 0), c(12, 0)] } });
+  assert.equal(reply.status, 200);
+  assert.deepEqual(reply.body.outcome, { type: "throwFailed", forced: [c(12, 0)], blocker: 5 });
+  assert.ok(reply.body.view.hand.includes(c(14, 0)), "the rest of the throw goes back to the hand");
 });
