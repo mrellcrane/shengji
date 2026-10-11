@@ -56,7 +56,7 @@ struct OnlineGameSummary: Codable, Hashable, Identifiable, Sendable {
     var status: Status
     /// Index 0 = you, 1 = your right, 2 = your partner, 3 = your left.
     var players: [SeatView.Player]
-    /// [your team, the other team].
+    /// [your team, the other team]; with Finding Friends (an odd number of players) one per seat, yours first.
     var teamLevels: [Rank]
     var targetRank: Rank
     var roundNumber: Int
@@ -129,6 +129,9 @@ struct OnlineGameSummary: Codable, Hashable, Identifiable, Sendable {
     func level(of team: Int) -> Rank? {
         teamLevels.indices.contains(team) ? teamLevels[team] : nil
     }
+
+    /// An odd number of players: Finding Friends (no fixed teams, everyone has their own level).
+    var findsFriends: Bool { players.count % 2 == 1 }
 }
 
 /// A seat in `POST /v1/games`: `{"userId": "u_..."}` or `{"bot": "standard" | "beginner"}`.
@@ -176,15 +179,16 @@ enum OnlineBotLevel: String, Codable, CaseIterable, Hashable, Sendable {
     }
 }
 
-/// What you do at the table. Actions never name seats (the server knows who you are).
+/// What you do at the table. Actions never name seats (the server knows who you are). With Finding
+/// Friends a bury carries the friends called (`calls`, left out of the JSON when empty).
 enum OnlineAction: Codable, Hashable, Sendable {
     case bid(Declaration)
     case pass
-    case bury([Card])
+    case bury([Card], calls: [FriendCall] = [])
     case play([Card])
 
     private enum CodingKeys: String, CodingKey {
-        case type, declaration, cards
+        case type, declaration, cards, calls
     }
 
     init(from decoder: Decoder) throws {
@@ -192,7 +196,9 @@ enum OnlineAction: Codable, Hashable, Sendable {
         switch try c.decode(String.self, forKey: .type) {
         case "bid": self = .bid(try c.decode(Declaration.self, forKey: .declaration))
         case "pass": self = .pass
-        case "bury": self = .bury(try c.decode([Card].self, forKey: .cards))
+        case "bury":
+            self = .bury(try c.decode([Card].self, forKey: .cards),
+                         calls: try c.decodeIfPresent([FriendCall].self, forKey: .calls) ?? [])
         case "play": self = .play(try c.decode([Card].self, forKey: .cards))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "Unknown action \(other)")
@@ -207,9 +213,10 @@ enum OnlineAction: Codable, Hashable, Sendable {
             try c.encode(declaration, forKey: .declaration)
         case .pass:
             try c.encode("pass", forKey: .type)
-        case let .bury(cards):
+        case let .bury(cards, calls):
             try c.encode("bury", forKey: .type)
             try c.encode(cards, forKey: .cards)
+            if !calls.isEmpty { try c.encode(calls, forKey: .calls) }
         case let .play(cards):
             try c.encode("play", forKey: .type)
             try c.encode(cards, forKey: .cards)
@@ -221,7 +228,7 @@ enum OnlineAction: Codable, Hashable, Sendable {
         switch self {
         case let .bid(declaration): return declaration.cards
         case .pass: return []
-        case let .bury(cards), let .play(cards): return cards
+        case let .bury(cards, _), let .play(cards): return cards
         }
     }
 }

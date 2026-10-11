@@ -1,8 +1,9 @@
 import SwiftUI
 import ShengjiCore
 
-/// Start a game: pick the club, how many play (4, 6 or 8), who sits where (your partners in every other
-/// seat; friends or bots in the other seats) and how long to play.
+/// Start a game: pick the club, how many play (4 to 9), who sits where (your partners in every other
+/// seat with an even number; with an odd number nobody has fixed partners: Finding Friends) and how
+/// long to play.
 @MainActor
 struct OnlineNewGameSheet: View {
     let initialClubID: String?
@@ -35,7 +36,10 @@ struct OnlineNewGameSheet: View {
                     }
                 }
                 playersSection
-                if players > 4 {
+                if players % 2 == 1 {
+                    seatsSection(title: "Who plays", seats: Array(1..<players),
+                                 footer: "Nobody has a fixed partner: each round the dealer calls friends. Bots fill any seat, and they play straight away.")
+                } else if players > 4 {
                     seatsSection(title: "Your team", seats: partnerSeats,
                                  footer: "Teams sit in every other seat, so your partners are \(names(partnerSeats)).")
                     seatsSection(title: "Against you", seats: opponentSeats,
@@ -96,7 +100,9 @@ struct OnlineNewGameSheet: View {
         Section {
             Picker("Players", selection: $tableOption) {
                 ForEach(GameTableOption.allCases) { option in
-                    Text(option.title).tag(option)
+                    Text(option.shortTitle)
+                        .accessibilityLabel(option.title)
+                        .tag(option)
                 }
             }
             .pickerStyle(.segmented)
@@ -193,7 +199,8 @@ struct OnlineNewGameSheet: View {
         let members = (club?.members ?? []).filter { $0.id != session.user?.id }
         var friends = members.prefix(players - 1).map(OnlineSeatChoice.member)[...]
         var seats = Array(repeating: OnlineSeatChoice.bot(.standard), count: players - 1)
-        for seat in partnerSeats + opponentSeats {
+        let order = players % 2 == 1 ? Array(1..<players) : partnerSeats + opponentSeats
+        for seat in order {
             guard let friend = friends.popFirst() else { break }
             seats[seat - 1] = friend
         }

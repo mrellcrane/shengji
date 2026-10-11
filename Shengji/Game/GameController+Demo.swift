@@ -1,7 +1,7 @@
 import Foundation
 import ShengjiCore
 
-/// Deterministic tables for CI screenshots (`-ScreenshotScene game|dealing|result|game6|game8`).
+/// Deterministic tables for CI screenshots (`-ScreenshotScene game|dealing|result|game6|game8|game9|friends9|result9`).
 /// Built by driving the real engine and bots from seed 7 (a bot plays your seat where needed),
 /// entirely in memory: demo controllers never save and never touch the saved game.
 extension GameController {
@@ -16,8 +16,11 @@ extension GameController {
         case .game, .coach: return playingDemo()
         case .game6: return playingDemo(table: .six)
         case .game8: return playingDemo(table: .eight)
+        case .game9: return playingDemo(table: .nine)
+        case .friends9: return friendsDemo()
         case .dealing: return dealingDemo()
         case .result: return resultDemo()
+        case .result9: return resultDemo(table: .nine)
         case .learn, .lesson, .predict, .review, .quiz, .rules, .achievements, .online, .onlineGame: return nil
         }
     }
@@ -52,11 +55,28 @@ extension GameController {
     }
 
     /// Your turn after a few tricks with some plays on the table (1 or 2 at a table of four; at bigger
-    /// tables at least 3, so the seats round the table show their cards).
+    /// tables at least 3, so the seats round the table show their cards). With Finding Friends, once a
+    /// friend has been found (so the friend badge and the calls row show it).
     var isPlayingDemoMoment: Bool {
         let plays = players == 4 ? 1...2 : 3...(players - 1)
+        let friendShown = !findsFriends || round.friendCalls.contains { $0.isFound && $0.friend != round.dealer }
         return stage == .playing && round.tricks.count >= 3 && round.turn == Seats.human
-            && plays.contains(round.currentTrick.count)
+            && plays.contains(round.currentTrick.count) && friendShown
+    }
+
+    /// Nine players, you deal: the cards to bury chosen (the bot's choice) and the friend picker open.
+    static func friendsDemo() -> GameController {
+        for seed in demoSeeds {
+            let controller = demoTable(seed: seed, table: .nine)
+            controller.botSeats = Set(controller.seats)
+            controller.advanceSynchronously { $0.stage == .burying }
+            guard controller.stage == .burying, controller.round.dealer == Seats.human else { continue }
+            controller.botSeats = Set(controller.seats.dropFirst())
+            for card in Bot(seat: Seats.human).cardsToBury(in: controller.round).cards { controller.toggle(card) }
+            controller.burySelected()
+            if controller.isChoosingFriends { return controller }
+        }
+        return playingDemo(table: .nine)
     }
 
     /// About 60 cards dealt, you can declare (so the declare buttons show), dealing paused.
@@ -93,11 +113,11 @@ extension GameController {
     }
 
     /// A finished first round with the result shown.
-    static func resultDemo() -> GameController {
-        let controller = demoTable(seed: demoSeed)
-        controller.botSeats = Set(Seats.all)
+    static func resultDemo(table: TableSize = .four) -> GameController {
+        let controller = demoTable(seed: demoSeed, table: table)
+        controller.botSeats = Set(controller.seats)
         controller.advanceSynchronously()
-        controller.botSeats = [1, 2, 3]
+        controller.botSeats = Set(controller.seats.dropFirst())
         return controller
     }
 }

@@ -8,6 +8,8 @@ enum OnlineTableSheet: Identifiable, Equatable {
     case rules
     case whatHappened
     case roundSummary(RoundSummary)
+    /// Finding Friends: you chose the cards to bury and now name your friends.
+    case friends
 
     var id: String {
         switch self {
@@ -15,6 +17,7 @@ enum OnlineTableSheet: Identifiable, Equatable {
         case .rules: return "rules"
         case .whatHappened: return "whatHappened"
         case .roundSummary: return "roundSummary"
+        case .friends: return "friends"
         }
     }
 }
@@ -89,6 +92,10 @@ final class OnlineGameModel: Identifiable {
     private(set) var hintBannerID: UUID?
     private(set) var illegalAttempt: IllegalAttempt?
     private(set) var lastNudge: Date?
+    /// Finding Friends: the cards you chose to bury while you name your friends, and the bot's calls for
+    /// them (offered as a starting point).
+    private(set) var pendingBury: [Card] = []
+    private(set) var friendSuggestion: FriendCallChoice?
     var coachLevel: CoachLevel = .guided
     /// Reminders reach the other player (false while the server sends no notifications: a reminder
     /// would reach nobody, so the table doesn't offer one).
@@ -342,6 +349,7 @@ final class OnlineGameModel: Identifiable {
     var gameOverHeadline: String? {
         guard isGameOver else { return nil }
         guard let winner = view?.gameWinnerTeam ?? summary?.winnerTeam else { return "This game is over." }
+        if table.findsFriends { return winner == 0 ? "Your side wins the game!" : "The dealer's side wins the game." }
         let team = OnlineGameText.teamName(winner, players: players)
         return winner == 0 ? "\(team) win the game!" : "\(team) win the game."
     }
@@ -471,19 +479,41 @@ final class OnlineGameModel: Identifiable {
     }
 
     func role(of seat: Int) -> GameSeatRole? {
-        guard let dealer = view?.dealer else { return nil }
+        guard let view, let dealer = view.dealer else { return nil }
         if seat == dealer { return .dealer }
+        if view.findsFriends {
+            // Nobody knows who defends until every called card has been played.
+            if view.isDeclarer(seat) { return .friend }
+            return allFriendsFound ? .defender : nil
+        }
         return Seats.team(of: seat) == Seats.team(of: dealer) ? .declarer : .defender
+    }
+
+    /// Finding Friends: every called card has been played.
+    var allFriendsFound: Bool {
+        guard let calls = view?.friendCalls, !calls.isEmpty else { return false }
+        return calls.allSatisfy(\.isFound)
+    }
+
+    /// The team dot of a seat: 0 your side, 1 the other side; with Finding Friends 2 while unknown.
+    func sideTeam(of seat: Int) -> Int {
+        guard let view, view.findsFriends else { return Seats.team(of: seat) }
+        if seat == Seats.human { return 0 }
+        guard view.dealer != nil else { return 2 }
+        let youDeclare = view.isDeclarer(Seats.human)
+        if view.isDeclarer(seat) { return youDeclare ? 0 : 1 }
+        guard allFriendsFound || youDeclare else { return 2 }
+        return youDeclare ? 1 : 0
     }
 
     func seatInfo(_ seat: Int) -> GameSeatInfo {
         let counts = view?.handCounts ?? []
         let display = trickDisplay
-        return GameSeatInfo(seat: seat, name: name(seat), team: Seats.team(of: seat),
+        return GameSeatInfo(seat: seat, name: name(seat), team: sideTeam(of: seat),
                             cardCount: counts.indices.contains(seat) ? counts[seat] : 0, role: role(of: seat),
                             isTurn: !isGameOver && actingSeat == seat, isThinking: false,
                             isTrickWinner: display.winner == seat, isLeading: leadingSeat == seat,
-                            shortName: table.players > 4 ? OnlineGameText.shortName(seat, players: players) : nil)
+                            shortName: table.players != 4 ? OnlineGameText.shortName(seat, players: players) : nil)
     }
 
     // MARK: Selecting cards
@@ -548,14 +578,52 @@ final class OnlineGameModel: Identifiable {
     }
 
     func bury() {
-        guard isBuryingTurn else { return }
+        guard isBuryingTurn, let view else { return }
         let cards = selectedCards
         guard cards.count == kittySize else {
             banner = GameCoachMessage("Choose exactly \(kittySize) cards to bury (you chose \(cards.count)).",
                                       concept: "The kitty", kind: .warning)
             return
         }
+        if view.findsFriends {
+            pendingBury = cards
+            friendSuggestion = Bot(seat: Seats.human).friendCallChoice(view: view, buried: cards)
+            setSheet(.friends)
+            return
+        }
         send(.bury(cards))
+    }
+
+    /// Your hand without the cards you chose to bury (the friend picker counts the copies you hold).
+    var handAfterPendingBury: [Card] {
+        var cards = view?.hand ?? []
+        cards.remove(cards: pendingBury)
+        return cards
+    }
+
+    /// Why `calls` can't be made at this table, or nil when they can.
+    func friendCallProblem(_ calls: [FriendCall]) -> String? {
+        guard let view else { return "The table isn't loaded." }
+        return FriendCall.problem(with: calls, table: view.table, trumpRank: view.trump.rank)
+    }
+
+    /// Finding Friends: bury the chosen cards and call these friends.
+    func callFriends(_ calls: [FriendCall]) {
+        guard isBuryingTurn, !pendingBury.isEmpty else { return }
+        if let problem = friendCallProblem(calls) {
+            banner = GameCoachMessage(problem, concept: "Finding friends", kind: .warning)
+            return
+        }
+        let cards = pendingBury
+        pendingBury = []
+        setSheet(nil)
+        send(.bury(cards, calls: calls))
+    }
+
+    /// Back from the friend picker to choosing the cards to bury.
+    func cancelFriendCalls() {
+        pendingBury = []
+        if sheet == .friends { setSheet(nil) }
     }
 
     /// Checks the play with the rules first (instant feedback), then sends it.
@@ -680,7 +748,7 @@ final class OnlineGameModel: Identifiable {
         guard after.roundNumber == before.roundNumber else { return false }
         let cards: [Card]
         switch action {
-        case let .play(chosen), let .bury(chosen):
+        case let .play(chosen), let .bury(chosen, _):
             cards = chosen
         case .bid, .pass:
             guard let bidding = before.bidding, bidding.turn == Seats.human else { return false }

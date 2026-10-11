@@ -260,7 +260,8 @@ struct GamePredictionPanel: View {
                     }
                     .accessibilityLabel(answerLabel(seat))
                     .buttonStyle(.borderedProminent)
-                    .tint(Theme.teamColor(Seats.team(of: seat)))
+                    // No fixed teams at an odd table: every button in the neutral colour but yours.
+                    .tint(Theme.teamColor(players % 2 == 1 ? (seat == Seats.human ? 0 : 2) : Seats.team(of: seat)))
                 }
             }
         }
@@ -279,8 +280,8 @@ struct GamePredictionPanel: View {
         }
     }
 
-    /// Four buttons a row (three with 6 players, so both rows are full).
-    private var columns: Int { players == 6 ? 3 : 4 }
+    /// Four buttons a row (three with 6 or 9 players, so the rows are full).
+    private var columns: Int { players == 6 || players == 9 ? 3 : 4 }
 
     private func answerLabel(_ seat: Int) -> String {
         seat == Seats.human ? "You win it" : "\(Seats.name(seat, players: players)) wins it"

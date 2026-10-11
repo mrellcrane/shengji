@@ -3,7 +3,8 @@ import ShengjiCore
 
 /// Sheets the table can show from its menu, the coach button and the hint banner.
 enum GameTableSheet: String, Identifiable {
-    case rules, lastTrick, coach
+    /// `friends`: Finding Friends, the dealer names their friends after choosing the cards to bury.
+    case rules, lastTrick, coach, friends
 
     var id: String { rawValue }
 }
@@ -69,6 +70,7 @@ struct GameTableView: View {
         }
         .task {
             await openDemoCoachIfNeeded()
+            await openFriendPickerIfNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -84,9 +86,17 @@ struct GameTableView: View {
         .onChange(of: sheet) { _, newSheet in
             // The bots wait while you read the rules, review the last trick or talk to the coach.
             if newSheet == nil {
+                if controller.isChoosingFriends { controller.cancelFriendCalls() }
                 controller.start()
             } else {
                 controller.pause()
+            }
+        }
+        .onChange(of: controller.isChoosingFriends) { _, choosing in
+            if choosing {
+                sheet = .friends
+            } else if sheet == .friends {
+                sheet = nil
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: controller.isShowingResult)
@@ -147,6 +157,12 @@ struct GameTableView: View {
                           explanation: lastTrickExplanation)
         case .coach:
             CoachSheet(conversation: coach)
+        case .friends:
+            FriendCallSheet(table: controller.round.table, trump: controller.round.trump,
+                            hand: controller.handAfterPendingBury, suggestion: controller.friendSuggestion,
+                            problem: { controller.friendCallProblem($0) },
+                            onCall: { controller.callFriends($0) },
+                            onBack: { controller.cancelFriendCalls() })
         }
     }
 
@@ -178,6 +194,15 @@ struct GameTableView: View {
         guard !Task.isCancelled, sheet == nil else { return }
         controller.pause()
         sheet = .coach
+    }
+
+    /// The table opened while you were naming your friends (the `friends9` demo scene): show the picker
+    /// once the full-screen table has finished presenting.
+    private func openFriendPickerIfNeeded() async {
+        guard controller.isChoosingFriends, sheet == nil else { return }
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        guard !Task.isCancelled, sheet == nil, controller.isChoosingFriends else { return }
+        sheet = .friends
     }
 
     private var lastTrickExplanation: String? {

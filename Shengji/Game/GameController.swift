@@ -55,6 +55,11 @@ final class GameController: Identifiable {
     private(set) var hintBannerID: UUID?
     /// Your last rejected play or bury, for the coach (see `lastIllegal`).
     private(set) var illegalAttempt: IllegalAttempt?
+    /// Finding Friends: you chose the cards to bury and now name your friends (the table shows the
+    /// friend picker). The cards wait in `pendingBury` until you confirm.
+    private(set) var isChoosingFriends = false
+    /// The bot's calls for the cards you are burying, offered as a starting point.
+    private(set) var friendSuggestion: FriendCallChoice?
 
     // MARK: Learning hooks (wired to LearningStore by the views; nil in demos and tests)
 
@@ -87,6 +92,10 @@ final class GameController: Identifiable {
     @ObservationIgnored private var illegalPosition: TablePosition?
     /// "Your throw failed…" text, added to the explanation when the trick ends (`isYours`: warning style).
     @ObservationIgnored private var throwNote: (text: String, isYours: Bool)?
+    /// "Northeast played the first A♠…": friends found during the trick, said again when it ends.
+    @ObservationIgnored private var friendNote: String?
+    /// Finding Friends: the cards you chose to bury, while you pick your friends.
+    @ObservationIgnored private var pendingBury: [Card] = []
 
     /// Base delays in seconds at Normal speed.
     enum Delay {
@@ -194,8 +203,11 @@ final class GameController: Identifiable {
 
     func isBot(_ seat: Int) -> Bool { botSeats.contains(seat) }
 
-    /// Seats at this table (4, 6 or 8).
+    /// Seats at this table (4 to 9).
     var players: Int { round.players }
+
+    /// An odd number of players: the dealer calls friends instead of having fixed partners.
+    var findsFriends: Bool { round.isFindingFriends }
 
     /// Every seat, you first.
     var seats: [Int] { Seats.all(players: players) }
@@ -221,6 +233,11 @@ final class GameController: Identifiable {
 
     func level(of team: Int) -> Rank {
         game.levels.indices.contains(team) ? game.levels[team] : game.settings.startRank
+    }
+
+    /// Finding Friends: the level `seat` plays at (their own; with fixed teams, their team's).
+    func displayedLevel(ofSeat seat: Int) -> Rank {
+        displayedLevel(of: findsFriends ? seat : Seats.team(of: seat))
     }
 
     /// The level shown in the top bar. The round is scored as soon as its last trick lands, so while
@@ -341,13 +358,35 @@ final class GameController: Identifiable {
     func role(of seat: Int) -> GameSeatRole? {
         guard let dealer = round.dealer else { return nil }
         if seat == dealer { return .dealer }
+        if findsFriends {
+            // Nobody knows who defends until every called card has been played.
+            if round.isDeclarer(seat) { return .friend }
+            return allFriendsFound ? .defender : nil
+        }
         return Seats.team(of: seat) == Seats.team(of: dealer) ? .declarer : .defender
+    }
+
+    /// Finding Friends: every called card has been played (or none were called yet).
+    var allFriendsFound: Bool {
+        !round.friendCalls.isEmpty && round.friendCalls.allSatisfy(\.isFound)
+    }
+
+    /// The team dot of a seat: 0 your side, 1 the other side. With Finding Friends a seat's side is only
+    /// known once it is on the dealer's side, or once every friend is found (2 until then).
+    func sideTeam(of seat: Int) -> Int {
+        guard findsFriends else { return Seats.team(of: seat) }
+        if seat == Seats.human { return 0 }
+        guard round.dealer != nil else { return 2 }
+        let youDeclare = round.isDeclarer(Seats.human)
+        if round.isDeclarer(seat) { return youDeclare ? 0 : 1 }
+        guard allFriendsFound || youDeclare else { return 2 }
+        return youDeclare ? 1 : 0
     }
 
     func seatInfo(_ seat: Int) -> GameSeatInfo {
         let turn = turnSeat
         let display = trickDisplay
-        return GameSeatInfo(seat: seat, name: name(seat), team: Seats.team(of: seat),
+        return GameSeatInfo(seat: seat, name: name(seat), team: sideTeam(of: seat),
                             cardCount: cardCount(of: seat), role: role(of: seat),
                             isTurn: turn == seat, isThinking: isBotThinking && turn == seat,
                             isTrickWinner: display.winner == seat, isLeading: leadingSeat == seat,
@@ -376,7 +415,7 @@ final class GameController: Identifiable {
         case .botsRespond:
             return "Others may respond…"
         case .burying:
-            if isHumanBurying { return "Pick \(round.kittySize) to bury" }
+            if isHumanBurying { return isChoosingFriends ? "Call your friends" : "Pick \(round.kittySize) to bury" }
             return "\(round.dealer.map(name) ?? "Dealer") is burying…"
         case .playing:
             if isHumanTurn {
@@ -668,45 +707,93 @@ final class GameController: Identifiable {
 
     private func botBury() {
         guard stage == .burying, let dealer = round.dealer, isBot(dealer) else { return }
-        let decision = Bot(seat: dealer).cardsToBury(in: round)
+        let bot = Bot(seat: dealer)
+        let decision = bot.cardsToBury(in: round)
         var buried = false
-        if (try? round.bury(decision.cards)) != nil {
+        if (try? round.bury(decision.cards, calls: bot.friendCalls(in: round, buried: decision.cards))) != nil {
             buried = true
         } else {
             // Defensive fallback: the lowest cards that are not trumps where possible.
             let sorted = round.trump.sorted(hand(of: dealer))
             let plain = sorted.filter { !round.trump.isTrump($0) }
             let pick = Array((plain + sorted.filter { round.trump.isTrump($0) }).prefix(round.kittySize))
-            buried = (try? round.bury(pick)) != nil
+            buried = (try? round.bury(pick, calls: bot.friendCalls(in: round, buried: pick))) != nil
         }
         guard buried else {
             stall("The dealer couldn't bury the kitty.")
             return
         }
         if dealer == Seats.human { selection = [] }
+        isChoosingFriends = false
         let size = round.kittySize
         let line = dealer == Seats.human ? "The bot buried \(size) cards for you." : "\(name(dealer)) buried \(size) cards face down."
-        beginPlay(prefix: line)
+        beginPlay(prefix: GameCoachText.join([line, GameCoachText.friendCallLine(dealer: dealer, calls: round.friendCalls,
+                                                                                players: players)]))
     }
 
-    /// You bury the selected cards (8, or 6 at a table of six).
+    /// You bury the selected cards (8, or 6 at a table of six). With Finding Friends this first opens the
+    /// friend picker (`isChoosingFriends`); `callFriends` then buries.
     func burySelected() {
         guard canBury else { return }
         let cards = hand(of: Seats.human).filter { selection.contains($0.id) }
+        if findsFriends {
+            pendingBury = cards
+            friendSuggestion = Bot(seat: Seats.human)
+                .friendCallChoice(view: round.seatView(for: Seats.human), buried: cards)
+            isChoosingFriends = true
+            return
+        }
+        bury(cards, calls: [])
+    }
+
+    /// Your hand without the cards you chose to bury (the friend picker counts the copies you hold).
+    var handAfterPendingBury: [Card] {
+        var cards = hand(of: Seats.human)
+        cards.remove(cards: pendingBury)
+        return cards
+    }
+
+    /// Why `calls` can't be made at this table, or nil when they can (the friend picker shows it).
+    func friendCallProblem(_ calls: [FriendCall]) -> String? {
+        FriendCall.problem(with: calls, table: round.table, trumpRank: round.trumpRank)
+    }
+
+    /// Finding Friends: bury the cards you chose and call these friends.
+    func callFriends(_ calls: [FriendCall]) {
+        guard isChoosingFriends, isHumanBurying, !pendingBury.isEmpty else { return }
+        if let problem = friendCallProblem(calls) {
+            banner = GameCoachMessage(problem, concept: "Finding friends", kind: .warning)
+            return
+        }
+        bury(pendingBury, calls: calls)
+    }
+
+    /// Back from the friend picker to choosing the cards to bury.
+    func cancelFriendCalls() {
+        guard isChoosingFriends else { return }
+        isChoosingFriends = false
+        pendingBury = []
+    }
+
+    private func bury(_ cards: [Card], calls: [FriendCall]) {
         do {
-            try round.bury(cards)
+            try round.bury(cards, calls: calls)
         } catch let error as RoundError {
+            isChoosingFriends = false
             noteIllegal(cards, error: error)
             banner = GameCoachMessage(error.explanation, concept: "The kitty", kind: .warning)
             return
         } catch {
             return
         }
+        isChoosingFriends = false
+        pendingBury = []
         let points = cards.points
         let line = points > 0
             ? "You buried \(cards.count) cards with \(points) points. They count for the defenders if they win the last trick."
             : "You buried \(cards.count) cards with no points. Safe!"
-        beginPlay(prefix: line)
+        beginPlay(prefix: GameCoachText.join([line, GameCoachText.friendCallLine(dealer: Seats.human, calls: round.friendCalls,
+                                                                                players: players)]))
         restartDriver()
     }
 
@@ -885,6 +972,7 @@ final class GameController: Identifiable {
             return
         }
         let before = round.tricks.count
+        let callsBefore = round.friendCalls
         do {
             let outcome = try round.play(cards, by: Seats.human)
             selection = []
@@ -895,7 +983,7 @@ final class GameController: Identifiable {
                 throwNote = (note, true)
                 banner = GameCoachMessage(note, concept: "Throws", kind: .warning)
             }
-            afterPlay(tricksBefore: before)
+            afterPlay(tricksBefore: before, callsBefore: callsBefore)
         } catch let error as RoundError {
             reject(error, cards: cards, lead: lead)
             return
@@ -918,6 +1006,7 @@ final class GameController: Identifiable {
     private func botPlay(_ seat: Int) {
         guard stage == .playing, round.turn == seat, isBot(seat) else { return }
         let before = round.tricks.count
+        let callsBefore = round.friendCalls
         let decision = Bot(seat: seat).decide(in: round)
         var outcome = try? round.play(decision.cards, by: seat)
         if outcome == nil, let fallback = GameController.fallbackPlay(for: seat, in: round) {
@@ -934,7 +1023,7 @@ final class GameController: Identifiable {
             throwNote = (note, seat == Seats.human)
             banner = GameCoachMessage(note, concept: "Throws", kind: seat == Seats.human ? .warning : .info)
         }
-        afterPlay(tricksBefore: before)
+        afterPlay(tricksBefore: before, callsBefore: callsBefore)
     }
 
     /// A legal play found by brute force, in case a bot decision is rejected by the rules.
@@ -972,8 +1061,17 @@ final class GameController: Identifiable {
         return candidates.first { $0.count == n && round.legalityError(for: $0, by: seat) == nil }
     }
 
-    private func afterPlay(tricksBefore: Int) {
-        guard round.tricks.count > tricksBefore, let trick = round.tricks.last else { return }
+    private func afterPlay(tricksBefore: Int, callsBefore: [FriendCall] = []) {
+        let found = GameCoachText.friendsFoundLine(before: callsBefore, after: round.friendCalls, dealer: round.dealer,
+                                                   players: players)
+        guard round.tricks.count > tricksBefore, let trick = round.tricks.last else {
+            if let found {
+                banner = GameCoachMessage(GameCoachText.join([throwNote?.text, found]), concept: "Finding friends",
+                                          kind: .success)
+            }
+            return
+        }
+        friendNote = found
         trickCompleted(trick)
     }
 
@@ -1036,13 +1134,16 @@ final class GameController: Identifiable {
             return
         }
         let noteKind: GameCoachMessage.Kind = note?.isYours == true ? .warning : .info
+        let found = friendNote
+        friendNote = nil
         if let explanation = GameCoachText.trickExplanation(trick, trump: round.trump, coach: coachLevel,
                                                             winnerIsDefender: isDefender, isLastTrick: isLast) {
-            banner = GameCoachMessage(GameCoachText.join([note?.text, explanation.text]),
-                                      concept: note == nil ? explanation.concept : "Throws",
+            banner = GameCoachMessage(GameCoachText.join([note?.text, found, explanation.text]),
+                                      concept: note == nil ? (found == nil ? explanation.concept : "Finding friends") : "Throws",
                                       kind: noteKind)
-        } else if let note {
-            banner = GameCoachMessage(note.text, concept: "Throws", kind: noteKind)
+        } else if note != nil || found != nil {
+            banner = GameCoachMessage(GameCoachText.join([note?.text, found]),
+                                      concept: note == nil ? "Finding friends" : "Throws", kind: noteKind)
         } else {
             banner = nil
         }
@@ -1138,6 +1239,10 @@ final class GameController: Identifiable {
         stallMessage = nil
         roundRecorded = false
         throwNote = nil
+        friendNote = nil
+        pendingBury = []
+        isChoosingFriends = false
+        friendSuggestion = nil
         hintLadder = nil
         hintPosition = nil
         hintBannerID = nil

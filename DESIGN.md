@@ -128,6 +128,42 @@ The general rules live in `Engine/RulesSets.swift` and only run when a lead, han
 of a face; with two decks the classic code paths run unchanged (a test checks that both agree there). Bots use the
 same strategy with partners and opponents for any table, plus sets as sure winners.
 
+### Finding Friends (5, 7 or 9 players)
+
+An odd number of players can't sit in two fixed teams, so these tables play **Finding Friends** (找朋友 zhǎo péngyou)
+every round (`TableSize.findsFriends`). Decks: half a deck per player rounded up (`(players + 1) / 2`): 5 players use
+3 decks (31 cards each, kitty 7), 7 use 4 (30 each, kitty 6), 9 use 5 (29 each, kitty 9; `Card.id` up to 269, five of
+a kind). The bigger-table rules above (sets, declaring by count, 40 points per deck) apply. Seat names: 5 South, East,
+Northeast, Northwest, West; 7 South, Southeast, East, Northeast, Northwest, West, Southwest; 9 adds Southeast and North-
+northeast / North-northwest (the two top seats). Changes:
+
+- **Calling friends.** The dealer buries and calls `table.friendCount` friends at once (`Round.bury(_:calls:)`):
+  players / 2 − 1, so 1 with 5, 2 with 7, 3 with 9. A `FriendCall` names a face and which copy counts (1-based
+  ordinal: "the first A♠", "the second K♥", up to the number of decks). Jokers and trump-rank cards can't be called;
+  no call twice (`FriendCall.problem`, checked before the cards). Calls are public.
+- **Finding them.** Copies of a called face are counted in play order over the round; the play that holds the copy
+  reaching the ordinal makes its player the friend (`FriendCall.friend`). A failed throw counts only the cards played.
+  The dealer (or someone already found) can answer a call, and a buried copy is never played: the dealer's side is
+  then smaller than `teamSize` (= friendCount + 1).
+- **Sides.** `Round.declarers` = the dealer and the friends found so far (dealer first, then play order); everyone
+  else is a defender, hidden friends included, until they play the called card. `defenderTrickPoints` is recounted
+  over the finished tricks whenever a friend is found, so points move with the player who won them. Team numbers in
+  results, summaries and `GameState.winner` mean seat 0's side (in a seat view: the viewer's): 0 when seat 0 was on
+  the dealer's side.
+- **Scoring.** The same per-deck table, against the defenders' points. A dealer's side that holds while short-handed
+  goes up 1 more level (`Scoring.findingFriendsOutcome`).
+- **Levels.** One level per seat (`GameState.levels`); the trump rank is the dealer's level. Everyone on the side that
+  wins the round goes up (capped at the target). Next dealer: if the dealer's side holds, its next player after the
+  dealer (the dealer again if alone); otherwise the first defender after the dealer. The game is won when the dealer's
+  side holds while the dealer is at the target; its winners are that round's `declarers`.
+- **Bots.** The dealer calls, for each plain suit, the highest card it holds no copy of (suits it still holds cards of
+  first, shortest first) (`BotFriends`). A seat holding the copy that answers an open call is a hidden friend: it
+  counts itself on the dealer's side, leads the called card when it can't be beaten for points, and follows with it
+  when the lead allows. The dealer's side leads low in the suit of an open call so the friend can win it. A defender
+  counts nobody as a partner until every called card has been played (`FriendsPlan`).
+- **Views and online.** `SeatView.friendCalls` (viewer-relative friend seats, from burying on), `teamLevels` one per
+  seat (the viewer's first). Online, the bury action carries `calls`.
+
 ## Engine API notes
 
 - `Round` is a value-type state machine (`dealing → burying → playing → finished`). The UI keeps one `Round` and calls
@@ -214,7 +250,9 @@ Guided coach level, a hint shown), `dealing` (mid-deal with declare buttons), `r
 `rules` (rules reference), `coach` (the `game` table with the coach sheet open on a canned chat, no network),
 `achievements` (the achievements screen with sample progress), `online` (Play online: sample clubs and games from
 the in-memory demo server), `onlineGame` (an online table mid-play, a seeded round's seat view, demo server),
-`game6` and `game8` (the `game` table with 6 players and 3 decks, and with 8 and 4).
+`game6` and `game8` (the `game` table with 6 players and 3 decks, and with 8 and 4), `game9` (9 players, Finding
+Friends, mid-play with a friend found), `friends9` (you deal at 9 and the friend picker is open), `result9` (a finished
+9-player round: everyone's own levels).
 Without the argument the app starts normally. Scene setup must never touch saved progress (or the network).
 
 ## Work ownership (for parallel development)
@@ -277,7 +315,7 @@ Without the argument the app starts normally. Scene setup must never touch saved
 
 ## Online multiplayer (planned; decisions made with the user)
 
-Small private groups (6 to 10 friends), tables of 4, 6 or 8 (bots fill empty seats), asynchronous turn-based play with push notifications, live updates when
+Small private groups (6 to 10 friends), tables of 4 to 9 (bots fill empty seats; odd tables play Finding Friends), asynchronous turn-based play with push notifications, live updates when
 several players are in the app. Offline learning, practice and bot games stay as they are.
 
 - Server: a separate Cloudflare Worker in `server/` (free plan). TypeScript port of the engine (decision: no
@@ -290,9 +328,9 @@ several players are in the app. Offline learning, practice and bot games stay as
   TypeScript port of the bots (`server/src/bots`, both levels, choices without the texts) must choose exactly the
   cards the Swift bots choose at every decision of the generated rounds (`bots.json`), bidding included.
   CI regenerates the vectors and fails if they drift from the Swift engine or bots.
-- Card wire format: `Card.id` (face index + copy × 54: 0...107 with 2 decks, up to 215 with 4). Seats 0...3 as
-  offline (0...5 or 0...7 at a table of 6 or 8); each player sees the table rotated so they are "You".
-- Declaring online is turn-based: all 25 cards (26 at a table of 6 or 8) are dealt at once, then from the first
+- Card wire format: `Card.id` (face index + copy × 54: 0...107 with 2 decks, up to 269 with 5). Seats 0...3 as
+  offline (up to 0...8 at a table of 9); each player sees the table rotated so they are "You".
+- Declaring online is turn-based: every hand (25 cards with 4 players, up to 31 with 5) is dealt at once, then from the first
   bidder (the dealer, or the game creator's seat in round 1) each player in turn declares (same strength rules as
   offline) or passes. Bidding ends when every other player has passed since the last declaration (three with 4
   players), or when everyone passes with no declaration (then the kitty flip rule sets trump). Round 1: the winning

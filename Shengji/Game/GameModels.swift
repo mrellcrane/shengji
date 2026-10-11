@@ -100,25 +100,35 @@ enum GameLengthOption: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// How many play: 4 with 2 decks (the classic game), 6 with 3 or 8 with 4. Teams sit alternately, so
-/// your partners are every other seat.
+/// How many play: 4 with 2 decks (the classic game), up to 9 with 5 (half a deck each, rounded up).
+/// With an even number teams sit alternately, so your partners are every other seat; with an odd
+/// number the dealer calls friends every round (Finding Friends).
 enum GameTableOption: String, CaseIterable, Identifiable, Sendable {
     case four = "4"
+    case five = "5"
     case six = "6"
+    case seven = "7"
     case eight = "8"
+    case nine = "9"
 
     var id: String { rawValue }
 
     var table: TableSize {
         switch self {
         case .four: return .four
+        case .five: return .five
         case .six: return .six
+        case .seven: return .seven
         case .eight: return .eight
+        case .nine: return .nine
         }
     }
 
     /// Segment title: "4 players".
     var title: String { "\(rawValue) players" }
+
+    /// Segment title for a narrow picker: "4".
+    var shortTitle: String { rawValue }
 
     /// Who plays whom, for the New game button.
     var matchup: String {
@@ -126,6 +136,9 @@ enum GameTableOption: String, CaseIterable, Identifiable, Sendable {
         case .four: return "You and Partner against East and West"
         case .six: return "Your team of 3 against 3 bots, with 3 decks"
         case .eight: return "Your team of 4 against 4 bots, with 4 decks"
+        case .five, .seven, .nine:
+            let table = self.table
+            return "Finding Friends: you and \(table.players - 1) bots, with \(table.decks) decks"
         }
     }
 
@@ -134,6 +147,12 @@ enum GameTableOption: String, CaseIterable, Identifiable, Sendable {
         case .four: return "4 players use 2 decks."
         case .six: return "6 players use 3 decks, so triples come into play, and 120 points take over the deal."
         case .eight: return "8 players use 4 decks, so triples and four of a kind come into play, and 160 points take over the deal."
+        case .five, .seven, .nine:
+            let table = self.table
+            let friends = table.friendCount == 1 ? "a friend" : "\(table.friendCount) friends"
+            return "\(table.players) players use \(table.decks) decks. Nobody has a fixed partner: each round the dealer "
+                + "calls \(friends) by naming a card, and whoever plays it joins their side. Everyone climbs their own "
+                + "levels, and \(Scoring.takeoverThreshold(decks: table.decks)) points take over the deal."
         }
     }
 }
@@ -165,13 +184,15 @@ struct TableTrickDisplay: Equatable, Sendable {
 }
 
 enum GameSeatRole: String, Sendable {
-    case dealer, declarer, defender
+    /// `friend`: Finding Friends, a player who answered one of the dealer's calls.
+    case dealer, declarer, defender, friend
 
     var title: String {
         switch self {
         case .dealer: return "Dealer"
         case .declarer: return "Declarer"
         case .defender: return "Defender"
+        case .friend: return "Friend"
         }
     }
 }
@@ -180,6 +201,7 @@ enum GameSeatRole: String, Sendable {
 struct GameSeatInfo: Equatable, Sendable {
     var seat: Int
     var name: String
+    /// 0 = your team (or side), 1 = the other one; with Finding Friends 2 while nobody knows yet.
     var team: Int
     var cardCount: Int
     var role: GameSeatRole?

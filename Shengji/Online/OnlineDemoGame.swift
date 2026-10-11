@@ -117,14 +117,15 @@ struct OnlineDemoGame: Sendable {
                 bidding = nil
                 round.finishDealing()
             }
-        case let .bury(cards):
+        case let .bury(cards, calls):
             guard bidding == nil, round.phase == .burying else { throw Rejection.illegal("You can't bury now.") }
             do {
-                try round.bury(cards)
+                try round.bury(cards, calls: calls)
             } catch let error as RoundError {
                 throw Rejection.illegal(error.explanation)
             }
-            lastEvent = "\(name(seat)) buried the kitty."
+            lastEvent = calls.isEmpty ? "\(name(seat)) buried the kitty."
+                : "\(name(seat)) buried the kitty and called \(calls.spokenList)."
         case let .play(cards):
             guard bidding == nil else { throw Rejection.illegal("Bidding isn't over yet.") }
             let result: PlayOutcome
@@ -167,8 +168,10 @@ struct OnlineDemoGame: Sendable {
         }
         switch round.phase {
         case .burying:
-            if attempt(.bury(bot.cardsToBury(in: round).cards), by: seat, now: now) { return true }
-            return attempt(.bury(Array(round.hands[seat].prefix(round.kittySize))), by: seat, now: now)
+            let cards = bot.cardsToBury(in: round).cards
+            if attempt(.bury(cards, calls: bot.friendCalls(in: round, buried: cards)), by: seat, now: now) { return true }
+            let fallback = Array(round.hands[seat].prefix(round.kittySize))
+            return attempt(.bury(fallback, calls: bot.friendCalls(in: round, buried: fallback)), by: seat, now: now)
         case .playing:
             if attempt(.play(bot.decide(in: round).cards), by: seat, now: now) { return true }
             guard let fallback = GameController.fallbackPlay(for: seat, in: round) else { return false }

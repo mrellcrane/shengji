@@ -61,10 +61,12 @@ enum OnlineGameText {
         list(teamSeats(team, count: players.count).map { name($0, players: players) })
     }
 
-    /// "Mei, Jun and Ana" for a games-list row (everyone but you: your partners first).
+    /// "Mei, Jun and Ana" for a games-list row (everyone but you: your partners first; with Finding
+    /// Friends, in seat order).
     static func othersLine(_ players: [SeatView.Player]) -> String {
         let count = TableSize(players: players.count).players
-        let seats = Seats.teammates(of: Seats.human, players: count) + Seats.opponents(of: Seats.human, players: count)
+        let seats = count % 2 == 1 ? Array(1..<count)
+            : Seats.teammates(of: Seats.human, players: count) + Seats.opponents(of: Seats.human, players: count)
         let names = seats.filter { players.indices.contains($0) }.map { name($0, players: players) }
         return names.isEmpty ? "Just you" : list(names)
     }
@@ -101,7 +103,9 @@ enum OnlineGameText {
         case .bidding:
             return actingSeat(view) == Seats.human ? "Declare or pass" : ""
         case .burying:
-            return actingSeat(view) == Seats.human ? "Pick \(view.table.kittySize) to bury" : ""
+            guard actingSeat(view) == Seats.human else { return "" }
+            return view.findsFriends ? "Pick \(view.table.kittySize) to bury, then call friends"
+                : "Pick \(view.table.kittySize) to bury"
         case .playing:
             guard view.turn == Seats.human else { return "" }
             let lead = view.currentLead
@@ -196,14 +200,23 @@ enum OnlineGameText {
             }
         case .burying:
             if actingSeat(view) == Seats.human {
-                parts.append("You're the dealer, so the kitty is yours. Choose 8 cards to bury.")
+                let friends = view.table.friendCount == 1 ? "a friend" : "\(view.table.friendCount) friends"
+                parts.append("You're the dealer, so the kitty is yours. Choose \(view.table.kittySize) cards to bury"
+                             + (view.findsFriends ? ", then call \(friends)." : "."))
             } else if let dealer = view.dealer {
                 parts.append("\(name(dealer, players: players)) is the dealer and is burying the kitty.")
             }
         case .playing:
+            if let found = friendsFoundLine(old: sameRound ? old : nil, new: view) {
+                parts.append(found)
+            }
             if let old, sameRound, view.tricks.count > old.tricks.count, let trick = view.tricks.last {
                 parts.append(trickLine(trick, view: view))
             } else if old?.phase != .playing, view.tricks.isEmpty, view.currentTrick.isEmpty {
+                if let dealer = view.dealer, let calls = view.friendCalls,
+                   let line = GameCoachText.friendCallLine(dealer: dealer, calls: calls, name: { name($0, players: players) }) {
+                    parts.append(line)
+                }
                 parts.append("\(subject(view.leader, players: players, "lead", "leads")) the first trick.")
             }
             if view.turn == Seats.human {
@@ -214,7 +227,9 @@ enum OnlineGameText {
                 }
             }
         case .finished:
-            if let winner = view.gameWinnerTeam {
+            if let winner = view.gameWinnerTeam, view.findsFriends {
+                parts.append(winner == 0 ? "Game over: your side wins!" : "Game over: the dealer's side wins.")
+            } else if let winner = view.gameWinnerTeam {
                 parts.append(winner == 0 ? "Game over: \(teamName(0, players: players)) win!" : "Game over: \(teamName(1, players: players)) win.")
             } else {
                 parts.append("The round is over.")
@@ -226,10 +241,74 @@ enum OnlineGameText {
         return text.isEmpty ? nil : text
     }
 
+    // MARK: Finding Friends
+
+    /// Friends found between two views of the same round ("Mei played the first A♠ and joins Lin's side.").
+    static func friendsFoundLine(old: SeatView?, new view: SeatView) -> String? {
+        guard let old, let after = view.friendCalls, after.count == old.friendCalls?.count ?? after.count else { return nil }
+        let before = old.friendCalls ?? after.map(\.unfound)
+        return GameCoachText.friendsFoundLine(before: before, after: after, dealer: view.dealer,
+                                              name: { name($0, players: view.players) })
+    }
+
+    /// "Mei, Lin and you": seats of one side, in the order given.
+    static func names(_ seats: [Int], players: [SeatView.Player]) -> String {
+        list(seats.map { name($0, players: players) })
+    }
+
+    /// Finding Friends: who was on the dealer's side, and what the points did to everyone's levels
+    /// (with your friends' names).
+    static func friendsRoundExplanation(_ summary: RoundSummary, players: [SeatView.Player], target: Rank) -> String {
+        let result = summary.result
+        let declarers = result.declarers ?? [result.dealer]
+        let points = result.defenderPoints
+        let kittyBonus = result.kittyPoints * result.kittyMultiplier
+        let scored = kittyBonus > 0
+            ? "The defenders scored \(points) points (including \(kittyBonus) from the kitty)"
+            : "The defenders scored \(points) points"
+        let threshold = Scoring.takeoverThreshold(decks: TableSize(players: players.count).decks)
+        var sentences: [String] = []
+        sentences.append(declarers.count == 1
+            ? "\(names(declarers, players: players)) played alone: no friend joined."
+            : "\(names(declarers, players: players)) played together as the dealer's side.")
+        if result.outcome.declarersHold {
+            sentences.append("\(scored), short of \(threshold), so the dealer's side keeps the deal.")
+        } else {
+            sentences.append("\(scored), reaching \(threshold), so they take over the deal.")
+        }
+        if let winner = summary.gameWinner {
+            let ending = winner == 0 ? "so you win the game!" : "so they win the game."
+            sentences.append("\(name(result.dealer, players: players)) held the deal at level \(target.label), \(ending)")
+            return sentences.joined(separator: " ")
+        }
+        if result.outcome.levels == 0 {
+            sentences.append("Nobody goes up a level this time.")
+        } else {
+            let who = result.outcome.declarersHold ? "The dealer's side" : "The defenders"
+            let verb = result.outcome.declarersHold ? "goes" : "go"
+            let phrase = result.outcome.levels == 1 ? "1 level" : "\(result.outcome.levels) levels"
+            sentences.append("\(who) \(verb) up \(phrase).")
+        }
+        if summary.levelsBefore.indices.contains(0), summary.levelsAfter.indices.contains(0),
+           summary.levelsAfter[0] != summary.levelsBefore[0] {
+            sentences.append("You are now at level \(summary.levelsAfter[0].label).")
+        }
+        return sentences.joined(separator: " ")
+    }
+
     // MARK: Round summary
 
     /// "You and Mei held the deal" / "Jun and Ana take over".
     static func roundHeadline(_ summary: RoundSummary, players: [SeatView.Player]) -> String {
+        if let declarers = summary.result.declarers {
+            if let winner = summary.gameWinner {
+                return winner == 0 ? "Your side wins the game!" : "\(names(declarers, players: players)) win the game"
+            }
+            if summary.result.outcome.declarersHold {
+                return "\(names(declarers, players: players)) held the deal"
+            }
+            return summary.result.isDeclarer(Seats.human) ? "The defenders take over the deal" : "Your side takes over the deal"
+        }
         if let winner = summary.gameWinner {
             return winner == 0 ? "\(teamName(0, players: players)) win the game!" : "\(teamName(1, players: players)) win the game"
         }
@@ -244,6 +323,9 @@ enum OnlineGameText {
     /// `summary.explanation` comes from the shared engine text, which calls the other team
     /// "East and West" and the seats by direction. (Who deals next is `nextDealerLine`.)
     static func roundExplanation(_ summary: RoundSummary, players: [SeatView.Player], target: Rank) -> String {
+        if summary.result.declarers != nil {
+            return friendsRoundExplanation(summary, players: players, target: target)
+        }
         let result = summary.result
         let points = result.defenderPoints
         let kittyBonus = result.kittyPoints * result.kittyMultiplier
@@ -286,6 +368,7 @@ enum OnlineGameText {
     static func rowStatus(_ game: OnlineGameSummary) -> String {
         if game.isFinished {
             guard let winner = game.winnerTeam else { return "Finished" }
+            if game.findsFriends { return winner == 0 ? "You won" : "Finished" }
             return winner == 0 ? "You won" : "\(teamName(1, players: game.players)) won"
         }
         if game.isYourTurn {
@@ -303,14 +386,20 @@ enum OnlineGameText {
 
     /// "Round 3 · Us 4, Them 3 · to A" (with "· 6 players" at a bigger table).
     static func rowDetail(_ game: OnlineGameSummary) -> String {
+        if game.findsFriends {
+            return "Round \(game.roundNumber) · You \(game.level(of: 0)?.label ?? "?") · to \(game.targetRank.label)"
+                + tableNote(game)
+        }
         let us = game.level(of: 0)?.label ?? "?"
         let them = game.level(of: 1)?.label ?? "?"
         return "Round \(game.roundNumber) · Us \(us), Them \(them) · to \(game.targetRank.label)" + tableNote(game)
     }
 
-    /// " · 6 players" for a table of 6 or 8, nothing for the classic four.
+    /// " · 6 players" for a table of 6 or 8 (" · 9 players · friends" for Finding Friends), nothing for
+    /// the classic four.
     static func tableNote(_ game: OnlineGameSummary) -> String {
-        game.players.count > 4 ? " · \(game.players.count) players" : ""
+        if game.findsFriends { return " · \(game.players.count) players · friends" }
+        return game.players.count > 4 ? " · \(game.players.count) players" : ""
     }
 
     // MARK: Club games you are not in
@@ -331,7 +420,10 @@ enum OnlineGameText {
 
     /// "Ben and Cai vs Tiger Bot and Dragon Bot" for a game you are not in.
     static func everyoneLine(_ players: [SeatView.Player]) -> String {
-        "\(othersTeam(0, players: players)) vs \(othersTeam(1, players: players))"
+        if players.count % 2 == 1 {
+            return list(players.indices.map { playerName($0, players: players) })
+        }
+        return "\(othersTeam(0, players: players)) vs \(othersTeam(1, players: players))"
     }
 
     /// "Ben and Cai": a team in a game you are not in.
@@ -343,7 +435,7 @@ enum OnlineGameText {
     static func othersGameStatus(_ game: OnlineGameSummary) -> String {
         let name = { (seat: Int) in playerName(seat, players: game.players) }
         if game.isFinished {
-            guard let winner = game.winnerTeam else { return "Finished" }
+            guard let winner = game.winnerTeam, !game.findsFriends else { return "Finished" }
             return "\(othersTeam(winner, players: game.players)) won"
         }
         if let turn = game.turn { return "Waiting for \(name(turn))" }

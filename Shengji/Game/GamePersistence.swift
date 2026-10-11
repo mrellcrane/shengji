@@ -34,8 +34,9 @@ struct SavedGame: Codable, Sendable {
         round.phase == .finished ? max(1, game.roundsPlayed) : game.roundsPlayed + 1
     }
 
-    /// e.g. "Round 3 · Us 4 · Them 2"
+    /// e.g. "Round 3 · Us 4 · Them 2" (Finding Friends: "Round 3 · You 4", everyone has their own level).
     var summaryLine: String {
+        if game.findsFriends { return "Round \(roundNumber) · You \(game.level(of: Seats.human).label)" }
         let us = game.levels.indices.contains(0) ? game.levels[0].label : game.settings.startRank.label
         let them = game.levels.indices.contains(1) ? game.levels[1].label : game.settings.startRank.label
         return "Round \(roundNumber) · Us \(us) · Them \(them)"
@@ -45,6 +46,7 @@ struct SavedGame: Codable, Sendable {
     var targetLine: String {
         let target = "Playing to \(game.settings.targetRank == .ace ? "Ace" : "level \(game.settings.targetRank.label)")"
         let players = round.players
+        if round.isFindingFriends { return "\(players) players · Finding Friends · \(target)" }
         return players > 4 ? "\(players) players · \(target)" : target
     }
 }

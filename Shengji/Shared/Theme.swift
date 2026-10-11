@@ -25,7 +25,16 @@ enum Theme {
         }
     }
 
-    static func teamColor(_ team: Int) -> Color { team == 0 ? usColor : themColor }
+    /// Finding Friends: a player whose side nobody knows yet (team 2).
+    static let unknownSideColor = Color(white: 0.72)
+
+    static func teamColor(_ team: Int) -> Color {
+        switch team {
+        case 0: return usColor
+        case 1: return themColor
+        default: return unknownSideColor
+        }
+    }
 
     static func suitColor(_ suit: Suit) -> Color { suit.isRed ? cardRed : cardInk }
 }

@@ -63,8 +63,8 @@ struct GameRuleReminder: Identifiable, Sendable {
             caption: nil),
     ]
 
-    /// The reminders for a table of `players`: with 6 or 8, triples join in and the point lines scale
-    /// with the decks.
+    /// The reminders for a table of `players`: with 5 to 9, triples join in and the point lines scale
+    /// with the decks; an odd table adds Finding Friends first.
     static func all(players: Int) -> [GameRuleReminder] {
         let table = TableSize(players: players)
         guard table.players > 4 else { return all }
@@ -91,6 +91,18 @@ struct GameRuleReminder: Identifiable, Sendable {
             caption: nil)
         let index = (reminders.firstIndex { $0.id == "matching" } ?? reminders.count - 1) + 1
         reminders.insert(triples, at: min(index, reminders.count))
+        if table.findsFriends {
+            let friends = table.friendCount == 1 ? "a friend" : "\(table.friendCount) friends"
+            reminders.insert(GameRuleReminder(
+                id: "friends",
+                title: "Finding friends (找朋友)",
+                text: "Nobody has a fixed partner. After burying, the dealer calls \(friends) by naming cards, such as "
+                    + "the first A♠ played. Whoever plays it joins the dealer's side; everyone else defends. Points won "
+                    + "before a friend shows themselves count for the side they turn out to be on. A dealer's side that "
+                    + "holds the deal short-handed goes up 1 extra level.",
+                cards: [Card(.ace, .spades)],
+                caption: "Everyone climbs their own levels; the trump rank is the dealer's level."), at: 0)
+        }
         return reminders
     }
 }

@@ -6,8 +6,9 @@ card game also known as **Tractor** (拖拉机 tuōlājī), and lets you practis
 Fixed partners, a trump suit and a trump rank that change every round, pairs and tractors: Shengji
 has a lot of rules to hold in your head at once. The app teaches the classic game for four players and two decks
 (bigger groups add decks: at least half a deck per player, and as many more as you like) one small idea at a time, then lets you play real games while
-a coach explains what is happening. Games against the bots and online can seat 4, 6 or 8 players, with 2, 3 or 4
-decks (triples and four of a kind come into play at the bigger tables).
+a coach explains what is happening. Games against the bots and online can seat 4 to 9 players, with half a deck each
+rounded up (2 to 5 decks; triples and four of a kind come into play at the bigger tables). With 5, 7 or 9 players
+there are no fixed teams: every round the dealer calls friends by naming cards (Finding Friends, 找朋友).
 
 ## How it teaches
 
@@ -49,7 +50,7 @@ Then connect your iPhone, pick it as the run destination and press Run.
 
 **Demo scenes:** launching with `-ScreenshotScene <name>` opens a fixed scene without touching your
 saved progress. Names: `learn`, `lesson`, `predict`, `review`, `quiz`, `game`, `dealing`, `result`,
-`rules`, `game6`, `game8`. The shared scheme already has `-ScreenshotScene game` under Product > Scheme > Edit Scheme >
+`rules`, `game6`, `game8`, `game9`, `friends9`, `result9`. The shared scheme already has `-ScreenshotScene game` under Product > Scheme > Edit Scheme >
 Run > Arguments; tick it (and change the name) to use it.
 
 ## Project structure

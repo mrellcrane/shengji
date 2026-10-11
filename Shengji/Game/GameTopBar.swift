@@ -2,7 +2,7 @@ import SwiftUI
 import ShengjiCore
 
 /// Levels for Us and Them (declaring team flagged), defenders' points, trump, dealer, the coach
-/// and the table menu.
+/// and the table menu. With Finding Friends: your level and the dealer's, and the friends called.
 @MainActor
 struct GameTopBar: View {
     let controller: GameController
@@ -26,13 +26,44 @@ struct GameTopBar: View {
                 Spacer(minLength: 4)
                 dealerView
             }
+            if controller.findsFriends, !controller.round.friendCalls.isEmpty {
+                GameFriendCallsRow(calls: controller.round.friendCalls,
+                                   name: { Seats.shortName($0, players: controller.players) },
+                                   spokenName: { controller.name($0) })
+            }
         }
         .padding(.top, 4)
     }
 
     // MARK: Levels
 
-    private var levels: some View {
+    @ViewBuilder private var levels: some View {
+        if controller.findsFriends {
+            friendsLevels
+        } else {
+            teamLevels
+        }
+    }
+
+    /// Finding Friends: everyone has their own level. Yours, and the dealer's (the trump rank).
+    private var friendsLevels: some View {
+        HStack(spacing: 4) {
+            GameTeamLevelChip(title: "You", team: 0, level: controller.displayedLevel(ofSeat: Seats.human),
+                              isDeclaring: controller.round.isDeclarer(Seats.human), spokenName: "You")
+            if let dealer = controller.round.dealer, dealer != Seats.human {
+                Text("·")
+                    .font(.headline)
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .accessibilityHidden(true)
+                GameTeamLevelChip(title: Seats.shortName(dealer, players: controller.players),
+                                  team: controller.sideTeam(of: dealer),
+                                  level: controller.displayedLevel(ofSeat: dealer), isDeclaring: true,
+                                  spokenName: "\(controller.name(dealer)), the dealer")
+            }
+        }
+    }
+
+    private var teamLevels: some View {
         HStack(spacing: 4) {
             GameTeamLevelChip(title: "Us", team: 0, level: controller.displayedLevel(of: 0),
                               isDeclaring: controller.round.declarerTeam == 0)
@@ -169,6 +200,8 @@ struct GameTeamLevelChip: View {
     let team: Int
     let level: Rank
     let isDeclaring: Bool
+    /// Finding Friends: who the chip belongs to, for VoiceOver ("You", "East, the dealer").
+    var spokenName: String? = nil
 
     var body: some View {
         HStack(spacing: 3) {
@@ -193,7 +226,7 @@ struct GameTeamLevelChip: View {
     }
 
     private var accessibilityText: String {
-        let who = team == 0 ? "Your team" : "Their team"
+        let who = spokenName ?? (team == 0 ? "Your team" : "Their team")
         let declaring = isDeclaring ? ", declaring" : ""
         return "\(who), level \(level.label)\(declaring)"
     }

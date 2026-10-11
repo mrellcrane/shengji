@@ -151,11 +151,37 @@ struct OnlineRoundSummarySheet: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private var declarersSection: some View {
-        RoundResultSection(title: "Declarers") {
-            Text("\(OnlineGameText.teamName(result.declarerTeam, players: players)) were the declarers. \(OnlineGameText.subject(result.dealer, players: players, "dealt", "dealt")).")
-            TrumpBadge(trump: result.trump)
+    @ViewBuilder private var declarersSection: some View {
+        if let declarers = result.declarers {
+            RoundResultSection(title: "The dealer's side") {
+                Text("\(OnlineGameText.subject(result.dealer, players: players, "dealt", "dealt")). "
+                     + (declarers.count <= 1 ? "No friend joined."
+                        : "\(OnlineGameText.names(declarers, players: players)) played together."))
+                ForEach(Array((result.friendCalls ?? []).enumerated()), id: \.offset) { _, call in
+                    HStack {
+                        Text(FriendCallText.short(call))
+                        Spacer()
+                        Text(answer(call))
+                            .fontWeight(.semibold)
+                    }
+                    .font(.subheadline)
+                    .accessibilityElement(children: .combine)
+                }
+                TrumpBadge(trump: result.trump)
+            }
+        } else {
+            RoundResultSection(title: "Declarers") {
+                Text("\(OnlineGameText.teamName(result.declarerTeam, players: players)) were the declarers. \(OnlineGameText.subject(result.dealer, players: players, "dealt", "dealt")).")
+                TrumpBadge(trump: result.trump)
+            }
         }
+    }
+
+    /// Finding Friends: who answered a call (a player, the dealer themself, or nobody).
+    private func answer(_ call: FriendCall) -> String {
+        guard let friend = call.friend else { return "Never played" }
+        let who = OnlineGameText.name(friend, players: players)
+        return friend == result.dealer ? "\(who) (the dealer)" : who
     }
 
     private var pointsSection: some View {
@@ -209,8 +235,14 @@ struct OnlineRoundSummarySheet: View {
 
     private var levelsSection: some View {
         RoundResultSection(title: "Levels") {
-            levelRow(team: 0, title: "Us")
-            levelRow(team: 1, title: "Them")
+            if result.declarers != nil {
+                ForEach(0..<min(players.count, summary.levelsAfter.count), id: \.self) { seat in
+                    seatLevelRow(seat)
+                }
+            } else {
+                levelRow(team: 0, title: "Us")
+                levelRow(team: 1, title: "Them")
+            }
             if summary.gameWinner == nil {
                 Text(OnlineGameText.nextDealerLine(summary, players: players))
                     .font(.subheadline.weight(.semibold))
@@ -235,6 +267,42 @@ struct OnlineRoundSummarySheet: View {
                 .monospacedDigit()
             if gained {
                 Text("+\(summary.levelsGained)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Theme.correct)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Finding Friends: one player's level, before and after.
+    private func seatLevelRow(_ seat: Int) -> some View {
+        let before = summary.levelsBefore.indices.contains(seat) ? summary.levelsBefore[seat] : nil
+        let after = summary.levelsAfter.indices.contains(seat) ? summary.levelsAfter[seat] : nil
+        let gained = (after?.rawValue ?? 0) - (before?.rawValue ?? 0)
+        let declared = result.isDeclarer(seat)
+        let team = declared == result.isDeclarer(Seats.human) ? 0 : 1
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(Theme.teamColor(team))
+                .frame(width: 10, height: 10)
+            Text(OnlineGameText.name(seat, players: players))
+                .fontWeight(seat == Seats.human ? .bold : .semibold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if seat == result.dealer {
+                Text("Dealer")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            } else if declared {
+                Text("Friend")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(before?.label ?? "?") → \(after?.label ?? "?")")
+                .monospacedDigit()
+            if gained > 0 {
+                Text("+\(gained)")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(Theme.correct)
             }

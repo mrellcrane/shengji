@@ -33,11 +33,41 @@ struct OnlineTopBar: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
+            if let calls = model.view?.friendCalls, !calls.isEmpty {
+                GameFriendCallsRow(calls: calls,
+                                   name: { OnlineGameText.shortName($0, players: model.players) },
+                                   spokenName: { model.name($0) })
+            }
         }
         .padding(.top, 4)
     }
 
-    private var levels: some View {
+    @ViewBuilder private var levels: some View {
+        if model.table.findsFriends {
+            friendsLevels
+        } else {
+            teamLevels
+        }
+    }
+
+    /// Finding Friends: everyone has their own level. Yours, and the dealer's (the trump rank).
+    private var friendsLevels: some View {
+        HStack(spacing: 4) {
+            GameTeamLevelChip(title: "You", team: 0, level: model.level(of: Seats.human) ?? .two,
+                              isDeclaring: model.view?.isDeclarer(Seats.human) == true, spokenName: "You")
+            if let dealer = model.view?.dealer, dealer != Seats.human {
+                Text("·")
+                    .font(.headline)
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .accessibilityHidden(true)
+                GameTeamLevelChip(title: OnlineGameText.shortName(dealer, players: model.players),
+                                  team: model.sideTeam(of: dealer), level: model.level(of: dealer) ?? .two,
+                                  isDeclaring: true, spokenName: "\(model.name(dealer)), the dealer")
+            }
+        }
+    }
+
+    private var teamLevels: some View {
         HStack(spacing: 4) {
             GameTeamLevelChip(title: "Us", team: 0, level: model.level(of: 0) ?? .two,
                               isDeclaring: model.view?.declarerTeam == 0)
@@ -254,7 +284,7 @@ struct OnlineTableArea: View {
 
     @ViewBuilder
     private func tableContent(size: CGSize, snapshot: OnlineTableSnapshot) -> some View {
-        if snapshot.seats.count > 4 {
+        if snapshot.seats.count != 4 {
             GameBigTableLayout(seats: snapshot.seats, size: size,
                                slot: { seat, cardWidth, maxWidth in
                                    slot(seat, snapshot: snapshot, cardWidth: cardWidth, maxWidth: maxWidth)

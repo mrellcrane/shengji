@@ -75,6 +75,11 @@ enum GameCoachText {
 
     static func dealerReason(_ game: GameState) -> String? {
         guard let last = game.history.last else { return nil }
+        if game.findsFriends {
+            return last.result.outcome.declarersHold
+                ? "the dealer's side held last round, so its next player deals"
+                : "the defenders took over last round, so the first defender after the dealer deals"
+        }
         let partner = game.players > 4 ? "the dealer's next partner" : "the dealer's partner"
         return last.result.outcome.declarersHold
             ? "the declarers held last round, so \(partner) deals"
@@ -151,7 +156,8 @@ enum GameCoachText {
             let shown = first.cardCount == 2 ? "a pair of \(card.description)" : "\(count) \(card.description)"
             return "You now have \(shown). Strengthen your declaration so it's harder to beat."
         }
-        if let current, current.player != Seats.human, Seats.team(of: current.player) == Seats.team(of: Seats.human) {
+        if let current, current.player != Seats.human, players % 2 == 0,
+           Seats.team(of: current.player) == Seats.team(of: Seats.human) {
             // Beating your partner is allowed but rarely wise: their declaration already helps your team.
             return join([declarationLine(current, players: players),
                          coach == .guided ? "That's your partner, so it helps your team too. You don't need to beat it." : nil])
@@ -174,7 +180,9 @@ enum GameCoachText {
         let players = round.players
         let team = Seats.team(of: dealer)
         let teamText = teamName(team, capitalized: true, players: players)
-        let declarers = "\(teamText) are the declarers."
+        let declarers = round.isFindingFriends
+            ? friendsToCallLine(dealer: dealer, count: round.table.friendCount, players: players)
+            : "\(teamText) are the declarers."
         let dealerName = name(dealer, players: players)
         if game.history.isEmpty {
             if let d = round.declaration, d.player == dealer {
@@ -211,6 +219,9 @@ enum GameCoachText {
             return join(["Nobody declared, so you deal.", kitty])
         }
         guard let last = game.history.last else { return kitty }
+        if game.findsFriends, let reason = dealerReason(game) {
+            return join([sentence(reason.prefix(1).uppercased() + reason.dropFirst()), kitty])
+        }
         let partner = game.players > 4 ? "the dealer's next partner" : "the dealer's partner"
         let reason = last.result.outcome.declarersHold
             ? "Your team held the deal, so \(partner) deals."
@@ -227,6 +238,63 @@ enum GameCoachText {
             return "The kitty was turned over: the first \(round.trumpRank.label) was \(card.description), so \(suit.name.lowercased()) are trump."
         }
         return "The kitty had no \(round.trumpRank.label), so its highest card, \(card.description), makes \(suit.name.lowercased()) trump."
+    }
+
+    // MARK: Finding Friends
+
+    /// "East calls 3 friends after burying: whoever plays a card East names joins East's side."
+    static func friendsToCallLine(dealer: Int, count: Int, players: Int) -> String {
+        let friends = count == 1 ? "a friend" : "\(count) friends"
+        if dealer == Seats.human {
+            return "You call \(friends) after burying: whoever plays a card you name joins your side."
+        }
+        let dealerName = name(dealer, players: players)
+        return "\(dealerName) calls \(friends) after burying: whoever plays a card \(dealerName) names joins their side."
+    }
+
+    /// "East calls the first A♠ and the first K♥." / "You call the first A♠."
+    static func friendCallLine(dealer: Int, calls: [FriendCall], players: Int) -> String? {
+        friendCallLine(dealer: dealer, calls: calls, name: { name($0, players: players) })
+    }
+
+    /// The same with names from `name` ("You" for seat 0), e.g. "Mei calls the first A♠."
+    static func friendCallLine(dealer: Int, calls: [FriendCall], name: (Int) -> String) -> String? {
+        guard !calls.isEmpty else { return nil }
+        let unfound = calls.map(\.unfound)
+        let verb = dealer == Seats.human ? "call" : "calls"
+        return sentence("\(name(dealer)) \(verb) \(unfound.spokenList)")
+    }
+
+    /// The friends found by the play just made, e.g. "Northeast played the first A♠ and joins your side!"
+    /// or "East played the first K♥, a card East called: no friend for that call."
+    static func friendsFoundLine(before: [FriendCall], after: [FriendCall], dealer: Int?, players: Int) -> String? {
+        friendsFoundLine(before: before, after: after, dealer: dealer, name: { name($0, players: players) })
+    }
+
+    /// The same with names from `name` ("You" for seat 0).
+    static func friendsFoundLine(before: [FriendCall], after: [FriendCall], dealer: Int?,
+                                 name: (Int) -> String) -> String? {
+        guard let dealer else { return nil }
+        var lines: [String] = []
+        for (old, new) in zip(before, after) where old.friend == nil {
+            guard let friend = new.friend else { continue }
+            let call = new.unfound.description
+            let who = name(friend)
+            if friend == dealer {
+                let dealerWho = dealer == Seats.human ? "you" : name(dealer)
+                lines.append("\(who) played \(call), a card \(dealerWho) called: no friend for that call.")
+            } else if before.contains(where: { $0.friend == friend }) {
+                lines.append("\(who) played \(call) too, but \(friend == Seats.human ? "you were" : "they were") already a friend.")
+            } else if friend == Seats.human {
+                let side = dealer == Seats.human ? "your" : "\(name(dealer))'s"
+                lines.append("You played \(call), so you join \(side) side!")
+            } else if dealer == Seats.human {
+                lines.append("\(who) played \(call), so \(who) is your friend!")
+            } else {
+                lines.append("\(who) played \(call) and joins \(name(dealer))'s side.")
+            }
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " ")
     }
 
     // MARK: Playing
@@ -451,6 +519,11 @@ enum GameCoachText {
         let threshold = Scoring.takeoverThreshold(decks: decks)
         let humanTeam = Seats.team(of: Seats.human)
         let humanDeclares = result.declarerTeam == humanTeam
+        if result.declarers != nil, result.dealer == Seats.human, result.kittyMultiplier == 0 {
+            return result.outcome.declarersHold
+                ? "Tip: call cards you don't hold, in suits where you can lead a low card, so your friends can win it and show themselves."
+                : "Tip: as dealer, lead low in the suit of a card you called early: the sooner your friends show themselves, the better they can help."
+        }
         if result.kittyMultiplier > 0 && result.kittyPoints > 0 {
             return humanDeclares
                 ? "Tip: as declarers, keep point cards out of the kitty. If the defenders win the last trick, those points get multiplied."

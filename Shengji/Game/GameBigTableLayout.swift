@@ -1,10 +1,11 @@
 import SwiftUI
 import ShengjiCore
 
-/// The seats of a 6- or 8-player table round the trick. The seat opposite you is at the top, the
-/// others go down both sides in play order (your right first, up and over to your left), and your play
-/// is at the bottom. A side seat shows a small label at the table's edge with its play beside it,
-/// towards the middle. Shared by the offline and online tables (4 players keep their own layout).
+/// The seats of a table of 5 to 9 round the trick. The seat opposite you is at the top (with an odd
+/// number of players, the two seats either side of it), the others go down both sides in play order
+/// (your right first, up and over to your left), and your play is at the bottom. A side seat shows a
+/// small label at the table's edge with its play beside it, towards the middle. Shared by the offline
+/// and online tables (4 players keep their own layout).
 @MainActor
 struct GameBigTableLayout<Slot: View, Center: View>: View {
     /// Indexed by seat, you first.
@@ -20,17 +21,20 @@ struct GameBigTableLayout<Slot: View, Center: View>: View {
     private let centerWidth: CGFloat = 58
 
     private var players: Int { seats.count }
-    /// Seats down each side: 2 with 6 players, 3 with 8.
-    private var perSide: Int { max(1, (players - 2) / 2) }
-    /// The seat opposite you.
-    private var top: Int { players / 2 }
-    /// With an even number of side rows (6 players) the centre gets a row of its own between them;
-    /// with an odd number (8 players) it sits in the middle row.
+    /// An odd number of players: two seats share the top.
+    private var isOdd: Bool { players % 2 == 1 }
+    /// Seats down each side: 1 with 5 players, 2 with 6 or 7, 3 with 8 or 9.
+    private var perSide: Int { max(1, isOdd ? (players - 3) / 2 : (players - 2) / 2) }
+    /// The top seat on the left and on the right: the same seat (the one opposite you) at an even table.
+    private var topLeft: Int { isOdd ? (players + 1) / 2 : players / 2 }
+    private var topRight: Int { isOdd ? (players - 1) / 2 : players / 2 }
+    /// With an even number of side rows (6 or 7 players) the centre gets a row of its own between them;
+    /// with an odd number (5, 8 or 9 players) it sits in the middle row.
     private var centerHasOwnRow: Bool { perSide % 2 == 0 }
 
     /// Side rows from the top: the seat on your left and the seat on your right.
     private var rows: [(left: Int, right: Int)] {
-        (0..<perSide).map { row in (left: top + 1 + row, right: top - 1 - row) }
+        (0..<perSide).map { row in (left: topLeft + 1 + row, right: topRight - 1 - row) }
     }
 
     var body: some View {
@@ -48,8 +52,7 @@ struct GameBigTableLayout<Slot: View, Center: View>: View {
         let middleRow = perSide / 2
         let sideSlotWidth = max(56, (size.width - 2 * chipWidth - 16 - (centerHasOwnRow ? 0 : centerWidth)) / 2)
         return VStack(spacing: 4) {
-            GameSeatChip(info: seats[top])
-            slot(top, cardWidth, size.width * 0.6)
+            topRow(cardWidth: cardWidth)
             Spacer(minLength: 0)
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 if centerHasOwnRow && index == middleRow {
@@ -78,6 +81,28 @@ struct GameBigTableLayout<Slot: View, Center: View>: View {
         .frame(width: size.width, height: size.height)
     }
 
+    /// The seat opposite you, or with an odd number of players the two top seats side by side.
+    @ViewBuilder
+    private func topRow(cardWidth: CGFloat) -> some View {
+        if isOdd {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(spacing: 4) {
+                    GameSeatChip(info: seats[topLeft])
+                    slot(topLeft, cardWidth, size.width * 0.45)
+                }
+                .frame(maxWidth: .infinity)
+                VStack(spacing: 4) {
+                    GameSeatChip(info: seats[topRight])
+                    slot(topRight, cardWidth, size.width * 0.45)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        } else {
+            GameSeatChip(info: seats[topLeft])
+            slot(topLeft, cardWidth, size.width * 0.6)
+        }
+    }
+
     /// A side seat: its label at the table's edge, its play towards the middle.
     private func sideSeat(_ seat: Int, onLeft: Bool, cardWidth: CGFloat, slotWidth: CGFloat) -> some View {
         HStack(spacing: 4) {
@@ -96,8 +121,8 @@ struct GameBigTableLayout<Slot: View, Center: View>: View {
     }
 }
 
-/// A seat's label at a table of 6 or 8: team dot and short name, then cards held and a "D" dealer button.
-/// Gold edge when it is their turn.
+/// A seat's label at a table of 5 to 9: team dot and short name, then cards held and a "D" dealer button
+/// (with Finding Friends, an "F" for a friend found). Gold edge when it is their turn.
 @MainActor
 struct GameSeatChip: View {
     let info: GameSeatInfo
@@ -137,6 +162,13 @@ struct GameSeatChip: View {
                         .foregroundStyle(Theme.cardInk)
                         .frame(width: 15, height: 15)
                         .background(Circle().fill(Theme.gold))
+                } else if info.role == .friend {
+                    // Finding Friends: this player answered one of the dealer's calls.
+                    Text("F")
+                        .font(.caption2.weight(.heavy))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 15, height: 15)
+                        .background(Circle().fill(Theme.teamColor(info.team)))
                 }
             }
             .font(.caption2)

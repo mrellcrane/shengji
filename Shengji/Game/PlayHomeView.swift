@@ -105,9 +105,12 @@ struct PlayHomeView: View {
                 PlayHomeActionLabel(title: "New game", subtitle: tableOption.matchup,
                                     systemImage: "plus", prominent: savedGame == nil)
             }
+            // Six sizes: the segments show just the number; the footer says what each table plays.
             Picker("Players", selection: $tableOption) {
                 ForEach(GameTableOption.allCases) { option in
-                    Text(option.title).tag(option)
+                    Text(option.shortTitle)
+                        .accessibilityLabel(option.title)
+                        .tag(option)
                 }
             }
             .pickerStyle(.segmented)
@@ -242,6 +245,9 @@ private struct PlayHomeHeader: View {
     var players: Int = 4
 
     private var blurb: String {
+        if players % 2 == 1 {
+            return "Practise against \(players - 1) friendly bots. No fixed partners: each round the dealer calls friends."
+        }
         if players > 4 {
             return "Practise against \(players - 1) friendly bots. Your partners sit in every other seat."
         }

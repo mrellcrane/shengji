@@ -97,7 +97,7 @@ enum RulesContent {
 
         return [
             RuleSection(id: "goal", title: "Goal & teams", shortTitle: "Goal", symbol: "person.2.fill", blocks: [
-                .text("These rules are for the classic game: **4 players** in **two teams**. Your **partner** sits opposite you, so you and your partner play against East and West. You can also play with 6 or 8: see Bigger tables."),
+                .text("These rules are for the classic game: **4 players** in **two teams**. Your **partner** sits opposite you, so you and your partner play against East and West. You can also play with 6 or 8 (see Bigger tables), or with 5, 7 or 9 (see Finding friends)."),
                 .text("Each team has a **level**. Both start at 2 and climb 2, 3, 4 … 10, J, Q, K, A. The level of the dealer's team is this round's **trump rank**."),
                 .text("The dealer's team are the **declarers**; the other team are the **defenders**. The defenders try to win **80 points** or more in tricks. The declarers try to stop them."),
                 .text("Win a round as declarers while your team is at **A** and you win the game. That's where the name comes from: 升级 (shēngjí) means \"level up\"."),
@@ -226,6 +226,20 @@ enum RulesContent {
                     "Declaring: more cards beat fewer, so three rank cards beat a pair of big jokers. You may strengthen your own declaration with more of the same card.",
                     "Points scale with the decks: 300 with 3 decks and 400 with 4. The defenders take over at 120 (160 with 4 decks), and each level is 60 points (80).",
                     "When the declarers hold, the deal passes two seats on, to the dealer's next partner.",
+                ]),
+            ]),
+            RuleSection(id: "friends", title: "Finding friends", shortTitle: "5, 7 or 9", symbol: "person.2.wave.2.fill", blocks: [
+                .text("With **5**, **7** or **9** players the table can't split into two teams, so you play **Finding friends** (找朋友 zhǎo péngyou). 5 players use **3 decks**, 7 use **4** and 9 use **5**."),
+                .text("Declaring and burying work as usual. Then the dealer **calls friends** by naming cards, such as **the first A♠** or **the second K♥**: 1 friend with 5 players, 2 with 7, 3 with 9. Jokers and trump-rank cards can't be called."),
+                .cards(caption: "The dealer calls the first A♠: whoever plays the first A♠ of the round joins the dealer's side.",
+                       cards: [card(.ace, .spades)], trump: nil),
+                .bullets([
+                    "Nobody knows who the friends are until they play the called card. Until then, everyone looks like a defender.",
+                    "If the dealer plays a card they called, or a called card is never played, the dealer's side plays short-handed. If it still holds the deal, it goes up 1 extra level.",
+                    "Points count for the side a player ends up on, even ones won before they showed themselves.",
+                    "Everyone climbs their own levels: the winning side goes up together. The trump rank is the dealer's level.",
+                    "Next dealer: if the dealer's side holds, its next player after the dealer deals (the dealer again if they played alone). If the defenders take over, the first defender after the dealer deals.",
+                    "The game is won when the dealer's side holds the deal while the dealer is at the top level.",
                 ]),
             ]),
             RuleSection(id: "glossary", title: "Glossary", shortTitle: "Glossary", symbol: "character.book.closed.fill", blocks: [

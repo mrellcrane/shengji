@@ -22,6 +22,9 @@ struct RoundResultView: View {
     private var theirTeam: String { GameCoachText.teamName(1, capitalized: true, players: players) }
     private var defenderTeam: Int { 1 - result.declarerTeam }
     private var isGameOver: Bool { summary.gameWinner != nil }
+    /// Finding Friends: no fixed teams, everyone has their own level.
+    private var findsFriends: Bool { result.declarers != nil }
+    private func name(_ seat: Int) -> String { Seats.name(seat, players: players) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,6 +69,7 @@ struct RoundResultView: View {
     }
 
     private var headline: String {
+        if findsFriends { return friendsHeadline }
         let humanTeam = Seats.team(of: Seats.human)
         if let winner = summary.gameWinner {
             return winner == humanTeam ? "You win the game!" : "\(theirTeam) \(players > 4 ? "wins" : "win") the game"
@@ -77,13 +81,60 @@ struct RoundResultView: View {
         return humanDeclared ? "\(theirTeam) \(players > 4 ? "takes" : "take") over" : "Your team takes over!"
     }
 
+    /// Finding Friends: team 0 is your side this round.
+    private var friendsHeadline: String {
+        let youDeclared = result.isDeclarer(Seats.human)
+        if let winner = summary.gameWinner {
+            return winner == 0 ? "You win the game!" : "\(name(result.dealer))'s side wins the game"
+        }
+        if result.outcome.declarersHold {
+            return youDeclared ? "Your side held the deal" : "The dealer's side held the deal"
+        }
+        return youDeclared ? "The defenders took over" : "Your side takes over!"
+    }
+
     // MARK: Sections
 
-    private var declarersSection: some View {
-        RoundResultSection(title: "Declarers") {
-            Text(declarersLine)
-            TrumpBadge(trump: result.trump)
+    @ViewBuilder private var declarersSection: some View {
+        if findsFriends {
+            RoundResultSection(title: "The dealer's side") {
+                Text(friendsSideLine)
+                ForEach(Array((result.friendCalls ?? []).enumerated()), id: \.offset) { _, call in
+                    HStack {
+                        Text(call.unfound.description.prefix(1).uppercased() + call.unfound.description.dropFirst())
+                        Spacer()
+                        Text(answer(call))
+                            .fontWeight(.semibold)
+                    }
+                    .font(.subheadline)
+                    .accessibilityElement(children: .combine)
+                }
+                TrumpBadge(trump: result.trump)
+            }
+        } else {
+            RoundResultSection(title: "Declarers") {
+                Text(declarersLine)
+                TrumpBadge(trump: result.trump)
+            }
         }
+    }
+
+    /// "East dealt. East, Northeast and you played together." / "You dealt and played alone."
+    private var friendsSideLine: String {
+        let side = (result.declarers ?? [result.dealer]).map(name)
+        let list = side.count <= 1 ? (side.first ?? name(result.dealer))
+            : side.dropLast().joined(separator: ", ") + " and " + (side.last ?? "")
+        if side.count <= 1 {
+            return "\(name(result.dealer)) dealt and played alone: no friend joined."
+        }
+        return "\(name(result.dealer)) dealt. \(list) played together."
+    }
+
+    /// Who answered a call: a seat, the dealer themself, or nobody.
+    private func answer(_ call: FriendCall) -> String {
+        guard let friend = call.friend else { return "Never played" }
+        if friend == result.dealer { return "\(name(friend)) (the dealer)" }
+        return name(friend)
     }
 
     /// "You and Partner were the declarers. You dealt." (In later rounds nobody has to declare,
@@ -147,8 +198,14 @@ struct RoundResultView: View {
 
     private var levelsSection: some View {
         RoundResultSection(title: "Levels") {
-            levelRow(team: 0, title: "Us")
-            levelRow(team: 1, title: "Them")
+            if findsFriends {
+                ForEach(0..<min(players, summary.levelsAfter.count), id: \.self) { seat in
+                    seatLevelRow(seat)
+                }
+            } else {
+                levelRow(team: 0, title: "Us")
+                levelRow(team: 1, title: "Them")
+            }
             if !isGameOver {
                 Text("Next dealer: \(Seats.name(summary.nextDealer, players: players))")
                     .font(.subheadline.weight(.semibold))
@@ -171,6 +228,40 @@ struct RoundResultView: View {
                 .monospacedDigit()
             if gained {
                 Text("+\(summary.levelsGained)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Theme.correct)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Finding Friends: one player's level, before and after.
+    private func seatLevelRow(_ seat: Int) -> some View {
+        let before = summary.levelsBefore.indices.contains(seat) ? summary.levelsBefore[seat] : nil
+        let after = summary.levelsAfter.indices.contains(seat) ? summary.levelsAfter[seat] : nil
+        let gained = (after?.rawValue ?? 0) - (before?.rawValue ?? 0)
+        let declared = result.isDeclarer(seat)
+        let team = declared == result.isDeclarer(Seats.human) ? 0 : 1
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(Theme.teamColor(team))
+                .frame(width: 10, height: 10)
+            Text(name(seat))
+                .fontWeight(seat == Seats.human ? .bold : .semibold)
+            if seat == result.dealer {
+                Text("Dealer")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            } else if declared {
+                Text("Friend")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(before?.label ?? "?") → \(after?.label ?? "?")")
+                .monospacedDigit()
+            if gained > 0 {
+                Text("+\(gained)")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(Theme.correct)
             }

@@ -102,6 +102,12 @@ struct OnlineTableView: View {
             OnlineRoundSummarySheet(summary: summary, players: model.players,
                                     roundNumber: roundNumber(of: summary),
                                     target: model.view?.targetRank ?? model.summary?.targetRank ?? .ace)
+        case .friends:
+            FriendCallSheet(table: model.table, trump: model.view?.trump ?? Trump(rank: .two, suit: nil),
+                            hand: model.handAfterPendingBury, suggestion: model.friendSuggestion,
+                            problem: { model.friendCallProblem($0) },
+                            onCall: { model.callFriends($0) },
+                            onBack: { model.cancelFriendCalls() })
         }
     }
 
@@ -240,6 +246,9 @@ struct OnlineTableOverlay: View {
     }
 
     private var finalLevels: String {
+        if model.table.findsFriends {
+            return "Your final level: \(model.level(of: Seats.human)?.label ?? "?"). Start a rematch from your club."
+        }
         let us = model.level(of: 0)?.label ?? "?"
         let them = model.level(of: 1)?.label ?? "?"
         return "Final levels: Us \(us), Them \(them). Start a rematch from your club."

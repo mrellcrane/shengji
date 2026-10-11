@@ -397,3 +397,52 @@ final class FindingFriendsTests: XCTestCase {
         XCTAssertEqual(round.phase, .finished)
     }
 }
+
+// MARK: - Coach context and moves at an odd table
+
+final class FindingFriendsCoachTests: XCTestCase {
+    func testCoachContextDescribesFindingFriends() throws {
+        var rng = SeededGenerator(seed: 21)
+        var round = Round(trumpRank: .two, dealer: 3, rng: &rng, table: .nine)
+        round.dealAll()
+        round.finishDealing()
+        let dealer = try XCTUnwrap(round.dealer)
+        let buried = Array(round.hands[dealer].prefix(round.kittySize))
+        try round.bury(buried, calls: Bot(seat: dealer).friendCalls(in: round, buried: buried))
+        var moves = 0
+        while round.currentTrick.count < 3 || round.tricks.count < 2, moves < 200, let seat = round.turn {
+            _ = try round.play(Bot(seat: seat).decide(in: round).cards, by: seat)
+            moves += 1
+        }
+        let game = GameState(settings: GameSettings(table: .nine))
+        let text = CoachContext.describe(round: round, game: game, hint: nil, selection: [], lastIllegal: nil)
+        XCTAssertTrue(text.contains("9 players and 5 decks"), text)
+        XCTAssertTrue(text.contains("Finding Friends"), text)
+        XCTAssertTrue(text.contains("Friends called: the first"), text)
+        XCTAssertTrue(text.contains("The dealer's side so far:"), text)
+        XCTAssertTrue(text.contains("Levels (everyone climbs on their own)"), text)
+        XCTAssertFalse(text.contains("East and West"), text)
+        XCTAssertFalse(text.contains("your team is you"), text)
+        XCTAssertLessThanOrEqual(text.count, CoachContext.maxTableCharacters)
+    }
+
+    func testMovesFollowTheKnownSides() {
+        // Seat 0 dealt with seat 2 as its friend; seat 1 and seat 3 defended.
+        let result = RoundResult(dealer: 0, declarerTeam: 0, trump: Trump(rank: .two, suit: .spades), trickPoints: 0,
+                                 kittyPoints: 0, kittyMultiplier: 0, defenderPoints: 0,
+                                 outcome: Scoring.outcome(defenderPoints: 0, decks: 3), kitty: [], lastTrickWinner: 2,
+                                 declarers: [0, 2], friendCalls: [FriendCall(face: .regular(.spades, .ace), friend: 2)])
+        let mine = MoveDetector.roundMoves(result, player: 0).map(\.kind)
+        XCTAssertTrue(mine.contains(.holdDeal))
+        XCTAssertTrue(mine.contains(.shutout))
+        XCTAssertEqual(MoveDetector.roundMoves(result, player: 1).map(\.kind), [])
+        // A friend found counts as a partner for feeding points; an unknown seat doesn't.
+        let side = MoveDetector.knownSide(of: 0, players: 5, isDeclarer: { [0, 2].contains($0) }, allFound: false)
+        XCTAssertTrue(side(2))
+        XCTAssertFalse(side(1))
+        let defender = MoveDetector.knownSide(of: 1, players: 5, isDeclarer: { [0, 2].contains($0) }, allFound: false)
+        XCTAssertFalse(defender(3), "fellow defenders aren't known until every friend is found")
+        let allKnown = MoveDetector.knownSide(of: 1, players: 5, isDeclarer: { [0, 2].contains($0) }, allFound: true)
+        XCTAssertTrue(allKnown(3))
+    }
+}

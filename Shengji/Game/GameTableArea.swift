@@ -25,7 +25,7 @@ struct GameTableArea: View {
 
     @ViewBuilder
     private func tableContent(size: CGSize, snapshot: GameTableSnapshot) -> some View {
-        if snapshot.seats.count > 4 {
+        if snapshot.seats.count != 4 {
             GameBigTableLayout(seats: snapshot.seats, size: size,
                                slot: { seat, cardWidth, maxWidth in
                                    slot(seat, snapshot: snapshot, cardWidth: cardWidth, maxWidth: maxWidth)
@@ -153,7 +153,7 @@ struct GameSeatLabel: View {
     }
 }
 
-/// "Dealer" / "Declarer" / "Defender".
+/// "Dealer" / "Declarer" / "Defender" / "Friend".
 @MainActor
 struct GameRoleBadge: View {
     let role: GameSeatRole
@@ -171,7 +171,7 @@ struct GameRoleBadge: View {
     private var fill: Color {
         switch role {
         case .dealer: return Theme.gold
-        case .declarer: return Theme.teamColor(team).opacity(0.75)
+        case .declarer, .friend: return Theme.teamColor(team).opacity(0.75)
         case .defender: return Color.white.opacity(0.22)
         }
     }
